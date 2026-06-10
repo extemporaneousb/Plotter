@@ -24,8 +24,10 @@ Keep repo-specific requirements outside this block.
 
 Review these routed docs before editing when they apply:
 - `README.md`
+- `codex_prompts/04_PROJECT_CONTRACT.md`
+- `docs/REPOSITORY_PLAN.md`
 
 Run the narrowest relevant validation after changes. Repo defaults:
-- `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'`
+- `make check`
 
 <!-- BLACKDOG MANAGED CONTRACT:END -->

@@ -31,3 +31,5 @@ Use this repo-local skill for normal development requests. The skill is backed b
 
 - `AGENTS.md`
 - `README.md`
+- `codex_prompts/04_PROJECT_CONTRACT.md`
+- `docs/REPOSITORY_PLAN.md`
