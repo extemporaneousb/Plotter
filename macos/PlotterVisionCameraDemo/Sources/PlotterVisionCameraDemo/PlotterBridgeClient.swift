@@ -5,6 +5,10 @@ struct BridgeHealthResponse: Decodable {
     let status: String
     let dryRun: Bool
     let controller: String
+    let armMotion: Bool
+    let armPen: Bool
+    let armHoming: Bool
+    let armUnlock: Bool
     let eventLog: String
     let workspaceXMm: Double?
     let workspaceYMm: Double?
@@ -263,6 +267,10 @@ struct MachineStatusResponse: Decodable {
     let status: String
     let dryRun: Bool
     let controller: String
+    let armMotion: Bool
+    let armPen: Bool
+    let armHoming: Bool
+    let armUnlock: Bool
     let state: String
     let homingTrusted: Bool
     let axisModelTrusted: Bool
@@ -322,6 +330,15 @@ struct MachineResumeRequest: Encodable {
 }
 
 struct MachineUnlockRequest: Encodable {
+}
+
+struct MachineArmRequest: Encodable {
+    let live: Bool
+    let autoConnect: Bool
+    let armMotion: Bool
+    let armPen: Bool
+    let armHoming: Bool
+    let armUnlock: Bool
 }
 
 struct AxisModelTrustSampleRequest: Encodable {
@@ -470,6 +487,10 @@ final class PlotterBridgeClient {
         return try decoder.decode(MachineStatusResponse.self, from: data)
     }
 
+    func arm(_ request: MachineArmRequest) async throws -> MachineCommandResponse {
+        try await postMachineCommand(path: "machine/arm", request: request)
+    }
+
     func jog(_ request: MachineJogRequest) async throws -> MachineCommandResponse {
         try await postMachineCommand(path: "machine/jog", request: request)
     }
@@ -580,6 +601,11 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var isOnline = false
     @Published var isRunning = false
     @Published var isDryRun = true
+    @Published var bridgeController = "unconfigured"
+    @Published var armMotion = false
+    @Published var armPen = false
+    @Published var armHoming = false
+    @Published var armUnlock = false
     @Published var modelStatus = "MODEL --"
     @Published var paperTransformStatus = "PAPER --"
     @Published var paperRegistrationSnapshot: PaperRegistrationSnapshot?
@@ -622,6 +648,26 @@ final class PlotterBridgeModel: ObservableObject {
         isOnline && !isDryRun
     }
 
+    var isMockBridge: Bool {
+        bridgeController == "mock"
+    }
+
+    var hasControllerPort: Bool {
+        bridgeController.hasPrefix("serial:")
+    }
+
+    var canConnectHardware: Bool {
+        isOnline && !isMockBridge && !isRunning && !isMachineBusy
+    }
+
+    var canArmHardware: Bool {
+        isOnline && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
+    }
+
+    var canDisarmHardware: Bool {
+        isOnline && !isDryRun && !isRunning && !isMachineBusy
+    }
+
     var hasPaperLock: Bool {
         paperRegistrationSnapshot != nil || paperTransformStatus.contains("LOCK")
     }
@@ -656,15 +702,29 @@ final class PlotterBridgeModel: ObservableObject {
 
     var motionModeLabel: String {
         if !isOnline { return "OFF" }
+        if isMockBridge { return isDryRun ? "MOCK" : "MOCK LIVE" }
+        if !hasControllerPort { return "STANDBY" }
         if isDryRun { return "DRY" }
         if isMachineAlarm { return "ALARM" }
         if isMachineBusy || isRunning { return "BUSY" }
         return "LIVE"
     }
 
+    var armStatusLabel: String {
+        let enabled = [
+            armMotion ? "M" : nil,
+            armPen ? "P" : nil,
+            armHoming ? "H" : nil,
+            armUnlock ? "U" : nil
+        ].compactMap { $0 }
+        return enabled.isEmpty ? "--" : enabled.joined(separator: "")
+    }
+
     var motionGateMessage: String {
         if !isOnline { return "Motion blocked: bridge offline" }
-        if isDryRun { return "Motion blocked: dry-run bridge" }
+        if isMockBridge { return "Preview bridge only; start hardware standby to connect" }
+        if !hasControllerPort { return "Controller not connected; connect or arm to auto-detect" }
+        if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
         if isMachineAlarm { return "Motion blocked: machine alarm" }
         if isMachineBusy || isRunning { return "Motion busy: \(activeAction)" }
         if !hasPaperLock { return "Drawing blocked: paper homography missing" }
@@ -689,9 +749,14 @@ final class PlotterBridgeModel: ObservableObject {
             let health = try await client.health()
             isOnline = true
             isDryRun = health.dryRun
+            bridgeController = health.controller
+            armMotion = health.armMotion
+            armPen = health.armPen
+            armHoming = health.armHoming
+            armUnlock = health.armUnlock
             workspaceXMm = health.workspaceXMm ?? workspaceXMm
             workspaceYMm = health.workspaceYMm ?? workspaceYMm
-            shortStatus = health.dryRun ? "DRY" : "LIVE"
+            shortStatus = motionModeLabel
             statusText = "\(health.controller) \(health.status)"
             await refreshPaperStatus()
         } catch {
@@ -702,6 +767,11 @@ final class PlotterBridgeModel: ObservableObject {
             paperRegistrationSnapshot = nil
             machineHomingTrusted = false
             machineAxisModelTrusted = false
+            bridgeController = "offline"
+            armMotion = false
+            armPen = false
+            armHoming = false
+            armUnlock = false
         }
     }
 
@@ -726,11 +796,12 @@ final class PlotterBridgeModel: ObservableObject {
             isOnline = response.status != "offline" && response.status != "failed"
             isDryRun = response.dryRun
             if !isRunning {
-                shortStatus = response.dryRun ? "DRY" : (response.isAlarm ? "ALM" : "LIVE")
+                shortStatus = response.isAlarm ? "ALM" : motionModeLabel
             }
         } catch {
             isOnline = false
             shortStatus = "OFF"
+            bridgeController = "offline"
             machineState = "OFF"
             machinePins = "-"
             machineMPos = "M --"
@@ -742,6 +813,10 @@ final class PlotterBridgeModel: ObservableObject {
             paperRegistrationSnapshot = nil
             isMachineBusy = false
             isMachineAlarm = true
+            armMotion = false
+            armPen = false
+            armHoming = false
+            armUnlock = false
         }
     }
 
@@ -766,11 +841,12 @@ final class PlotterBridgeModel: ObservableObject {
             }
             isOnline = true
             isDryRun = response.dryRun
-            shortStatus = response.dryRun ? "DRY" : (isMachineAlarm ? "ALM" : "LIVE")
+            shortStatus = response.dryRun ? (hasControllerPort ? "DRY" : "STBY") : (isMachineAlarm ? "ALM" : "LIVE")
             statusText = "\(response.action) \(response.status)"
         } catch {
             isOnline = false
             shortStatus = "OFF"
+            bridgeController = "offline"
             machineState = "OFF"
             machinePins = "-"
             machineMPos = "M --"
@@ -783,6 +859,68 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = "Reconnect failed"
             isMachineBusy = false
             isMachineAlarm = true
+        }
+    }
+
+    func armHardware() async {
+        await setHardwareArmed(true)
+    }
+
+    func disarmHardware() async {
+        await setHardwareArmed(false)
+    }
+
+    private func setHardwareArmed(_ live: Bool) async {
+        guard !isRunning && !isMachineBusy else { return }
+        guard isOnline else {
+            statusText = "Bridge offline"
+            machineStatus = "Bridge offline"
+            return
+        }
+        guard !isMockBridge else {
+            statusText = "Mock bridge cannot arm hardware"
+            machineStatus = "Start hardware standby bridge to connect a controller"
+            return
+        }
+
+        isRunning = true
+        isMachineBusy = true
+        activeAction = live ? "arm" : "disarm"
+        shortStatus = live ? "ARM" : "SAFE"
+        statusText = live ? "Arming hardware" : "Disarming hardware"
+        defer {
+            isRunning = false
+            activeAction = ""
+        }
+
+        do {
+            let response = try await client.arm(
+                MachineArmRequest(
+                    live: live,
+                    autoConnect: true,
+                    armMotion: true,
+                    armPen: true,
+                    armHoming: true,
+                    armUnlock: true
+                )
+            )
+            if let machineStatus = response.machineStatus {
+                applyMachineStatus(machineStatus)
+            } else {
+                await refreshMachineStatus()
+            }
+            isOnline = true
+            isDryRun = response.dryRun
+            shortStatus = response.dryRun ? (hasControllerPort ? "DRY" : "STBY") : (isMachineAlarm ? "ALM" : "LIVE")
+            statusText = live ? "Hardware armed" : "Hardware disarmed"
+        } catch {
+            shortStatus = "ERR"
+            statusText = error.localizedDescription
+            machineStatus = error.localizedDescription
+            isMachineBusy = false
+            if live {
+                isMachineAlarm = true
+            }
         }
     }
 
@@ -1684,6 +1822,12 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     private func applyMachineStatus(_ response: MachineStatusResponse) {
+        bridgeController = response.controller
+        isDryRun = response.dryRun
+        armMotion = response.armMotion
+        armPen = response.armPen
+        armHoming = response.armHoming
+        armUnlock = response.armUnlock
         machineState = response.state
         machinePins = response.pins.isEmpty ? "-" : response.pins
         machineMPos = "M \(formatPosition(response.mposMm))"

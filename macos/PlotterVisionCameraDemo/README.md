@@ -27,17 +27,19 @@ in System Settings > Privacy & Security > Camera for `Plotter Vision Camera Demo
 
 ## Controller Bridge Demo
 
-From the repository root, start the local dry-run bridge in the background before pressing the
-plotter demo control in the app:
+From the repository root, start the local dry-run hardware-standby bridge in the background before
+using machine controls in the app:
 
 ```bash
-make bridge-preview-bg
+make bridge-standby-bg
 ```
 
 The native app calls `http://127.0.0.1:8765/demo/run`, resets the change baseline before the request,
-and scans the current frame after the bridge reports completion. Real motion is only available when
-the bridge is started separately with `--no-dry-run` and the explicit homing, motion, and pen arms.
-Stop the background preview bridge with `make bridge-stop`.
+and scans the current frame after the bridge reports completion. Real hardware can be connected after
+the app starts: use the Machine panel's Connect button to attach a visible USB serial controller,
+then Arm Live to enable homing, motion, pen, and unlock gates. Arm Live only changes runtime safety
+state after a status query; it does not home, unlock, move, or actuate the pen. Stop the background
+bridge with `make bridge-stop`.
 
 The bridge uses logical plotter coordinates for planning: `X0 Y0` is the corner opposite the X/Y
 homing switches. It converts those logical coordinates to the controller's negative `G53` machine

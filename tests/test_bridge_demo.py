@@ -12,6 +12,7 @@ from plotter_vision.bridge.server import (
     BridgeRuntimeConfig,
     CalibrationObservationRequest,
     CalibrationStartRequest,
+    MachineArmRequest,
     DotTestPreviewRequest,
     DotTestRunRequest,
     MachineCenterRequest,
@@ -33,6 +34,8 @@ from plotter_vision.bridge.server import (
 from plotter_vision.calibration.synthetic import synthetic_observations
 from plotter_vision.calibration.vision_model import CameraPointNorm, LogicalPointMM
 from plotter_vision.config import MachineConfig, SafetyState
+from plotter_vision.controller.grbl import GrblHalController
+from plotter_vision.controller.mock import MockTransport
 from plotter_vision.controller.serial_transport import SerialPortInfo
 
 
@@ -637,6 +640,99 @@ def test_bridge_mock_reconnect_returns_status(tmp_path: Path) -> None:
     assert response.machine_status.state == "Idle"
     assert response.controller_transcript is not None
     assert Path(response.controller_transcript).exists()
+
+
+def test_bridge_runtime_arm_auto_connects_single_visible_controller(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = PlotterBridge(
+        BridgeRuntimeConfig(
+            dry_run=True,
+            mock=False,
+            config_path=config_path,
+            event_log_path=tmp_path / "events.jsonl",
+            transcript_dir=tmp_path / "transcripts",
+        )
+    )
+    monkeypatch.setattr(
+        bridge_server_module,
+        "list_serial_ports",
+        lambda: [
+            SerialPortInfo(
+                device="/dev/cu.usbserial-live",
+                description="USB Serial",
+                hwid="USB VID:PID=0403:6001",
+            )
+        ],
+    )
+
+    def make_mock_controller(self: PlotterBridge, *, transcript_path: Path) -> GrblHalController:
+        return GrblHalController(
+            MockTransport(),
+            source="controller_bridge",
+            transcript_path=transcript_path,
+        )
+
+    monkeypatch.setattr(PlotterBridge, "_make_controller", make_mock_controller)
+
+    response = bridge.arm_machine(MachineArmRequest(request_id="arm-live"))
+
+    assert response.status == "completed"
+    assert response.dry_run is False
+    assert bridge.config.controller_port == "/dev/cu.usbserial-live"
+    assert bridge.config.arm_motion is True
+    assert bridge.config.arm_pen is True
+    assert bridge.config.arm_homing is True
+    assert bridge.config.arm_unlock is True
+    assert response.machine_status is not None
+    assert response.machine_status.dry_run is False
+    assert response.machine_status.arm_motion is True
+    assert response.machine_status.controller == "serial:/dev/cu.usbserial-live@115200 (missing)"
+
+
+def test_bridge_runtime_disarm_returns_to_dry_run_without_forgetting_controller(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = PlotterBridge(
+        BridgeRuntimeConfig(
+            dry_run=False,
+            mock=True,
+            arm_motion=True,
+            arm_pen=True,
+            arm_homing=True,
+            arm_unlock=True,
+            config_path=config_path,
+            event_log_path=tmp_path / "events.jsonl",
+            transcript_dir=tmp_path / "transcripts",
+        )
+    )
+
+    response = bridge.arm_machine(MachineArmRequest(live=False, request_id="disarm"))
+
+    assert response.status == "completed"
+    assert response.dry_run is True
+    assert bridge.config.arm_motion is False
+    assert bridge.config.arm_pen is False
+    assert bridge.config.arm_homing is False
+    assert bridge.config.arm_unlock is False
+    assert response.machine_status is not None
+    assert response.machine_status.dry_run is True
+    assert response.machine_status.arm_motion is False
+
+
+def test_bridge_runtime_arm_rejects_mock_bridge(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+
+    response = bridge.arm_machine(MachineArmRequest(request_id="arm-mock"))
+
+    assert response.status == "failed"
+    assert response.error is not None
+    assert "serial controller bridge" in response.error
+    assert bridge.config.dry_run is True
 
 
 def test_bridge_dry_run_jog_validates_and_plans_commands(tmp_path: Path) -> None:

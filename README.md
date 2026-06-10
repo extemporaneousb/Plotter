@@ -108,8 +108,8 @@ Then build and run the native app:
 make app
 ```
 
-For the normal edit/test loop, use one command. It restarts the mock dry-run bridge from the current
-checkout and relaunches the app:
+For the normal edit/test loop, use one command. It restarts a dry-run hardware-standby bridge from
+the current checkout and relaunches the app:
 
 ```bash
 make preview-app
@@ -134,9 +134,10 @@ That installs:
 - `~/Desktop/Plotter Vision Stop Bridge.command`
 - `~/Applications/Plotter Vision Preview.app`
 
-The preview shortcut is safe by default: it runs the mock dry-run bridge and relaunches the app.
-The live shortcut is interactive. It asks for a controller port and requires typing `LIVE` before
-running the real bridge with homing, motion, pen, and unlock armed.
+The preview shortcut is safe by default: it runs a dry-run bridge and relaunches the app. The bridge
+can start before the controller is connected. In the app, use the Machine panel's Connect button to
+attach a visible USB serial controller, then Arm Live to enable the runtime homing, motion, pen, and
+unlock gates. Arm Live does not home, unlock, move, or actuate the pen by itself.
 
 From Codex, use the same root targets. For preview launch, ask Codex to run:
 
@@ -144,11 +145,15 @@ From Codex, use the same root targets. For preview launch, ask Codex to run:
 make launch
 ```
 
-For a live launch from Codex, identify the current port first with `make ports`, then run:
+For a hardware launch from Codex, use the same safe standby launch. Supplying a port is optional;
+without one, the app can connect later when exactly one USB serial controller is visible:
 
 ```bash
-PLOTTER_LIVE_CONFIRM=LIVE make launch-live PORT=/dev/cu.usbserial-XXXX
+make launch-live PORT=/dev/cu.usbserial-XXXX
 ```
+
+The older fully armed bridge targets still exist for deliberate diagnostics, but the normal app path
+is to start dry-run and arm hardware from the running UI.
 
 In the app, use the plotter alignment panel to line up the translucent virtual bed with the physical
 plotter in the camera frame. The virtual bed uses the machine workspace dimensions from the bridge,

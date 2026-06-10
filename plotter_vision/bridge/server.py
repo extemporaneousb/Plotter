@@ -115,6 +115,10 @@ class BridgeHealthResponse(BaseModel):
     schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
     dry_run: bool
     controller: str
+    arm_motion: bool = False
+    arm_pen: bool = False
+    arm_homing: bool = False
+    arm_unlock: bool = False
     event_log: str
     workspace_x_mm: float | None = None
     workspace_y_mm: float | None = None
@@ -247,6 +251,10 @@ class MachineStatusResponse(BaseModel):
     status: str
     dry_run: bool
     controller: str
+    arm_motion: bool = False
+    arm_pen: bool = False
+    arm_homing: bool = False
+    arm_unlock: bool = False
     state: str
     homing_trusted: bool = False
     axis_model_trusted: bool = False
@@ -336,6 +344,8 @@ class MachineStopRequest(BaseModel):
 
 
 class MachineReconnectRequest(BaseModel):
+    controller_port: str | None = None
+    auto_connect: bool = True
     request_id: str | None = None
 
 
@@ -344,6 +354,17 @@ class MachineResumeRequest(BaseModel):
 
 
 class MachineUnlockRequest(BaseModel):
+    request_id: str | None = None
+
+
+class MachineArmRequest(BaseModel):
+    live: bool = True
+    controller_port: str | None = None
+    auto_connect: bool = True
+    arm_motion: bool = True
+    arm_pen: bool = True
+    arm_homing: bool = True
+    arm_unlock: bool = True
     request_id: str | None = None
 
 
@@ -429,6 +450,10 @@ class PlotterBridge:
         return BridgeHealthResponse(
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             event_log=str(self.config.event_log_path),
             workspace_x_mm=machine.axes.x.travel_mm,
             workspace_y_mm=machine.axes.y.travel_mm,
@@ -494,6 +519,19 @@ class PlotterBridge:
             payload={"action": action, "dry_run": self.config.dry_run},
         )
 
+        try:
+            self._configure_controller_port(
+                controller_port=request.controller_port,
+                auto_connect=request.auto_connect,
+            )
+        except Exception as exc:
+            return self._machine_command_error(
+                action=action,
+                command_id=command_id,
+                transcript_path=transcript_path,
+                error=str(exc),
+            )
+
         if self.config.controller_port is None and not self.config.mock:
             return self._machine_command_error(
                 action=action,
@@ -552,6 +590,127 @@ class PlotterBridge:
                 error=str(exc),
             )
         finally:
+            self._set_active_command(command_id=None, action=None)
+            self._machine_lock.release()
+
+    def arm_machine(self, request: MachineArmRequest) -> MachineCommandResponse:
+        command_id = request.request_id or f"arm-{uuid.uuid4().hex[:12]}"
+        action = "arm" if request.live else "disarm"
+        planned_commands = ["<runtime-arm>" if request.live else "<runtime-disarm>"]
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        self.event_log.emit(
+            "machine.action_started",
+            command_id=command_id,
+            status="running",
+            payload={
+                "action": action,
+                "dry_run": self.config.dry_run,
+                "live": request.live,
+            },
+        )
+
+        if not self._machine_lock.acquire(blocking=False):
+            return self._machine_command_error(
+                action=action,
+                command_id=command_id,
+                transcript_path=transcript_path,
+                error="Machine is busy; runtime arming is blocked.",
+            )
+
+        self._set_active_command(command_id=command_id, action=action)
+        try:
+            if request.live:
+                if self.config.mock:
+                    raise MotionSafetyError(
+                        "Runtime hardware arming requires a serial controller bridge, not mock."
+                    )
+                self._configure_controller_port(
+                    controller_port=request.controller_port,
+                    auto_connect=request.auto_connect,
+                )
+                if self.config.controller_port is None:
+                    raise MotionSafetyError("No controller is configured.")
+
+                with self._make_controller(transcript_path=transcript_path) as controller:
+                    self._set_active_controller(controller)
+                    try:
+                        controller.drain_until_quiet(quiet_s=0.05, max_s=0.25)
+                        report = controller.query_status_report(timeout_s=3.0)
+                    finally:
+                        self._set_active_controller(None)
+
+                    self.config.dry_run = False
+                    self.config.arm_motion = request.arm_motion
+                    self.config.arm_pen = request.arm_pen
+                    self.config.arm_homing = request.arm_homing
+                    self.config.arm_unlock = request.arm_unlock
+                    machine_status = self._machine_status_from_report(report, status="ready")
+                    controller.flush_transcript()
+                controller_transcript = str(transcript_path)
+            else:
+                self.config.dry_run = True
+                self.config.arm_motion = False
+                self.config.arm_pen = False
+                self.config.arm_homing = False
+                self.config.arm_unlock = False
+                controller_transcript = None
+                if self.config.controller_port is not None or self.config.mock:
+                    try:
+                        with self._make_controller(transcript_path=transcript_path) as controller:
+                            controller.drain_until_quiet(quiet_s=0.05, max_s=0.25)
+                            report = controller.query_status_report(timeout_s=2.0)
+                            machine_status = self._machine_status_from_report(
+                                report,
+                                status="ready",
+                            )
+                            controller.flush_transcript()
+                        controller_transcript = str(transcript_path)
+                    except Exception as exc:
+                        machine_status = self._offline_machine_status(
+                            status="dry_run",
+                            state="DryRun",
+                            error=str(exc),
+                        )
+                else:
+                    machine_status = self._offline_machine_status(
+                        status="dry_run",
+                        state="DryRun",
+                    )
+
+            self._remember_machine_status(machine_status)
+            self.event_log.emit(
+                "machine.action_completed",
+                command_id=command_id,
+                status="completed",
+                payload={
+                    "action": action,
+                    "dry_run": self.config.dry_run,
+                    "controller": self._controller_description(),
+                    "arm_motion": self.config.arm_motion,
+                    "arm_pen": self.config.arm_pen,
+                    "arm_homing": self.config.arm_homing,
+                    "arm_unlock": self.config.arm_unlock,
+                },
+            )
+            return MachineCommandResponse(
+                command_id=command_id,
+                action=action,
+                status="completed",
+                dry_run=self.config.dry_run,
+                planned_commands=planned_commands,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=controller_transcript,
+                machine_status=machine_status,
+            )
+        except Exception as exc:
+            return self._machine_command_error(
+                action=action,
+                command_id=command_id,
+                transcript_path=transcript_path,
+                error=str(exc),
+            )
+        finally:
+            self._set_active_controller(None)
             self._set_active_command(command_id=None, action=None)
             self._machine_lock.release()
 
@@ -2196,6 +2355,31 @@ class PlotterBridge:
             transcript_path=transcript_path,
         )
 
+    def _configure_controller_port(
+        self,
+        *,
+        controller_port: str | None,
+        auto_connect: bool,
+    ) -> None:
+        if self.config.mock:
+            return
+        if controller_port:
+            self.config.controller_port = controller_port
+            return
+        if self.config.controller_port is None and auto_connect:
+            self.config.controller_port = self._auto_detect_controller_port()
+
+    def _auto_detect_controller_port(self) -> str:
+        candidates = _candidate_serial_ports()
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise ValueError("No USB serial controller is currently visible.")
+        raise ValueError(
+            "Multiple USB serial controllers are visible; choose one explicitly: "
+            + ", ".join(candidates)
+        )
+
     def _resolve_controller_port(self) -> str:
         configured = self.config.controller_port
         if configured is None:
@@ -2332,6 +2516,10 @@ class PlotterBridge:
             status=status,
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             state=report.state,
             homing_trusted=machine.homing_trusted,
             axis_model_trusted=machine.axis_model_trusted,
@@ -2355,6 +2543,10 @@ class PlotterBridge:
             status=status,
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             state=state,
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
@@ -2384,6 +2576,10 @@ class PlotterBridge:
             status="busy",
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             state="Run",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
@@ -2419,6 +2615,10 @@ class PlotterBridge:
             status="sampling",
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             state="Unknown",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
@@ -2438,6 +2638,10 @@ class PlotterBridge:
             status="stopping",
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            arm_motion=self.config.arm_motion,
+            arm_pen=self.config.arm_pen,
+            arm_homing=self.config.arm_homing,
+            arm_unlock=self.config.arm_unlock,
             state="Hold",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
@@ -3096,6 +3300,18 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                     return
 
                 response = bridge.draw_face_raster(request)
+                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
+                self._write_model(status, response)
+                return
+
+            if parsed_url.path == "/machine/arm":
+                try:
+                    request = MachineArmRequest.model_validate(self._read_json_body())
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+
+                response = bridge.arm_machine(request)
                 status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
                 self._write_model(status, response)
                 return

@@ -7,6 +7,7 @@ struct MachineControlPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             statusGrid
+            hardwareControls
             Text(bridge.motionGateMessage)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(bridge.isLiveMotionMode ? .green.opacity(0.86) : .orange.opacity(0.92))
@@ -89,6 +90,36 @@ struct MachineControlPanel: View {
             GridRow {
                 statusLabel("Mode")
                 statusValue(bridge.motionModeLabel)
+            }
+            GridRow {
+                statusLabel("Arm")
+                statusValue(bridge.armStatusLabel)
+            }
+        }
+    }
+
+    private var hardwareControls: some View {
+        HStack(spacing: 9) {
+            commandButton(
+                systemName: "link",
+                title: "Connect",
+                disabled: !bridge.canConnectHardware
+            ) {
+                Task { await bridge.reconnectMachine() }
+            }
+            commandButton(
+                systemName: "bolt.fill",
+                title: "Arm Live",
+                disabled: !bridge.canArmHardware
+            ) {
+                Task { await bridge.armHardware() }
+            }
+            commandButton(
+                systemName: "shield",
+                title: "Disarm",
+                disabled: !bridge.canDisarmHardware
+            ) {
+                Task { await bridge.disarmHardware() }
             }
         }
     }

@@ -47,18 +47,19 @@ RUFF := $(BIN)/ruff
 INSTALL_STAMP := $(VENV)/.install-stamp
 SCALE_SNAPSHOT := $(shell if [ -f "$(ARTIFACTS)/controller_snapshot_after_settings.json" ]; then echo "$(ARTIFACTS)/controller_snapshot_after_settings.json"; else echo "$(ARTIFACTS)/controller_snapshot.json"; fi)
 
-.PHONY: help venv install test lint check launch launch-preview launch-live launch-stop install-shortcuts app preview-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
+.PHONY: help venv install test lint check launch launch-preview launch-live launch-stop install-shortcuts app preview-app standby-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-standby bridge-standby-bg bridge-standby-restart bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
 
 help:
 	@echo "Plotter Vision targets:"
 	@echo "  make install                         Create/update .venv and install dev deps"
 	@echo "  make check                           Run tests and lint"
-	@echo "  make launch                          Shortcut target: safe preview bridge plus app"
-	@echo "  make launch-live PORT=/dev/cu...     Interactive live bridge plus app launcher"
+	@echo "  make launch                          Shortcut target: dry-run hardware-standby bridge plus app"
+	@echo "  make launch-live [PORT=/dev/cu...]   Hardware-standby bridge plus app; arm inside app"
 	@echo "  make launch-stop                     Stop the background bridge"
 	@echo "  make install-shortcuts               Install Desktop and Applications launch shortcuts"
 	@echo "  make app                             Build and relaunch the native camera app"
-	@echo "  make preview-app                     Restart mock dry-run bridge and relaunch app"
+	@echo "  make preview-app                     Restart dry-run hardware-standby bridge and relaunch app"
+	@echo "  make standby-app [PORT=/dev/cu...]   Start dry-run serial-capable bridge and relaunch app"
 	@echo "  make live-app PORT=/dev/cu... ARM_HOME=1 ARM_MOTION=1 ARM_PEN=1 ARM_UNLOCK=1 NO_DRY_RUN=1"
 	@echo "  make ports                           List serial ports"
 	@echo "  make status PORT=/dev/cu...          Read one no-motion status report"
@@ -67,6 +68,9 @@ help:
 	@echo "  make soft-reset PORT=/dev/cu... ARM_RESET=1"
 	@echo "  make home-preview                    Preview configured XY homing command"
 	@echo "  make home-xy PORT=/dev/cu... ARM_HOME=1 NO_DRY_RUN=1"
+	@echo "  make bridge-standby                  Run foreground dry-run serial-capable bridge"
+	@echo "  make bridge-standby-bg               Start dry-run serial-capable bridge in background"
+	@echo "  make bridge-standby-restart          Restart dry-run serial-capable bridge from current code"
 	@echo "  make bridge-preview                  Run foreground mock dry-run bridge for camera app"
 	@echo "  make bridge-preview-bg               Start mock dry-run bridge in background"
 	@echo "  make bridge-preview-restart          Restart mock dry-run bridge from current code"
@@ -142,7 +146,9 @@ install-shortcuts:
 app:
 	macos/PlotterVisionCameraDemo/run.sh
 
-preview-app: bridge-preview-restart app
+preview-app: standby-app
+
+standby-app: bridge-standby-restart app
 
 live-app: bridge-live-bg app
 
@@ -212,6 +218,91 @@ home-xy: install require-port require-home-arm
 		--port "$(PORT)" \
 		--baud $(BAUD) \
 		--transcript $(ARTIFACTS)/home_xy_transcript.jsonl
+
+bridge-standby: install save-pen-config
+	mkdir -p $(ARTIFACTS)
+	@controller_args=""; \
+	if [ -n "$(PORT)" ]; then controller_args="--controller-port $(PORT)"; fi; \
+	$(PLOTTERCTL) bridge-server \
+		--host 127.0.0.1 \
+		--http-port $(HTTP_PORT) \
+		$$controller_args \
+		--baud $(BAUD) \
+		--dry-run \
+		--config-path $(ARTIFACTS)/machine_config.json \
+		--workspace-x-max $(WORKSPACE_X_TRAVEL) \
+		--workspace-y-max $(WORKSPACE_Y_TRAVEL) \
+		--event-log $(ARTIFACTS)/bridge_events.jsonl \
+		--transcript-dir $(ARTIFACTS)/bridge_transcripts \
+		--calibration-dir $(ARTIFACTS)/calibration_sessions
+
+bridge-standby-bg: install save-pen-config
+	mkdir -p $(ARTIFACTS)
+	@if ! command -v screen >/dev/null 2>&1; then \
+		echo "ERROR: bridge-standby-bg requires screen for a detached standby bridge."; \
+		exit 2; \
+	fi
+	@if [ -f "$(BRIDGE_PID)" ] && kill -0 "$$(cat "$(BRIDGE_PID)")" 2>/dev/null; then \
+		echo "Bridge already running at http://127.0.0.1:$(HTTP_PORT) pid=$$(cat "$(BRIDGE_PID)")"; \
+	elif curl --max-time 1 -fsS "http://127.0.0.1:$(HTTP_PORT)/health" >/dev/null 2>&1; then \
+		echo "Bridge already responding at http://127.0.0.1:$(HTTP_PORT)"; \
+	else \
+		rm -f "$(BRIDGE_LOG)"; \
+		screen -S "$(BRIDGE_SCREEN)" -X quit >/dev/null 2>&1 || true; \
+		screen -dmS "$(BRIDGE_SCREEN)" /bin/sh -c 'cd "$(CURDIR)" && echo $$$$ > "$(BRIDGE_PID)" && controller_args=""; if [ -n "$(PORT)" ]; then controller_args="--controller-port $(PORT)"; fi; exec $(PLOTTERCTL) bridge-server \
+			--host 127.0.0.1 \
+			--http-port $(HTTP_PORT) \
+			$$controller_args \
+			--baud $(BAUD) \
+			--dry-run \
+			--config-path $(ARTIFACTS)/machine_config.json \
+			--workspace-x-max $(WORKSPACE_X_TRAVEL) \
+			--workspace-y-max $(WORKSPACE_Y_TRAVEL) \
+			--event-log $(ARTIFACTS)/bridge_events.jsonl \
+			--transcript-dir $(ARTIFACTS)/bridge_transcripts \
+			--calibration-dir $(ARTIFACTS)/calibration_sessions \
+			> "$(BRIDGE_LOG)" 2>&1'; \
+		ready=0; \
+		for _ in 1 2 3 4 5 6 7 8 9 10; do \
+			if curl --max-time 1 -fsS "http://127.0.0.1:$(HTTP_PORT)/health" >/dev/null 2>&1; then \
+				ready=1; \
+				break; \
+			fi; \
+			sleep 0.2; \
+		done; \
+		if [ "$$ready" = "1" ] && kill -0 "$$(cat "$(BRIDGE_PID)")" 2>/dev/null; then \
+			echo "Started standby bridge at http://127.0.0.1:$(HTTP_PORT) pid=$$(cat "$(BRIDGE_PID)")"; \
+			echo "Log: $(BRIDGE_LOG)"; \
+		else \
+			echo "Standby bridge failed to start. Log:"; \
+			cat "$(BRIDGE_LOG)"; \
+			kill "$$(cat "$(BRIDGE_PID)")" 2>/dev/null || true; \
+			rm -f "$(BRIDGE_PID)"; \
+			exit 1; \
+		fi; \
+	fi
+
+bridge-standby-restart:
+	mkdir -p $(ARTIFACTS)
+	@if [ -f "$(BRIDGE_PID)" ] && ! kill -0 "$$(cat "$(BRIDGE_PID)")" 2>/dev/null; then \
+		rm -f "$(BRIDGE_PID)"; \
+	fi
+	@pid="$$(lsof -tiTCP:$(HTTP_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1)"; \
+	if [ -n "$$pid" ]; then \
+		health="$$(curl --max-time 1 -fsS "http://127.0.0.1:$(HTTP_PORT)/health" 2>/dev/null || true)"; \
+		if printf "%s" "$$health" | grep -q '"dry_run": true'; then \
+			kill "$$pid"; \
+			rm -f "$(BRIDGE_PID)"; \
+			echo "Stopped stale dry-run bridge pid=$$pid"; \
+			sleep 0.2; \
+		else \
+			echo "Refusing to stop live bridge on http://127.0.0.1:$(HTTP_PORT)."; \
+			echo "$$health"; \
+			echo "Disarm or stop it intentionally before replacing it."; \
+			exit 2; \
+		fi; \
+	fi
+	$(MAKE) bridge-standby-bg
 
 bridge-preview: install save-pen-config
 	mkdir -p $(ARTIFACTS)
