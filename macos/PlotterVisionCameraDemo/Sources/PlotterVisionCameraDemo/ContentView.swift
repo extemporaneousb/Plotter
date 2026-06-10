@@ -1,0 +1,3387 @@
+import SwiftUI
+
+private let visualProbeMinimumObservedMm = 8.0
+private let visualCalibrationMarkSizeMm = 6.0
+private let visualCalibrationRetryMarkSizeMm = 10.0
+private let visualCalibrationParkMm = 24.0
+
+struct ContentView: View {
+    @StateObject private var plotterCamera = CameraModel(role: .plotter)
+    @StateObject private var faceCamera = CameraModel(role: .face)
+    @ObservedObject var bridge: PlotterBridgeModel
+    @Environment(\.openWindow) private var openWindow
+    @State private var showLiveVideo = true
+    @State private var cameraLayout = CameraLayoutMode.both
+    @State private var plotterOverlay = PlotterOverlaySettings()
+    @State private var plotterViewport = PlotterViewportSettings()
+    @State private var drawingFrame = DrawingFrameSettings()
+    @State private var shapeAssessment = ShapeAssessmentState.idle
+    @State private var frameLearning = FrameLearningState.idle
+    @State private var awaitingAssessment = false
+    @State private var didLoadSavedFrameState = false
+    @State private var calibrationStatusText = "CAL idle"
+    @State private var showCalibrationWizard = true
+    @State private var manualFiducialMode = false
+    @State private var manualFiducials: [ManualFiducialPoint] = []
+    @State private var manualPenMode = false
+    @State private var manualCapColorMode = false
+    @State private var observedPenPoint: ObservedPenPoint?
+    @State private var visualMotionModel: VisualMotionModel?
+    @State private var visualMotionSamples: [VisualMotionSample] = []
+    @State private var visualCenterDotTaskActive = false
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            cameraWorkspace
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                topBar
+                Spacer()
+                statusBar
+            }
+            .padding(18)
+
+            if showCalibrationWizard {
+                calibrationWizardOverlay
+            }
+
+        }
+        .background(Color.black)
+        .onAppear {
+            guard !didLoadSavedFrameState else { return }
+            didLoadSavedFrameState = true
+            loadSavedFrameState()
+        }
+        .task {
+            await bridge.refreshHealth()
+            await bridge.refreshMachineStatus()
+            await bridge.refreshPaperStatus()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await bridge.refreshMachineStatus()
+                await bridge.refreshPaperStatus()
+            }
+        }
+        .onChange(of: plotterCamera.changeReport.sequence) { _, _ in
+            updateShapeAssessmentFromCamera()
+        }
+        .onChange(of: plotterOverlay) { _, _ in
+            saveFrameState()
+        }
+        .onChange(of: plotterViewport) { _, _ in
+            saveFrameState()
+        }
+        .onChange(of: drawingFrame) { _, _ in
+            saveFrameState()
+        }
+        .onDisappear {
+            plotterCamera.stop()
+            faceCamera.stop()
+        }
+    }
+
+    @ViewBuilder
+    private var cameraWorkspace: some View {
+        GeometryReader { geometry in
+            let horizontal = geometry.size.width >= geometry.size.height
+            switch cameraLayout {
+            case .both:
+                if horizontal {
+                    HStack(spacing: 1) {
+                        plotterCameraPane
+                        faceCameraPane
+                    }
+                } else {
+                    VStack(spacing: 1) {
+                        plotterCameraPane
+                        faceCameraPane
+                    }
+                }
+            case .plotter:
+                plotterCameraPane
+            case .face:
+                faceCameraPane
+            }
+        }
+    }
+
+    private var plotterCameraPane: some View {
+        ZStack {
+            Color.black
+
+            PlotterViewportTransform(settings: plotterViewport) {
+                ZStack {
+                    if showLiveVideo && plotterCamera.isRunning {
+                        CameraPreview(
+                            session: plotterCamera.session,
+                            videoGravity: plotterViewport.previewMode.videoGravity
+                        )
+                        .modifier(PlotterVideoFilterModifier(filter: plotterViewport.videoFilter))
+                    } else {
+                        CameraPlaceholder(camera: plotterCamera)
+                    }
+
+                    MeasurementOverlay(
+                        segments: plotterCamera.segments,
+                        fiducials: plotterCamera.fiducials,
+                        carriageMarker: (manualPenMode || manualCapColorMode) ? nil : plotterCamera.carriageMarker,
+                        paperRegistration: plotterCamera.paperRegistration,
+                        observedPenPoint: observedPenPoint,
+                        motionTracks: plotterCamera.motionTracks,
+                        expectedPathSegments: bridge.expectedPathSegments,
+                        dotTestPreviewSegments: bridge.dotTestPreviewSegments,
+                        dotTestPreviewPoints: bridge.dotTestPreviewPoints,
+                        paperTransform: bridge.paperRegistrationSnapshot,
+                        plotterOverlay: plotterOverlay,
+                        drawingFrame: drawingFrame,
+                        pathRevealProgress: bridge.pathRevealProgress,
+                        workspaceXMm: bridge.workspaceXMm,
+                        workspaceYMm: bridge.workspaceYMm,
+                        videoSize: plotterCamera.videoSize,
+                        previewMode: plotterViewport.previewMode,
+                        showGrid: plotterCamera.showGrid,
+                        showMeasurements: plotterCamera.showMeasurements
+                    )
+
+                }
+            }
+
+            PlotterViewportBoxOverlay(settings: plotterViewport)
+
+            ManualFiducialOverlay(points: manualFiducials, isActive: manualFiducialMode)
+
+            ObservedPenOverlay(point: manualPenMode ? observedPenPoint : nil, isActive: manualPenMode)
+            CapColorPickOverlay(isActive: manualCapColorMode)
+
+            if manualCapColorMode {
+                ManualPenClickLayer(
+                    settings: plotterViewport,
+                    videoSize: plotterCamera.videoSize,
+                    onMark: recordCapMarkerColor
+                )
+            } else if manualPenMode {
+                ManualPenClickLayer(
+                    settings: plotterViewport,
+                    videoSize: plotterCamera.videoSize,
+                    onMark: recordObservedPen
+                )
+            } else if manualFiducialMode {
+                ManualFiducialClickLayer(
+                    settings: plotterViewport,
+                    videoSize: plotterCamera.videoSize,
+                    onMark: recordManualFiducial
+                )
+            } else if plotterViewport.boxEnabled && !plotterViewport.boxLocked {
+                PlotterViewportGestureLayer(settings: $plotterViewport)
+            }
+
+            CameraPaneBadge(camera: plotterCamera)
+        }
+        .clipped()
+        .overlay(Rectangle().stroke(Color.white.opacity(0.10), lineWidth: 1))
+    }
+
+    private var faceCameraPane: some View {
+        ZStack {
+            Color.black
+
+            if showLiveVideo && faceCamera.isRunning {
+                CameraPreview(session: faceCamera.session)
+            } else {
+                CameraPlaceholder(camera: faceCamera)
+            }
+
+            CameraPaneBadge(camera: faceCamera)
+        }
+        .clipped()
+        .overlay(Rectangle().stroke(Color.white.opacity(0.10), lineWidth: 1))
+    }
+
+    private func loadSavedFrameState() {
+        guard let state = FrameStateStore.load() else { return }
+        plotterOverlay = state.plotterOverlay
+        plotterViewport = state.plotterViewport ?? PlotterViewportSettings()
+        drawingFrame = state.drawingFrame
+    }
+
+    private func saveFrameState() {
+        FrameStateStore.save(
+            plotterOverlay: plotterOverlay,
+            drawingFrame: drawingFrame,
+            plotterViewport: plotterViewport
+        )
+    }
+
+    private func beginShapeAssessment() {
+        awaitingAssessment = true
+        shapeAssessment = ShapeAssessmentState(
+            status: "ARMED",
+            detail: "Waiting for new ink change",
+            changedObjects: 0,
+            changedCells: 0,
+            strength: 0
+        )
+        plotterCamera.resetChangeBaseline(updateStatus: false)
+    }
+
+    @MainActor
+    private func drawFaceFromCurrentFrame() async {
+        do {
+            let raster = try await faceCamera.captureFaceRaster(columns: 14, rows: 18)
+            let rect = drawingFrame.rect(
+                workspaceXMm: bridge.workspaceXMm,
+                workspaceYMm: bridge.workspaceYMm
+            )
+            let frame = BridgeDrawingFrameRequest(
+                originXMm: Double(rect.minX) * bridge.workspaceXMm,
+                originYMm: Double(rect.minY) * bridge.workspaceYMm,
+                widthMm: Double(rect.width) * bridge.workspaceXMm,
+                heightMm: Double(rect.height) * bridge.workspaceYMm,
+                flipY: false
+            )
+            let completed = await bridge.drawFaceRaster(raster, frame: frame)
+            if !completed {
+                awaitingAssessment = false
+            }
+        } catch {
+            awaitingAssessment = false
+            faceCamera.statusText = error.localizedDescription
+            bridge.statusText = error.localizedDescription
+            bridge.previewStatus = "SIM ERR"
+        }
+    }
+
+    private func updateShapeAssessmentFromCamera() {
+        guard awaitingAssessment else { return }
+        let report = plotterCamera.changeReport
+        guard report.sequence > 0 else { return }
+
+        let status: String
+        let detail: String
+        if report.objectCount == 1 && report.changedCells >= 5 {
+            status = "PASS"
+            detail = "Single changed region detected"
+        } else if report.objectCount > 1 {
+            status = "REVIEW"
+            detail = "Multiple changed regions detected"
+        } else if report.changedCells > 0 {
+            status = "WEAK"
+            detail = "Small change detected"
+        } else {
+            status = "WAIT"
+            detail = "No new ink region yet"
+        }
+
+        shapeAssessment = ShapeAssessmentState(
+            status: status,
+            detail: detail,
+            changedObjects: report.objectCount,
+            changedCells: report.changedCells,
+            strength: report.strongestTrackStrength
+        )
+
+        if status != "WAIT" {
+            awaitingAssessment = false
+        }
+    }
+
+    @MainActor
+    private func runFrameLearning() async {
+        guard bridge.isLiveMotionMode else {
+            calibrationStatusText = "CAL cap-marker probe blocked: \(bridge.motionGateMessage)"
+            frameLearning = FrameLearningState(
+                status: "BLOCK",
+                detail: bridge.motionGateMessage,
+                sampleCount: 0,
+                xPixelsPerMm: 0,
+                yPixelsPerMm: 0,
+                lastPins: bridge.machinePins
+            )
+            return
+        }
+
+        guard bridge.isOnline else {
+            calibrationStatusText = "CAL cap-marker probe blocked: bridge offline"
+            frameLearning = FrameLearningState(
+                status: "ERROR",
+                detail: "Bridge offline",
+                sampleCount: 0,
+                xPixelsPerMm: 0,
+                yPixelsPerMm: 0,
+                lastPins: "-"
+            )
+            return
+        }
+
+        guard bridge.hasPaperLock else {
+            calibrationStatusText = "CAL cap-marker probe blocked: paper homography required"
+            frameLearning = FrameLearningState(
+                status: "BLOCK",
+                detail: "Paper homography required",
+                sampleCount: 0,
+                xPixelsPerMm: 0,
+                yPixelsPerMm: 0,
+                lastPins: bridge.machinePins
+            )
+            return
+        }
+
+        guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+            calibrationStatusText = "CAL cap-marker probe blocked: cap not detected"
+            frameLearning = FrameLearningState(
+                status: "BLOCK",
+                detail: "Cap marker not detected",
+                sampleCount: 0,
+                xPixelsPerMm: 0,
+                yPixelsPerMm: 0,
+                lastPins: bridge.machinePins
+            )
+            return
+        }
+
+        observedPenPoint = ObservedPenPoint(
+            point: CGPoint(x: initialObservation.cameraPoint.x, y: 1.0 - initialObservation.cameraPoint.y),
+            cameraPoint: initialObservation.cameraPoint,
+            paperMm: initialObservation.paperMm
+        )
+        visualMotionModel = nil
+        visualMotionSamples = []
+        manualPenMode = false
+        manualFiducialMode = false
+        manualCapColorMode = false
+
+        calibrationStatusText = "CAL cap-marker probe starting"
+        frameLearning = FrameLearningState(
+            status: "LEARN",
+            detail: "Starting cap-marker visual jog probe",
+            sampleCount: 0,
+            xPixelsPerMm: 0,
+            yPixelsPerMm: 0,
+            lastPins: bridge.machinePins
+        )
+
+        await bridge.penUpMachine()
+        guard !bridge.isMachineAlarm else {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Pen-up failed or machine alarm"
+            calibrationStatusText = "CAL cap-marker probe stopped: pen-up failed"
+            return
+        }
+
+        let commandDistanceMm = 25.0
+        let reinforcementDistanceMm = 40.0
+        var samples: [FrameLearningSample] = []
+
+        for axis in ["X", "Y"] {
+            let axisStartIndex = samples.count
+            for distance in [commandDistanceMm, -commandDistanceMm] {
+                guard let sample = await runVisualAxisProbeMove(
+                    axis: axis,
+                    distanceMm: distance,
+                    sampleIndex: samples.count + 1
+                ) else {
+                    return
+                }
+                samples.append(sample)
+                updateLearningSummary(
+                    samples: samples,
+                    status: "LEARN",
+                    detail: String(
+                        format: "%@ %.0f observed %.1fmm",
+                        sample.axis,
+                        sample.distanceMm,
+                        sample.observedDistanceMm
+                    )
+                )
+            }
+
+            let axisSamples = Array(samples[axisStartIndex...])
+            let strongSamples = axisSamples.filter {
+                $0.observedDistanceMm >= visualProbeMinimumObservedMm
+            }
+            let weakSamples = axisSamples.filter {
+                $0.observedDistanceMm < visualProbeMinimumObservedMm
+            }
+            if strongSamples.count == 1, weakSamples.count == 1, let strong = strongSamples.first {
+                let direction = strong.distanceMm >= 0 ? 1.0 : -1.0
+                let distance = reinforcementDistanceMm * direction
+                updateLearningSummary(
+                    samples: samples,
+                    status: "LEARN",
+                    detail: String(
+                        format: "%@ asymmetric; reinforce %.0f mm",
+                        axis,
+                        distance
+                    )
+                )
+                calibrationStatusText = String(
+                    format: "CAL cap-marker probe: %@ weak %@; trying %.0fmm",
+                    axis,
+                    weakProbeSampleSummary(samples: weakSamples),
+                    distance
+                )
+                guard let sample = await runVisualAxisProbeMove(
+                    axis: axis,
+                    distanceMm: distance,
+                    sampleIndex: samples.count + 1
+                ) else {
+                    return
+                }
+                samples.append(sample)
+                updateLearningSummary(
+                    samples: samples,
+                    status: "LEARN",
+                    detail: String(
+                        format: "%@ %.0f observed %.1fmm",
+                        sample.axis,
+                        sample.distanceMm,
+                        sample.observedDistanceMm
+                    )
+                )
+            } else if strongSamples.isEmpty {
+                updateLearningSummary(
+                    samples: samples,
+                    status: "WEAK",
+                    detail: "\(axis) no visible direction: \(weakProbeSampleSummary(samples: weakSamples))"
+                )
+                calibrationStatusText = "CAL cap-marker probe weak: \(axis) no visible direction"
+                return
+            }
+        }
+
+        let evaluation = evaluateVisualAxisProbe(samples: samples)
+        let evaluatedSamples = applyResiduals(to: samples)
+        updateLearningSummary(
+            samples: evaluatedSamples,
+            status: evaluation.passed ? "MEASURED" : "WEAK",
+            detail: evaluation.detail
+        )
+
+        guard evaluation.passed else {
+            visualMotionModel = nil
+            visualMotionSamples = []
+            calibrationStatusText = "CAL cap-marker probe weak: \(evaluation.detail)"
+            return
+        }
+
+        let usableSamples = evaluatedSamples.filter {
+            $0.observedDistanceMm >= visualProbeMinimumObservedMm
+        }
+        let fittedSamples = usableSamples.map { visualMotionSample(from: $0) }
+        guard let fittedModel = VisualMotionModel.solve(samples: fittedSamples) else {
+            visualMotionModel = nil
+            visualMotionSamples = []
+            updateLearningSummary(
+                samples: evaluatedSamples,
+                status: "WEAK",
+                detail: "Motion basis solve failed"
+            )
+            calibrationStatusText = "CAL cap-marker probe weak: basis solve failed"
+            return
+        }
+        visualMotionSamples = fittedSamples
+        visualMotionModel = fittedModel
+        updateLearningSummary(
+            samples: evaluatedSamples,
+            status: "MEASURED",
+            detail: String(
+                format: "Motion measured rms %.1f max %.1f samples %d; absolute draw blocked",
+                fittedModel.rmsResidualMm,
+                fittedModel.maxResidualMm,
+                fittedModel.sampleCount
+            )
+        )
+        calibrationStatusText = "CAL cap-marker probe measured; visual position binding required"
+    }
+
+    @MainActor
+    private func runVisualAxisProbeMove(
+        axis: String,
+        distanceMm: Double,
+        sampleIndex: Int
+    ) async -> FrameLearningSample? {
+        guard let before = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+            updateLearningSummary(
+                samples: [],
+                status: "STOP",
+                detail: "Cap marker lost before move"
+            )
+            calibrationStatusText = "CAL cap-marker probe stopped: cap lost before move"
+            return nil
+        }
+
+        frameLearning.detail = String(format: "Move %@ %.0f mm", axis, distanceMm)
+        calibrationStatusText = String(
+            format: "CAL cap-marker probe: move %@ %.0f mm",
+            axis,
+            distanceMm
+        )
+
+        guard let response = await bridge.learningJog(
+            axis: axis,
+            distanceMm: distanceMm,
+            feedMmMin: min(300.0, bridge.manualFeedMmMin)
+        ) else {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Move failed or machine busy"
+            calibrationStatusText = "CAL cap-marker probe stopped: move failed"
+            return nil
+        }
+
+        if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Pin active after move"
+            frameLearning.lastPins = pins
+            calibrationStatusText = "CAL cap-marker probe stopped: pin active \(pins)"
+            return nil
+        }
+
+        try? await Task.sleep(nanoseconds: 450_000_000)
+        guard let after = await waitForGreenCapPaperObservation(
+            afterFrame: before.frameNumber,
+            timeoutSeconds: 4.0
+        ) else {
+            updateLearningSummary(
+                samples: [],
+                status: "STOP",
+                detail: "Cap marker lost after move"
+            )
+            calibrationStatusText = "CAL cap-marker probe stopped: cap lost after move"
+            return nil
+        }
+
+        let dx = after.paperMm.x - before.paperMm.x
+        let dy = after.paperMm.y - before.paperMm.y
+        let observedDistance = hypot(dx, dy)
+        let sample = FrameLearningSample(
+            axis: axis,
+            distanceMm: distanceMm,
+            observedDxMm: dx,
+            observedDyMm: dy,
+            observedDistanceMm: observedDistance,
+            strength: min(before.strength, after.strength)
+        )
+        calibrationStatusText = String(
+            format: "CAL cap-marker probe: sample %d %@ %.0f observed %.1fmm",
+            sampleIndex,
+            axis,
+            distanceMm,
+            observedDistance
+        )
+        updateObservedPenPoint(after)
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        return sample
+    }
+
+    @MainActor
+    private func updateLearningSummary(
+        samples: [FrameLearningSample],
+        status: String,
+        detail: String
+    ) {
+        let xSamples = samples.filter { $0.axis == "X" && abs($0.distanceMm) > 0 }
+        let ySamples = samples.filter { $0.axis == "Y" && abs($0.distanceMm) > 0 }
+        let xScale = averageObservedMmPerCommandMm(samples: xSamples)
+        let yScale = averageObservedMmPerCommandMm(samples: ySamples)
+        frameLearning = FrameLearningState(
+            status: status,
+            detail: detail,
+            sampleCount: samples.count,
+            xPixelsPerMm: xScale,
+            yPixelsPerMm: yScale,
+            lastPins: bridge.machinePins
+        )
+    }
+
+    private func averageObservedMmPerCommandMm(samples: [FrameLearningSample]) -> Double {
+        guard !samples.isEmpty else { return 0 }
+        let total = samples.reduce(0.0) { partial, sample in
+            partial + sample.observedDistanceMm / abs(sample.distanceMm)
+        }
+        return total / Double(samples.count)
+    }
+
+    private func visualMotionSample(from sample: FrameLearningSample) -> VisualMotionSample {
+        VisualMotionSample(
+            machineDxMm: sample.axis == "X" ? sample.distanceMm : 0.0,
+            machineDyMm: sample.axis == "Y" ? sample.distanceMm : 0.0,
+            observedDxMm: sample.observedDxMm,
+            observedDyMm: sample.observedDyMm,
+            observedDistanceMm: sample.observedDistanceMm,
+            strength: sample.strength
+        )
+    }
+
+    @MainActor
+    private func appendAcceptedVisualMotionSample(
+        machineDxMm: Double,
+        machineDyMm: Double,
+        observedDxMm: Double,
+        observedDyMm: Double,
+        observedDistanceMm: Double,
+        strength: Double
+    ) -> VisualMotionModel? {
+        guard observedDistanceMm >= visualProbeMinimumObservedMm * 0.35 else {
+            return visualMotionModel
+        }
+
+        let sample = VisualMotionSample(
+            machineDxMm: machineDxMm,
+            machineDyMm: machineDyMm,
+            observedDxMm: observedDxMm,
+            observedDyMm: observedDyMm,
+            observedDistanceMm: observedDistanceMm,
+            strength: strength
+        )
+        var updatedSamples = visualMotionSamples
+        updatedSamples.append(sample)
+        if updatedSamples.count > 80 {
+            updatedSamples.removeFirst(updatedSamples.count - 80)
+        }
+
+        let usableSamples = updatedSamples.filter {
+            $0.observedDistanceMm >= visualProbeMinimumObservedMm * 0.35
+        }
+        guard let updatedModel = VisualMotionModel.solve(samples: usableSamples) else {
+            return visualMotionModel
+        }
+        if let currentModel = visualMotionModel {
+            let maxAllowedRMS = max(8.0, currentModel.rmsResidualMm * 1.8)
+            let maxAllowedResidual = max(16.0, currentModel.maxResidualMm * 2.0)
+            guard updatedModel.rmsResidualMm <= maxAllowedRMS,
+                  updatedModel.maxResidualMm <= maxAllowedResidual else {
+                return currentModel
+            }
+        }
+
+        visualMotionSamples = updatedSamples
+        visualMotionModel = updatedModel
+        frameLearning = FrameLearningState(
+            status: "MEASURED",
+            detail: String(
+                format: "Motion updated rms %.1f max %.1f samples %d",
+                updatedModel.rmsResidualMm,
+                updatedModel.maxResidualMm,
+                updatedModel.sampleCount
+            ),
+            sampleCount: updatedModel.sampleCount,
+            xPixelsPerMm: hypot(updatedModel.xBasisDx, updatedModel.xBasisDy),
+            yPixelsPerMm: hypot(updatedModel.yBasisDx, updatedModel.yBasisDy),
+            lastPins: bridge.machinePins
+        )
+        return updatedModel
+    }
+
+    @MainActor
+    private func waitForGreenCapPaperObservation(
+        afterFrame: Int? = nil,
+        timeoutSeconds: Double
+    ) async -> GreenCapPaperObservation? {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var latest: GreenCapPaperObservation?
+        while Date() < deadline {
+            if let observation = currentGreenCapPaperObservation() {
+                latest = observation
+                if afterFrame == nil || observation.frameNumber > afterFrame! {
+                    return observation
+                }
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return latest
+    }
+
+    @MainActor
+    private func currentGreenCapPaperObservation() -> GreenCapPaperObservation? {
+        guard let marker = plotterCamera.carriageMarker else { return nil }
+        let cameraPoint = CGPoint(
+            x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
+        )
+        guard let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint) else { return nil }
+        return GreenCapPaperObservation(
+            frameNumber: marker.id,
+            cameraPoint: cameraPoint,
+            paperMm: paperMm,
+            strength: marker.strength
+        )
+    }
+
+    private func evaluateVisualAxisProbe(samples: [FrameLearningSample]) -> VisualAxisProbeEvaluation {
+        guard samples.count >= 4 else {
+            return VisualAxisProbeEvaluation(
+                passed: false,
+                detail: "Need four cap-marker jog samples",
+                rmsResidualMm: .infinity,
+                maxResidualMm: .infinity,
+                minObservedDistanceMm: 0,
+                xScale: 0,
+                yScale: 0
+            )
+        }
+        let weakSamples = samples.filter {
+            $0.observedDistanceMm < visualProbeMinimumObservedMm
+        }
+        let usableSamples = samples.filter {
+            $0.observedDistanceMm >= visualProbeMinimumObservedMm
+        }
+        let xSamples = usableSamples.filter { $0.axis == "X" }
+        let ySamples = usableSamples.filter { $0.axis == "Y" }
+        guard xSamples.count >= 2, ySamples.count >= 2 else {
+            return VisualAxisProbeEvaluation(
+                passed: false,
+                detail: "Need 2 usable X/Y samples; weak \(weakProbeSampleSummary(samples: weakSamples))",
+                rmsResidualMm: .infinity,
+                maxResidualMm: .infinity,
+                minObservedDistanceMm: samples.map(\.observedDistanceMm).min() ?? 0,
+                xScale: 0,
+                yScale: 0
+            )
+        }
+
+        let xBasis = averageBasis(samples: xSamples)
+        let yBasis = averageBasis(samples: ySamples)
+        let xScale = hypot(xBasis.dx, xBasis.dy)
+        let yScale = hypot(yBasis.dx, yBasis.dy)
+        let minObserved = usableSamples.map(\.observedDistanceMm).min() ?? 0
+        let residuals = usableSamples.map { sample in
+            let basis = sample.axis == "X" ? xBasis : yBasis
+            let predictedDx = basis.dx * sample.distanceMm
+            let predictedDy = basis.dy * sample.distanceMm
+            return hypot(sample.observedDxMm - predictedDx, sample.observedDyMm - predictedDy)
+        }
+        let maxResidual = residuals.max() ?? .infinity
+        let rmsResidual = sqrt(residuals.reduce(0.0) { $0 + $1 * $1 } / Double(max(residuals.count, 1)))
+        let dot = xBasis.dx * yBasis.dx + xBasis.dy * yBasis.dy
+        let axisCosine = abs(dot / max(xScale * yScale, 0.000_001))
+
+        if rmsResidual > 6.0 || maxResidual > 10.0 {
+            return VisualAxisProbeEvaluation(
+                passed: false,
+                detail: String(format: "Residual too high rms %.1f max %.1f", rmsResidual, maxResidual),
+                rmsResidualMm: rmsResidual,
+                maxResidualMm: maxResidual,
+                minObservedDistanceMm: minObserved,
+                xScale: xScale,
+                yScale: yScale
+            )
+        }
+        if axisCosine > 0.72 {
+            return VisualAxisProbeEvaluation(
+                passed: false,
+                detail: String(format: "Axes too collinear cos %.2f", axisCosine),
+                rmsResidualMm: rmsResidual,
+                maxResidualMm: maxResidual,
+                minObservedDistanceMm: minObserved,
+                xScale: xScale,
+                yScale: yScale
+            )
+        }
+
+        let detail = weakSamples.isEmpty
+            ? String(format: "Cap-marker basis rms %.1f max %.1f", rmsResidual, maxResidual)
+            : String(
+                format: "Cap-marker basis rms %.1f max %.1f; weak %@",
+                rmsResidual,
+                maxResidual,
+                weakProbeSampleSummary(samples: weakSamples)
+            )
+        return VisualAxisProbeEvaluation(
+            passed: true,
+            detail: detail,
+            rmsResidualMm: rmsResidual,
+            maxResidualMm: maxResidual,
+            minObservedDistanceMm: minObserved,
+            xScale: xScale,
+            yScale: yScale
+        )
+    }
+
+    private func applyResiduals(
+        to samples: [FrameLearningSample]
+    ) -> [FrameLearningSample] {
+        let xBasis = averageBasis(samples: samples.filter { $0.axis == "X" })
+        let yBasis = averageBasis(samples: samples.filter { $0.axis == "Y" })
+        return samples.map { sample in
+            let basis = sample.axis == "X" ? xBasis : yBasis
+            let predictedDx = basis.dx * sample.distanceMm
+            let predictedDy = basis.dy * sample.distanceMm
+            var copy = sample
+            copy.residualMm = hypot(sample.observedDxMm - predictedDx, sample.observedDyMm - predictedDy)
+            return copy
+        }
+    }
+
+    private func averageBasis(samples: [FrameLearningSample]) -> (dx: Double, dy: Double) {
+        guard !samples.isEmpty else { return (0, 0) }
+        let total = samples.reduce((dx: 0.0, dy: 0.0)) { partial, sample in
+            (
+                dx: partial.dx + sample.observedDxMm / sample.distanceMm,
+                dy: partial.dy + sample.observedDyMm / sample.distanceMm
+            )
+        }
+        return (
+            dx: total.dx / Double(samples.count),
+            dy: total.dy / Double(samples.count)
+        )
+    }
+
+    private func weakProbeSampleSummary(samples: [FrameLearningSample]) -> String {
+        let sorted = samples.sorted { $0.observedDistanceMm < $1.observedDistanceMm }
+        guard !sorted.isEmpty else { return "none" }
+        return sorted.prefix(3).map { sample in
+            String(
+                format: "%@ %.0f %.1fmm",
+                sample.axis,
+                sample.distanceMm,
+                sample.observedDistanceMm
+            )
+        }
+        .joined(separator: ", ")
+    }
+
+    private var canRunVisualCenterDot: Bool {
+        bridge.isLiveMotionMode
+            && bridge.hasPaperLock
+            && frameLearning.status == "MEASURED"
+            && visualMotionModel?.isUsable == true
+            && plotterCamera.carriageMarker != nil
+            && !bridge.isRunning
+            && !bridge.isMachineBusy
+            && !bridge.isMachineAlarm
+    }
+
+    private var visualCenterDotIsActive: Bool {
+        visualCenterDotTaskActive
+            || bridge.activeAction == "visual-rel"
+            || bridge.activeAction == "dot-mark"
+            || bridge.activeAction == "relative-mark"
+    }
+
+    private var visualCenterDotDetail: String {
+        if visualCenterDotIsActive { return bridge.visualCenterDotStatus }
+        if bridge.canRunAbsoluteDrawing { return "Absolute drawing armed" }
+        guard let model = visualMotionModel else { return "Run motion probe first" }
+        if !model.isUsable { return "Motion basis is degenerate" }
+        if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
+            return "Preview center dot before visual run"
+        }
+        if plotterCamera.carriageMarker == nil { return "Cap marker not detected" }
+        return bridge.visualCenterDotStatus
+    }
+
+    private var visualCenterDotMarked: Bool {
+        bridge.visualCenterDotStatus == "VIS MARKED"
+            || bridge.visualCenterDotStatus.hasPrefix("VIS MARK ")
+    }
+
+    @MainActor
+    private func runVisualRelativeCenterDot() async {
+        await runVisualRelativeDotTest(pattern: "center")
+    }
+
+    @MainActor
+    private func runVisualRelativeFivePointTest() async {
+        await runVisualRelativeDotTest(pattern: "five")
+    }
+
+    @MainActor
+    private func runVisualRelativeDotTest(pattern: String) async {
+        guard canRunVisualCenterDot else {
+            calibrationStatusText = "CAL visual \(pattern) blocked: \(visualCenterDotDetail)"
+            bridge.visualCenterDotStatus = "VIS BLOCK"
+            return
+        }
+        guard visualMotionModel?.isUsable == true else {
+            calibrationStatusText = "CAL visual \(pattern) blocked: no usable motion basis"
+            bridge.visualCenterDotStatus = "VIS NO BASIS"
+            return
+        }
+        visualCenterDotTaskActive = true
+        defer {
+            visualCenterDotTaskActive = false
+        }
+
+        if bridge.dotTestPreviewPattern != pattern || bridge.dotTestPreviewPoints.isEmpty {
+            calibrationStatusText = "CAL visual \(pattern) previewing targets"
+            guard await bridge.previewDotTestOverlay(pattern: pattern) != nil else {
+                bridge.visualCenterDotStatus = "VIS NO PREVIEW"
+                calibrationStatusText = "CAL visual \(pattern) blocked: preview failed"
+                return
+            }
+        }
+
+        let targets = bridge.dotTestPreviewPoints.sorted { $0.pointId < $1.pointId }
+        guard !targets.isEmpty else {
+            calibrationStatusText = "CAL visual \(pattern) blocked: no targets"
+            bridge.visualCenterDotStatus = "VIS NO TARGET"
+            return
+        }
+
+        var visibleCount = 0
+        for (index, point) in targets.enumerated() {
+            bridge.visualCenterDotStatus = String(format: "VIS %@ %d/%d", point.pointId, index + 1, targets.count)
+            guard let final = await approachVisualTarget(
+                point.paperMm,
+                label: point.pointId,
+                targetIndex: index + 1
+            ) else {
+                return
+            }
+            let finalDistance = paperDistance(from: final.paperMm, to: point.paperMm)
+            guard finalDistance <= 4.0 else {
+                bridge.visualCenterDotStatus = String(format: "VIS OFF %.1f", finalDistance)
+                calibrationStatusText = String(
+                    format: "CAL visual %@ stopped %.1fmm from %@; no mark",
+                    pattern,
+                    finalDistance,
+                    point.pointId
+                )
+                return
+            }
+
+            guard await bridge.relativeMarkCurrentPosition(
+                markSizeMm: visualCalibrationMarkSizeMm,
+                drawFeedMmMin: min(140.0, bridge.shapeDrawFeedMmMin)
+            ) else {
+                calibrationStatusText = "CAL visual \(pattern) reached \(point.pointId); mark failed"
+                return
+            }
+
+            let parked = await parkAwayFromMark(
+                markPaperPoint: point.paperMm,
+                label: point.pointId
+            )
+            guard parked else { return }
+            let inkResult = await inspectInkAt(point)
+            if inkResult?.isVisible == true {
+                visibleCount += 1
+                bridge.visualCenterDotStatus = String(format: "VIS %@ OK", point.pointId)
+                continue
+            }
+
+            calibrationStatusText = "CAL \(point.pointId) weak ink; retrying larger mark"
+            guard await approachVisualTarget(point.paperMm, label: "\(point.pointId)-retry", targetIndex: index + 1) != nil else {
+                return
+            }
+            guard await bridge.relativeMarkCurrentPosition(
+                markSizeMm: visualCalibrationRetryMarkSizeMm,
+                drawFeedMmMin: min(120.0, bridge.shapeDrawFeedMmMin)
+            ) else {
+                calibrationStatusText = "CAL visual \(pattern) retry mark failed"
+                return
+            }
+            guard await parkAwayFromMark(markPaperPoint: point.paperMm, label: "\(point.pointId)-retry") else {
+                return
+            }
+            if await inspectInkAt(point)?.isVisible == true {
+                visibleCount += 1
+                bridge.visualCenterDotStatus = String(format: "VIS %@ OK+", point.pointId)
+            } else {
+                bridge.visualCenterDotStatus = String(format: "VIS %@ WEAK", point.pointId)
+                calibrationStatusText = "CAL visual \(pattern) \(point.pointId) ink still weak after larger mark"
+                if pattern == "center" { return }
+            }
+        }
+
+        bridge.visualCenterDotStatus = String(format: "VIS MARK %d/%d", visibleCount, targets.count)
+        calibrationStatusText = String(format: "CAL visual %@ complete; ink visible %d/%d", pattern, visibleCount, targets.count)
+    }
+
+    @MainActor
+    private func approachVisualTarget(
+        _ target: PaperPointMmSnapshot,
+        label: String,
+        targetIndex: Int
+    ) async -> GreenCapPaperObservation? {
+        guard var model = visualMotionModel, model.isUsable else {
+            bridge.visualCenterDotStatus = "VIS NO BASIS"
+            calibrationStatusText = "CAL visual target blocked: no usable motion basis"
+            return nil
+        }
+        guard var current = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+            calibrationStatusText = "CAL visual target blocked: cap not detected"
+            bridge.visualCenterDotStatus = "VIS NO CAP"
+            return nil
+        }
+
+        updateObservedPenPoint(current)
+        let targetToleranceMm = 4.0
+        let maxSegments = 30
+        let feedMmMin = min(300.0, bridge.manualFeedMmMin)
+        var goodSegments = 0
+        let initialDistance = paperDistance(from: current.paperMm, to: target)
+
+        for segmentIndex in 1...maxSegments {
+            let remainingDx = target.x - current.paperMm.x
+            let remainingDy = target.y - current.paperMm.y
+            let remainingDistance = hypot(remainingDx, remainingDy)
+            if remainingDistance <= targetToleranceMm {
+                bridge.visualCenterDotStatus = String(format: "VIS %@ %.1fmm", label, remainingDistance)
+                break
+            }
+
+            guard let machineDelta = model.machineDelta(forPaperDx: remainingDx, paperDy: remainingDy) else {
+                bridge.visualCenterDotStatus = "VIS SOLVE FAIL"
+                calibrationStatusText = "CAL visual target blocked: basis solve failed"
+                return nil
+            }
+
+            let commandLength = hypot(machineDelta.xMm, machineDelta.yMm)
+            guard commandLength >= 0.2 else {
+                bridge.visualCenterDotStatus = "VIS TINY MOVE"
+                calibrationStatusText = "CAL visual target stopped: command too small"
+                return nil
+            }
+
+            let commandCapMm = goodSegments >= 2 ? 18.0 : (goodSegments == 1 ? 12.0 : 6.0)
+            let scale = min(1.0, commandCapMm / commandLength)
+            let commandX = machineDelta.xMm * scale
+            let commandY = machineDelta.yMm * scale
+            let predicted = model.paperDelta(forMachineX: commandX, yMm: commandY)
+            let predictedDistance = hypot(predicted.dx, predicted.dy)
+            guard predictedDistance >= 0.5 else {
+                bridge.visualCenterDotStatus = "VIS WEAK PRED"
+                calibrationStatusText = "CAL visual target stopped: weak predicted movement"
+                return nil
+            }
+
+            guard let before = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+                bridge.visualCenterDotStatus = "VIS CAP LOST"
+                calibrationStatusText = "CAL visual target stopped: cap lost before move"
+                return nil
+            }
+
+            bridge.visualCenterDotStatus = String(
+                format: "VIS %@ %02d %.1f",
+                label,
+                segmentIndex,
+                remainingDistance
+            )
+            calibrationStatusText = String(
+                format: "CAL visual %@ target %d move %02d rem %.1f cmd X%.1f Y%.1f",
+                label,
+                targetIndex,
+                segmentIndex,
+                remainingDistance,
+                commandX,
+                commandY
+            )
+
+            guard let response = await bridge.visualRelativeMove(
+                xMm: commandX,
+                yMm: commandY,
+                feedMmMin: feedMmMin
+            ) else {
+                calibrationStatusText = "CAL visual target stopped: move failed"
+                return nil
+            }
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                bridge.visualCenterDotStatus = "VIS PIN \(pins)"
+                calibrationStatusText = "CAL visual target stopped: pin active \(pins)"
+                return nil
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard let after = await waitForGreenCapPaperObservation(
+                afterFrame: before.frameNumber,
+                timeoutSeconds: 4.0
+            ), after.frameNumber > before.frameNumber else {
+                bridge.visualCenterDotStatus = "VIS NO NEW FRAME"
+                calibrationStatusText = "CAL visual target stopped: no new cap observation"
+                return nil
+            }
+
+            let observedDx = after.paperMm.x - before.paperMm.x
+            let observedDy = after.paperMm.y - before.paperMm.y
+            let observedDistance = hypot(observedDx, observedDy)
+            let residualMm = hypot(observedDx - predicted.dx, observedDy - predicted.dy)
+            let residualLimitMm = max(3.5, predictedDistance * 0.45)
+            guard observedDistance >= predictedDistance * 0.35, residualMm <= residualLimitMm else {
+                bridge.visualCenterDotStatus = String(format: "VIS RESID %.1f", residualMm)
+                calibrationStatusText = String(
+                    format: "CAL visual target stopped: residual %.1fmm predicted %.1f observed %.1f",
+                    residualMm,
+                    predictedDistance,
+                    observedDistance
+                )
+                updateObservedPenPoint(after)
+                return nil
+            }
+
+            if let updatedModel = appendAcceptedVisualMotionSample(
+                machineDxMm: commandX,
+                machineDyMm: commandY,
+                observedDxMm: observedDx,
+                observedDyMm: observedDy,
+                observedDistanceMm: observedDistance,
+                strength: min(before.strength, after.strength)
+            ) {
+                model = updatedModel
+            }
+            goodSegments += 1
+            current = after
+            updateObservedPenPoint(after)
+        }
+
+        guard let final = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0) else {
+            bridge.visualCenterDotStatus = "VIS NO FINAL"
+            calibrationStatusText = "CAL visual target stopped: no final cap observation"
+            return nil
+        }
+        updateObservedPenPoint(final)
+        let finalDistance = paperDistance(from: final.paperMm, to: target)
+        guard finalDistance <= targetToleranceMm else {
+            bridge.visualCenterDotStatus = String(format: "VIS OFF %.1fmm", finalDistance)
+            calibrationStatusText = String(format: "CAL visual target stopped %.1fmm from target", finalDistance)
+            return nil
+        }
+        guard goodSegments > 0 || initialDistance <= targetToleranceMm else {
+            bridge.visualCenterDotStatus = "VIS NO VERIFY"
+            calibrationStatusText = "CAL visual target stopped: no verified segment"
+            return nil
+        }
+        return final
+    }
+
+    @MainActor
+    private func parkAwayFromMark(markPaperPoint: PaperPointMmSnapshot, label: String) async -> Bool {
+        guard let current = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0),
+              let model = visualMotionModel,
+              model.isUsable else {
+            bridge.visualCenterDotStatus = "VIS PARK BLOCK"
+            calibrationStatusText = "CAL visual \(label) park blocked: no cap/model"
+            return false
+        }
+
+        let parkDx = markPaperPoint.x + visualCalibrationParkMm <= bridge.workspaceXMm - 2.0
+            ? visualCalibrationParkMm
+            : -visualCalibrationParkMm
+        let parkDy = 0.0
+        guard let machineDelta = model.machineDelta(forPaperDx: parkDx, paperDy: parkDy) else {
+            bridge.visualCenterDotStatus = "VIS PARK SOLVE"
+            calibrationStatusText = "CAL visual \(label) park solve failed"
+            return false
+        }
+        bridge.visualCenterDotStatus = String(format: "VIS PARK %@", label)
+        guard await bridge.visualRelativeMove(
+            xMm: machineDelta.xMm,
+            yMm: machineDelta.yMm,
+            feedMmMin: min(300.0, bridge.manualFeedMmMin)
+        ) != nil else {
+            calibrationStatusText = "CAL visual \(label) park move failed"
+            return false
+        }
+        try? await Task.sleep(nanoseconds: 650_000_000)
+        if let after = await waitForGreenCapPaperObservation(afterFrame: current.frameNumber, timeoutSeconds: 3.0) {
+            updateObservedPenPoint(after)
+        }
+        return true
+    }
+
+    @MainActor
+    private func inspectInkAt(_ point: DotTestPreviewPoint) async -> InkInspectionResult? {
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let cameraPoint = CGPoint(x: point.cameraNorm.x, y: point.cameraNorm.y)
+        let result = plotterCamera.inspectInk(cameraPoint: cameraPoint)
+        calibrationStatusText = result.map {
+            "CAL \(point.pointId) \($0.summary)"
+        } ?? "CAL \(point.pointId) ink check unavailable"
+        return result
+    }
+
+    private func updateObservedPenPoint(_ observation: GreenCapPaperObservation) {
+        observedPenPoint = ObservedPenPoint(
+            point: CGPoint(x: observation.cameraPoint.x, y: 1.0 - observation.cameraPoint.y),
+            cameraPoint: observation.cameraPoint,
+            paperMm: observation.paperMm
+        )
+    }
+
+    private func paperDistance(from point: PaperPointMmSnapshot, to target: PaperPointMmSnapshot) -> Double {
+        hypot(target.x - point.x, target.y - point.y)
+    }
+
+    private var topBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                    Text("Plotter Vision Camera")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                }
+
+                Divider()
+                    .frame(height: 22)
+                    .overlay(Color.white.opacity(0.22))
+
+                CameraLayoutControl(selection: $cameraLayout)
+
+                CameraSelector(camera: plotterCamera)
+                    .frame(width: 166)
+
+                CameraSelector(camera: faceCamera)
+                    .frame(width: 150)
+
+                controlButton(
+                    systemName: "camera.badge.ellipsis",
+                    label: "Cameras",
+                    help: "Start visible camera streams",
+                    isActive: plotterCamera.isRunning && faceCamera.isRunning
+                ) {
+                    startVisibleCameras()
+                }
+
+                controlButton(
+                    systemName: plotterViewport.boxEnabled ? "rectangle.inset.filled" : "rectangle",
+                    label: "Box",
+                    help: plotterViewport.boxEnabled ? "Hide plotter range box" : "Show plotter range box",
+                    isActive: plotterViewport.boxEnabled
+                ) {
+                    plotterViewport.boxEnabled.toggle()
+                }
+
+                controlButton(
+                    systemName: plotterViewport.boxLocked ? "lock.fill" : "lock.open",
+                    label: "Lock",
+                    help: plotterViewport.boxLocked ? "Unlock plotter range box" : "Lock plotter range box",
+                    isActive: plotterViewport.boxLocked
+                ) {
+                    plotterViewport.boxLocked.toggle()
+                }
+
+                controlButton(
+                    systemName: "rotate.right",
+                    label: "Rotate",
+                    help: "Rotate plotter camera display by 90 degrees",
+                    isActive: plotterViewport.rotationDegrees != 0
+                ) {
+                    plotterViewport.rotationDegrees = nextQuarterTurn(after: plotterViewport.rotationDegrees)
+                }
+
+                controlButton(
+                    systemName: plotterViewport.previewMode == .fit ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                    label: plotterViewport.previewMode.title,
+                    help: "Toggle plotter camera fit/fill display",
+                    isActive: plotterViewport.previewMode == .fit
+                ) {
+                    plotterViewport.previewMode = plotterViewport.previewMode == .fit ? .fill : .fit
+                }
+
+                controlButton(
+                    systemName: "checklist.checked",
+                    label: "Wizard",
+                    help: "Show calibration workflow",
+                    isActive: showCalibrationWizard
+                ) {
+                    showCalibrationWizard.toggle()
+                }
+
+                visualControlsMenu
+
+                drawingTestsMenu
+
+                calibrationMenu
+
+                controlButton(
+                    systemName: "slider.horizontal.3",
+                    label: "Machine",
+                    help: "Open machine controls window",
+                    isActive: bridge.isOnline
+                ) {
+                    openWindow(id: "machine-controls")
+                }
+
+                topStatusLights
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 12) {
+            Text(plotterCamera.statusText)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.86))
+                .lineLimit(1)
+                .frame(minWidth: 210, alignment: .leading)
+
+            Text(faceCamera.statusText)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(1)
+                .frame(minWidth: 180, alignment: .leading)
+
+            Divider()
+                .frame(height: 24)
+                .overlay(Color.white.opacity(0.18))
+
+            Text("BOX \(plotterViewport.boxLocked ? "LOCKED" : "EDIT")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
+            Text("\(calibrationStatusText)  FID auto:\(plotterCamera.stats.fiducialCount) manual:\(manualFiducials.count)/4")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.cyan.opacity(0.78))
+                .lineLimit(1)
+            Text(observedPenStatusText)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.green.opacity(0.78))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var calibrationWizardOverlay: some View {
+        VStack {
+            HStack {
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checklist.checked")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.cyan)
+                        Text("Calibration Wizard")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.92))
+                        Spacer(minLength: 0)
+                        Button {
+                            showCalibrationWizard = false
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.72))
+                                .frame(width: 24, height: 24)
+                                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Hide calibration wizard")
+                    }
+
+                    Text(wizardInstructionText)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        CalibrationWizardStepRow(
+                            index: 1,
+                            title: "Fiducials",
+                            detail: wizardFiducialDetail,
+                            status: wizardFiducialStatus
+                        )
+                        CalibrationWizardStepRow(
+                            index: 2,
+                            title: "Paper Homography",
+                            detail: bridge.paperTransformStatus,
+                            status: wizardPaperStatus
+                        )
+                        CalibrationWizardStepRow(
+                            index: 3,
+                            title: "Cap Marker",
+                            detail: wizardGreenCapDetail,
+                            status: wizardGreenCapStatus
+                        )
+                        CalibrationWizardStepRow(
+                            index: 4,
+                            title: "Observed Pen",
+                            detail: observedPenStatusText,
+                            status: wizardObservedPenStatus
+                        )
+                        CalibrationWizardStepRow(
+                            index: 5,
+                            title: "Motion Probe",
+                            detail: frameLearning.detail,
+                            status: wizardMotionProbeStatus
+                        )
+                        CalibrationWizardStepRow(
+                            index: 6,
+                            title: "Draw Preflight",
+                            detail: visualCenterDotDetail,
+                            status: wizardDrawPreflightStatus
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(wizardPrimaryActionTitle) {
+                            runCalibrationWizardPrimaryAction()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!wizardPrimaryActionEnabled)
+
+                        Button("Reset") {
+                            resetCalibrationWizard()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Manual Pen") {
+                            startManualPenClick()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!bridge.hasPaperLock)
+                    }
+
+                    HStack(spacing: 8) {
+                        Label(plotterCamera.carriageMarker == nil ? "cap not detected" : "cap detected", systemImage: "circle.fill")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(plotterCamera.carriageMarker == nil ? .yellow.opacity(0.86) : .green.opacity(0.92))
+                        Text(String(format: "FID %d/4  PAPER %@  LIVE %@",
+                                    manualFiducials.count,
+                                    bridge.hasPaperLock ? "LOCK" : "--",
+                                    bridge.isLiveMotionMode ? "YES" : "NO"))
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.54))
+                    }
+                }
+                .frame(width: 390, alignment: .leading)
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+            }
+            .padding(.top, 84)
+            .padding(.horizontal, 18)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var wizardFiducialStatus: CalibrationWizardStepStatus {
+        manualFiducials.count >= 4 ? .done : .active
+    }
+
+    private var wizardPaperStatus: CalibrationWizardStepStatus {
+        if bridge.hasPaperLock { return .done }
+        return manualFiducials.count >= 4 ? .active : .pending
+    }
+
+    private var wizardGreenCapStatus: CalibrationWizardStepStatus {
+        if plotterCamera.carriageMarker != nil { return .done }
+        return bridge.hasPaperLock ? .active : .pending
+    }
+
+    private var wizardObservedPenStatus: CalibrationWizardStepStatus {
+        if observedPenPoint?.paperMm != nil { return .done }
+        return bridge.hasPaperLock ? .active : .pending
+    }
+
+    private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
+        if frameLearning.status == "MEASURED" { return .done }
+        if observedPenPoint?.paperMm != nil { return bridge.isLiveMotionMode ? .active : .blocked }
+        return .pending
+    }
+
+    private var wizardDrawPreflightStatus: CalibrationWizardStepStatus {
+        if visualCenterDotMarked { return .done }
+        if bridge.canRunAbsoluteDrawing { return .done }
+        if visualCenterDotIsActive { return .active }
+        if canRunVisualCenterDot { return .active }
+        return frameLearning.status == "MEASURED" ? .blocked : .pending
+    }
+
+    private var wizardFiducialDetail: String {
+        if manualFiducials.count >= 4 { return "BL, BR, TR, TL captured" }
+        return "Click \(nextFiducialLabel)  \(manualFiducials.count)/4"
+    }
+
+    private var wizardGreenCapDetail: String {
+        guard let marker = plotterCamera.carriageMarker else {
+            return "Waiting for bright cap marker"
+        }
+        return String(format: "%@ cam x%.3f y%.3f %.0f%%", marker.colorName, marker.center.x, marker.center.y, marker.strength * 100)
+    }
+
+    private var wizardInstructionText: String {
+        if manualFiducials.count < 4 {
+            return "Click fiducials in order: bottom-left, bottom-right, top-right, top-left."
+        }
+        if !bridge.hasPaperLock {
+            return "Fiducials are captured. Solve paper homography to create the paper-mm frame."
+        }
+        if observedPenPoint?.paperMm == nil {
+            return plotterCamera.carriageMarker == nil
+                ? "Cap marker is not detected. Adjust view or use Manual Pen."
+                : "Cap marker is detected. Use it as the observed carriage/pen location."
+        }
+        if frameLearning.status != "MEASURED" {
+            return "Observed pen is in paper mm. Run the motion probe only when the path is clear."
+        }
+        if visualCenterDotIsActive {
+            return "Visual center dot is running watched relative motion. Do not start another move."
+        }
+        if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
+            return "Motion is measured. Preview the center target overlay before visual-relative motion."
+        }
+        if canRunVisualCenterDot {
+            return "Run visual center dot. It approaches in watched relative segments and marks only after residuals pass."
+        }
+        if !bridge.canRunAbsoluteDrawing {
+            return "Motion is measured, but drawing is blocked until the cap marker, paper lock, and visual motion model are available."
+        }
+        return "Absolute draw preflight is trusted. Dot-test preview is the next drawing check."
+    }
+
+    private var wizardPrimaryActionTitle: String {
+        if manualFiducials.count < 4 {
+            return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Fiducial Clicks"
+        }
+        if !bridge.hasPaperLock { return "Solve Homography" }
+        if observedPenPoint?.paperMm == nil {
+            return plotterCamera.carriageMarker == nil ? "Manual Pen Click" : "Use Cap Marker"
+        }
+        if frameLearning.status != "MEASURED" { return "Run Motion Probe" }
+        if visualCenterDotMarked { return "Wizard Complete" }
+        if bridge.dotTestPreviewPlanHash.isEmpty { return "Preview Center Dot" }
+        if canRunVisualCenterDot { return "Run Visual Center Dot" }
+        return bridge.canRunAbsoluteDrawing ? "Wizard Complete" : "Visual Draw Needed"
+    }
+
+    private var wizardPrimaryActionEnabled: Bool {
+        if manualFiducials.count < 4 { return true }
+        if !bridge.hasPaperLock {
+            return bridge.isOnline && manualFiducials.count >= 4 && !bridge.isCalibrating
+        }
+        if observedPenPoint?.paperMm == nil {
+            return true
+        }
+        if frameLearning.status != "MEASURED" {
+            return bridge.isLiveMotionMode && !bridge.isMachineBusy && !bridge.isRunning && !bridge.isMachineAlarm
+        }
+        if bridge.dotTestPreviewPlanHash.isEmpty {
+            return bridge.isOnline && bridge.hasPaperLock && !bridge.isCalibrating
+        }
+        return canRunVisualCenterDot
+    }
+
+    private var nextFiducialLabel: String {
+        switch manualFiducials.count {
+        case 0:
+            return "FID-BL"
+        case 1:
+            return "FID-BR"
+        case 2:
+            return "FID-TR"
+        default:
+            return "FID-TL"
+        }
+    }
+
+    private func runCalibrationWizardPrimaryAction() {
+        if manualFiducials.count < 4 {
+            manualFiducialMode = true
+            manualPenMode = false
+            manualCapColorMode = false
+            calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+            return
+        }
+
+        if !bridge.hasPaperLock {
+            calibrationStatusText = "WIZ solving paper homography"
+            Task {
+                _ = await bridge.registerPaperHomography(
+                    fiducials: manualFiducials,
+                    paperWidthMm: bridge.workspaceXMm,
+                    paperHeightMm: bridge.workspaceYMm
+                )
+                calibrationStatusText = "WIZ \(bridge.paperTransformStatus)"
+            }
+            return
+        }
+
+        if observedPenPoint?.paperMm == nil {
+            if plotterCamera.carriageMarker != nil {
+                useDetectedCarriageMarker()
+            } else {
+                startManualPenClick()
+            }
+            return
+        }
+
+        if frameLearning.status != "MEASURED" {
+            calibrationStatusText = "WIZ motion probe requested"
+            Task {
+                await runFrameLearning()
+            }
+            return
+        }
+
+        if bridge.dotTestPreviewPlanHash.isEmpty {
+            calibrationStatusText = "WIZ preview center dot"
+            Task {
+                _ = await bridge.previewDotTestOverlay(pattern: "center")
+                calibrationStatusText = "WIZ \(bridge.dotTestPreviewStatus)"
+            }
+            return
+        }
+
+        if canRunVisualCenterDot {
+            calibrationStatusText = "WIZ visual center dot"
+            Task {
+                await runVisualRelativeCenterDot()
+            }
+        }
+    }
+
+    private func resetCalibrationWizard() {
+        manualFiducialMode = false
+        manualPenMode = false
+        manualCapColorMode = false
+        manualFiducials = []
+        observedPenPoint = nil
+        visualMotionModel = nil
+        visualMotionSamples = []
+        visualCenterDotTaskActive = false
+        frameLearning = .idle
+        bridge.clearDotTestOverlay()
+        bridge.visualCenterDotStatus = "VIS --"
+        calibrationStatusText = "WIZ reset"
+    }
+
+    private var topStatusLights: some View {
+        HStack(spacing: 7) {
+            StatusLamp(
+                title: "BRIDGE",
+                value: bridge.isOnline ? "OK" : "OFF",
+                color: bridge.isOnline ? .green : .red,
+                help: bridge.statusText
+            )
+            StatusLamp(
+                title: "MOTION",
+                value: bridge.motionModeLabel,
+                color: motionLampColor,
+                help: bridge.motionGateMessage
+            )
+            StatusLamp(
+                title: "FID",
+                value: "\(plotterCamera.stats.fiducialCount)+\(manualFiducials.count)",
+                color: fiducialLampColor,
+                help: "Detected fiducials plus manually clicked fiducials"
+            )
+            StatusLamp(
+                title: "PAPER",
+                value: paperLampValue,
+                color: paperLampColor,
+                help: bridge.paperTransformStatus
+            )
+            StatusLamp(
+                title: "PEN",
+                value: penLampValue,
+                color: penLampColor,
+                help: observedPenStatusText
+            )
+            StatusLamp(
+                title: "STATE",
+                value: bridge.machineState,
+                color: bridge.isMachineAlarm ? .red : (bridge.isMachineBusy || bridge.isRunning ? .yellow : .white.opacity(0.72)),
+                help: bridge.machineStatus
+            )
+        }
+    }
+
+    private var motionLampColor: Color {
+        if !bridge.isOnline || bridge.isMachineAlarm { return .red }
+        if bridge.isMachineBusy || bridge.isRunning { return .yellow }
+        if bridge.isLiveMotionMode { return .green }
+        return .orange
+    }
+
+    private var fiducialLampColor: Color {
+        if plotterCamera.stats.fiducialCount >= 4 || manualFiducials.count >= 4 {
+            return .green
+        }
+        if plotterCamera.stats.fiducialCount + manualFiducials.count >= 4 {
+            return .yellow
+        }
+        return .red
+    }
+
+    private var paperLampValue: String {
+        if bridge.paperTransformStatus.contains("LOCK") { return "LOCK" }
+        if bridge.paperTransformStatus.contains("SOLVE") { return "SOLVE" }
+        if bridge.paperTransformStatus.contains("ERR") { return "ERR" }
+        return "--"
+    }
+
+    private var penLampValue: String {
+        guard let observedPenPoint else { return "--" }
+        return observedPenPoint.paperMm == nil ? "CAM" : "MM"
+    }
+
+    private var penLampColor: Color {
+        guard let observedPenPoint else { return .white.opacity(0.45) }
+        return observedPenPoint.paperMm == nil ? .yellow : .green
+    }
+
+    private var observedPenStatusText: String {
+        guard let observedPenPoint else { return "Pen position not observed" }
+        if let paperMm = observedPenPoint.paperMm {
+            return String(
+                format: "PEN cam x%.3f y%.3f paper x%.1f y%.1f mm",
+                observedPenPoint.cameraPoint.x,
+                observedPenPoint.cameraPoint.y,
+                paperMm.x,
+                paperMm.y
+            )
+        }
+        return String(
+            format: "PEN cam x%.3f y%.3f, no paper homography",
+            observedPenPoint.cameraPoint.x,
+            observedPenPoint.cameraPoint.y
+        )
+    }
+
+    private var paperLampColor: Color {
+        if bridge.paperTransformStatus.contains("LOCK") { return .green }
+        if bridge.paperTransformStatus.contains("SOLVE") { return .yellow }
+        if bridge.paperTransformStatus.contains("ERR") { return .red }
+        return .white.opacity(0.45)
+    }
+
+    private var visualControlsMenu: some View {
+        Menu {
+            Section("Plotter Box") {
+                Toggle("Show Box", isOn: $plotterViewport.boxEnabled)
+                Toggle("Lock Box", isOn: $plotterViewport.boxLocked)
+
+                Picker("Box Color", selection: $plotterViewport.boxColor) {
+                    ForEach(PlotterViewportBoxColor.allCases) { color in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(plotterViewportColor(color))
+                                .frame(width: 10, height: 10)
+                            Text(color.title)
+                        }
+                        .tag(color)
+                    }
+                }
+
+                MenuSliderControl(
+                    label: "Box Alpha",
+                    value: $plotterViewport.boxOpacity,
+                    range: 0.05...1.0,
+                    step: 0.01,
+                    display: String(format: "%.2f", plotterViewport.boxOpacity)
+                )
+                MenuSliderControl(
+                    label: "Box Thickness",
+                    value: $plotterViewport.boxStrokeWidth,
+                    range: 1.0...10.0,
+                    step: 0.5,
+                    display: String(format: "%.1f px", plotterViewport.boxStrokeWidth)
+                )
+            }
+
+            Section("Overlays") {
+                Toggle("Grid", isOn: $plotterCamera.showGrid)
+                Toggle("Measurements", isOn: $plotterCamera.showMeasurements)
+                Toggle("Fiducials", isOn: $plotterCamera.fiducialDetectionEnabled)
+                Toggle("Segmentation", isOn: $plotterCamera.segmentationEnabled)
+                Toggle("Motion Detection", isOn: $plotterCamera.changeDetectionEnabled)
+                MenuSliderControl(
+                    label: "Overlay Alpha",
+                    value: $plotterOverlay.opacity,
+                    range: 0.05...1.0,
+                    step: 0.01,
+                    display: String(format: "%.2f", plotterOverlay.opacity)
+                )
+            }
+
+            Section("Video Filter") {
+                Picker("Filter", selection: $plotterViewport.videoFilter) {
+                    ForEach(PlotterVideoFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+            }
+
+            Section("Reset") {
+                Button("Reset Visual Controls") {
+                    resetVisualControls()
+                }
+            }
+        } label: {
+            toolbarMenuLabel(
+                systemName: "slider.horizontal.3",
+                label: "Visuals",
+                isActive: plotterViewport.videoFilter != .normal
+                    || plotterCamera.showGrid
+                    || plotterCamera.segmentationEnabled
+                    || plotterCamera.changeDetectionEnabled
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .help("Visual overlays, plotter-box appearance, and video filters")
+    }
+
+    private var drawingTestsMenu: some View {
+        Menu {
+            Section("Dot Mark Tests") {
+                Button("Preview Center Mark") {
+                    calibrationStatusText = "TEST center mark preview"
+                    Task {
+                        _ = await bridge.previewDotTestOverlay(pattern: "center")
+                        calibrationStatusText = "TEST \(bridge.dotTestPreviewStatus)"
+                    }
+                }
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
+
+                Button("Run Visual Center Mark") {
+                    calibrationStatusText = "TEST visual center mark"
+                    Task {
+                        await runVisualRelativeCenterDot()
+                    }
+                }
+                .disabled(!canRunVisualCenterDot)
+
+                Button("Preview 5-Point Marks") {
+                    calibrationStatusText = "TEST five-point preview"
+                    Task {
+                        _ = await bridge.previewDotTestOverlay(pattern: "five")
+                        calibrationStatusText = "TEST \(bridge.dotTestPreviewStatus)"
+                    }
+                }
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
+
+                Button("Run Visual 5-Point Marks") {
+                    calibrationStatusText = "TEST visual five-point marks"
+                    Task {
+                        await runVisualRelativeFivePointTest()
+                    }
+                }
+                .disabled(!canRunVisualCenterDot)
+            }
+
+            Section("Shape Previews") {
+                Button("Preview Triangle Overlay") {
+                    calibrationStatusText = "TEST triangle preview"
+                    Task {
+                        if await bridge.previewShapeOverlay(pattern: "triangle") {
+                            calibrationStatusText = "TEST \(bridge.previewStatus)"
+                        } else {
+                            calibrationStatusText = "TEST \(bridge.previewStatus)"
+                        }
+                    }
+                }
+                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning)
+
+                Button("Preview Square Overlay") {
+                    calibrationStatusText = "TEST square preview"
+                    Task {
+                        if await bridge.previewShapeOverlay(pattern: "square") {
+                            calibrationStatusText = "TEST \(bridge.previewStatus)"
+                        } else {
+                            calibrationStatusText = "TEST \(bridge.previewStatus)"
+                        }
+                    }
+                }
+                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning)
+            }
+
+            Section("Shape Residuals") {
+                Button("Triangle Residual Runner Pending") {
+                    calibrationStatusText = "TEST triangle residual runner needs visual-relative execution"
+                }
+                .disabled(true)
+                Button("Square Residual Runner Pending") {
+                    calibrationStatusText = "TEST square residual runner needs visual-relative execution"
+                }
+                .disabled(true)
+                Button("Circle Residual Runner Pending") {
+                    calibrationStatusText = "TEST circle planner is not implemented yet"
+                }
+                .disabled(true)
+            }
+
+            Section("Overlay") {
+                Button("Replay Expected Path") {
+                    bridge.replayExpectedPath()
+                    calibrationStatusText = "TEST expected path replay"
+                }
+                .disabled(bridge.expectedPathSegments.isEmpty)
+                Button("Clear Test Overlays") {
+                    bridge.clearDotTestOverlay()
+                    bridge.expectedPathSegments = []
+                    bridge.previewStatus = "SIM --"
+                    calibrationStatusText = "TEST overlays cleared"
+                }
+                .disabled(
+                    bridge.expectedPathSegments.isEmpty
+                        && bridge.dotTestPreviewPoints.isEmpty
+                        && bridge.dotTestPreviewSegments.isEmpty
+                )
+            }
+        } label: {
+            toolbarMenuLabel(
+                systemName: "testtube.2",
+                label: "Tests",
+                isActive: !bridge.expectedPathSegments.isEmpty
+                    || !bridge.dotTestPreviewPoints.isEmpty
+                    || visualCenterDotIsActive
+            )
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .help("Drawing previews and visual mark tests")
+    }
+
+    private var calibrationMenu: some View {
+        Menu {
+            Section("Plotter Box") {
+                Button(plotterViewport.boxEnabled ? "Hide Box" : "Show Box") {
+                    plotterViewport.boxEnabled.toggle()
+                    calibrationStatusText = plotterViewport.boxEnabled ? "CAL box visible" : "CAL box hidden"
+                }
+                Button(plotterViewport.boxLocked ? "Unlock Box" : "Lock Box") {
+                    plotterViewport.boxLocked.toggle()
+                    calibrationStatusText = plotterViewport.boxLocked ? "CAL box locked" : "CAL box unlocked"
+                }
+                Button("Reset Box") {
+                    plotterViewport = PlotterViewportSettings()
+                    calibrationStatusText = "CAL box reset"
+                }
+            }
+
+            Section("Observation") {
+                Button("Scan Plotter Frame") {
+                    calibrationStatusText = "CAL scan: analyzing plotter frame"
+                    plotterCamera.scanCurrentFrame()
+                }
+                Button("Reset Change Baseline") {
+                    calibrationStatusText = "CAL baseline reset"
+                    plotterCamera.resetChangeBaseline()
+                }
+                Button(plotterCamera.fiducialDetectionEnabled ? "Hide Fiducials" : "Show Fiducials") {
+                    plotterCamera.fiducialDetectionEnabled.toggle()
+                    calibrationStatusText = plotterCamera.fiducialDetectionEnabled ? "CAL auto fiducials enabled" : "CAL auto fiducials hidden"
+                }
+            }
+
+            Section("Manual Fiducials") {
+                Button(manualFiducialMode ? "Stop Clicking Fiducials" : "Click Fiducials") {
+                    manualFiducialMode.toggle()
+                    if manualFiducialMode {
+                        manualPenMode = false
+                        manualCapColorMode = false
+                        calibrationStatusText = "CAL click visible fiducials on plotter view"
+                    } else {
+                        calibrationStatusText = "CAL manual fiducials stopped"
+                    }
+                }
+                Button("Clear Manual Fiducials") {
+                    manualFiducials = []
+                    calibrationStatusText = "CAL manual fiducials cleared"
+                }
+                Button("Register Paper Homography") {
+                    calibrationStatusText = "CAL paper homography solving"
+                    Task {
+                        if await bridge.registerPaperHomography(
+                            fiducials: manualFiducials,
+                            paperWidthMm: bridge.workspaceXMm,
+                            paperHeightMm: bridge.workspaceYMm
+                        ) != nil {
+                            calibrationStatusText = bridge.paperTransformStatus
+                        } else {
+                            calibrationStatusText = bridge.paperTransformStatus
+                        }
+                    }
+                }
+                .disabled(!bridge.isOnline || manualFiducials.count < 4 || bridge.isCalibrating)
+            }
+
+            Section("Pen Position") {
+                Button(manualPenMode ? "Stop Clicking Pen" : "Click Observed Pen") {
+                    manualPenMode.toggle()
+                    if manualPenMode {
+                        manualFiducialMode = false
+                        manualCapColorMode = false
+                        observedPenPoint = nil
+                        calibrationStatusText = bridge.hasPaperLock
+                            ? "CAL click observed pen on plotter view"
+                            : "CAL click observed pen; paper homography not locked"
+                    } else {
+                        calibrationStatusText = "CAL pen click stopped"
+                    }
+                }
+                Button(manualCapColorMode ? "Stop Cap Color Pick" : "Pick Cap Color") {
+                    if manualCapColorMode {
+                        manualCapColorMode = false
+                        calibrationStatusText = "CAL cap color pick stopped"
+                    } else {
+                        startCapColorPick()
+                    }
+                }
+                Button("Default Green Cap") {
+                    manualCapColorMode = false
+                    manualPenMode = false
+                    observedPenPoint = nil
+                    plotterCamera.resetCapMarkerColorTarget()
+                    calibrationStatusText = "CAL cap marker reset to default green"
+                }
+                Button("Clear Observed Pen") {
+                    observedPenPoint = nil
+                    calibrationStatusText = "CAL observed pen cleared"
+                }
+                .disabled(observedPenPoint == nil)
+            }
+
+            Section("Dot Tests") {
+                Button("Preview Center Dot Overlay") {
+                    calibrationStatusText = "CAL center dot preview"
+                    Task {
+                        if await bridge.previewDotTestOverlay(pattern: "center") != nil {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        } else {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        }
+                    }
+                }
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
+                Button("Run Center Dot Motion") {
+                    calibrationStatusText = "CAL center dot motion"
+                    Task {
+                        if await bridge.runCenterDotTestMotion() {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        } else {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        }
+                    }
+                }
+                .disabled(!bridge.canRunCenterDotMotion)
+                Button("Run Visual Center Mark") {
+                    calibrationStatusText = "CAL visual center dot"
+                    Task {
+                        await runVisualRelativeCenterDot()
+                    }
+                }
+                .disabled(!canRunVisualCenterDot)
+                Button("Preview 5-Point Dot Overlay") {
+                    calibrationStatusText = "CAL five-point dot preview"
+                    Task {
+                        if await bridge.previewDotTestOverlay(pattern: "five") != nil {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        } else {
+                            calibrationStatusText = bridge.dotTestPreviewStatus
+                        }
+                    }
+                }
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
+                Button("Run Visual 5-Point Marks") {
+                    calibrationStatusText = "CAL visual five-point marks"
+                    Task {
+                        await runVisualRelativeFivePointTest()
+                    }
+                }
+                .disabled(!canRunVisualCenterDot)
+                Button("Clear Dot Test Overlay") {
+                    bridge.clearDotTestOverlay()
+                    calibrationStatusText = "CAL dot-test overlay cleared"
+                }
+                .disabled(bridge.dotTestPreviewPoints.isEmpty && bridge.dotTestPreviewSegments.isEmpty)
+            }
+
+            Section("Bridge") {
+                Button("Reconnect Bridge") {
+                    calibrationStatusText = "CAL bridge reconnecting"
+                    Task {
+                        await bridge.refreshHealth()
+                        await bridge.reconnectMachine()
+                        calibrationStatusText = "CAL bridge \(bridge.shortStatus) \(bridge.statusText)"
+                    }
+                }
+                Button("Start Model Session") {
+                    calibrationStatusText = "CAL model session starting"
+                    Task {
+                        await bridge.startMachineModelCalibration()
+                        calibrationStatusText = "CAL \(bridge.modelStatus) \(bridge.statusText)"
+                    }
+                }
+                .disabled(!bridge.isOnline || bridge.isRunning || bridge.isMachineBusy)
+                Button("Run Motion Probe") {
+                    calibrationStatusText = "CAL motion probe requested"
+                    Task {
+                        await runFrameLearning()
+                    }
+                }
+                .disabled(bridge.isRunning || bridge.isMachineBusy || !bridge.isLiveMotionMode || bridge.isMachineAlarm)
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: "scope")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                Text("CALIBRATE")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .frame(width: 58)
+            }
+            .frame(width: 60)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .help("Calibration and diagnostic actions")
+    }
+
+    private func recordManualFiducial(viewPoint: CGPoint, cameraPoint: CGPoint) {
+        let normalizedView = CGPoint(
+            x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
+        )
+        let normalizedCamera = CGPoint(
+            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
+        )
+
+        if manualFiducials.count < 4 {
+            manualFiducials.append(
+                ManualFiducialPoint(
+                    id: manualFiducials.count + 1,
+                    point: normalizedView,
+                    cameraPoint: normalizedCamera
+                )
+            )
+        } else if let nearestIndex = manualFiducials.indices.min(by: { lhs, rhs in
+            normalizedDistance(manualFiducials[lhs].point, normalizedView) < normalizedDistance(manualFiducials[rhs].point, normalizedView)
+        }) {
+            manualFiducials[nearestIndex].point = normalizedView
+            manualFiducials[nearestIndex].cameraPoint = normalizedCamera
+        }
+
+        calibrationStatusText = String(
+            format: "CAL manual fiducial %d/4 cam x%.3f y%.3f",
+            manualFiducials.count,
+            normalizedCamera.x,
+            normalizedCamera.y
+        )
+        if showCalibrationWizard {
+            calibrationStatusText = manualFiducials.count >= 4
+                ? "WIZ fiducials captured; solve homography"
+                : "WIZ click \(nextFiducialLabel)"
+        }
+    }
+
+    private func startManualPenClick() {
+        manualPenMode = true
+        manualFiducialMode = false
+        manualCapColorMode = false
+        observedPenPoint = nil
+        calibrationStatusText = bridge.hasPaperLock
+            ? "WIZ click observed pen/cap on plotter view"
+            : "WIZ paper homography required before pen click"
+    }
+
+    private func startCapColorPick() {
+        manualCapColorMode = true
+        manualPenMode = false
+        manualFiducialMode = false
+        observedPenPoint = nil
+        plotterCamera.clearCarriageMarkerObservation()
+        calibrationStatusText = "CAL click the cap color on the plotter view"
+    }
+
+    private func useDetectedCarriageMarker() {
+        guard let marker = plotterCamera.carriageMarker else {
+            startManualPenClick()
+            return
+        }
+        let cameraPoint = CGPoint(
+            x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
+        )
+        let approximateViewPoint = CGPoint(
+            x: cameraPoint.x,
+            y: 1.0 - cameraPoint.y
+        )
+        let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint)
+        observedPenPoint = ObservedPenPoint(
+            point: approximateViewPoint,
+            cameraPoint: cameraPoint,
+            paperMm: paperMm
+        )
+        manualPenMode = false
+        manualFiducialMode = false
+        manualCapColorMode = false
+
+        if let paperMm {
+            calibrationStatusText = String(
+                format: "WIZ %@ cap accepted paper x%.1f y%.1f mm",
+                marker.colorName.lowercased(),
+                paperMm.x,
+                paperMm.y
+            )
+        } else {
+            calibrationStatusText = String(
+                format: "WIZ %@ cap cam x%.3f y%.3f; solve homography first",
+                marker.colorName.lowercased(),
+                cameraPoint.x,
+                cameraPoint.y
+            )
+        }
+    }
+
+    private func recordObservedPen(viewPoint: CGPoint, cameraPoint: CGPoint) {
+        let normalizedView = CGPoint(
+            x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
+        )
+        let normalizedCamera = CGPoint(
+            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
+        )
+        let paperMm = bridge.paperPointMm(cameraPoint: normalizedCamera)
+        observedPenPoint = ObservedPenPoint(
+            point: normalizedView,
+            cameraPoint: normalizedCamera,
+            paperMm: paperMm
+        )
+
+        if let paperMm {
+            calibrationStatusText = String(
+                format: "CAL pen observed paper x%.1f y%.1f mm",
+                paperMm.x,
+                paperMm.y
+            )
+        } else {
+            calibrationStatusText = String(
+                format: "CAL pen observed cam x%.3f y%.3f; lock paper first",
+                normalizedCamera.x,
+                normalizedCamera.y
+            )
+        }
+
+        if showCalibrationWizard, paperMm != nil {
+            manualPenMode = false
+        }
+    }
+
+    private func recordCapMarkerColor(viewPoint: CGPoint, cameraPoint: CGPoint) {
+        _ = viewPoint
+        let normalizedCamera = CGPoint(
+            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
+        )
+        observedPenPoint = nil
+        plotterCamera.clearCarriageMarkerObservation()
+        if let target = plotterCamera.pickCapMarkerColor(cameraPoint: normalizedCamera) {
+            calibrationStatusText = String(
+                format: "CAL cap color sampled %@ rgb %.0f %.0f %.0f; detecting",
+                target.label,
+                target.red,
+                target.green,
+                target.blue
+            )
+            manualCapColorMode = false
+        } else {
+            calibrationStatusText = "CAL cap color sample failed; click a saturated cap pixel"
+        }
+    }
+
+    private func startVisibleCameras() {
+        switch cameraLayout {
+        case .both:
+            if !plotterCamera.isRunning { plotterCamera.start() }
+            if !faceCamera.isRunning { faceCamera.start() }
+        case .plotter:
+            if !plotterCamera.isRunning { plotterCamera.start() }
+        case .face:
+            if !faceCamera.isRunning { faceCamera.start() }
+        }
+    }
+
+    private func resetVisualControls() {
+        plotterViewport.boxOpacity = 0.62
+        plotterViewport.boxStrokeWidth = 2.0
+        plotterViewport.boxColor = .cyan
+        plotterViewport.videoFilter = .normal
+        plotterOverlay.opacity = 0.38
+        plotterCamera.showGrid = true
+        plotterCamera.showMeasurements = true
+        plotterCamera.fiducialDetectionEnabled = true
+        plotterCamera.segmentationEnabled = true
+        plotterCamera.changeDetectionEnabled = true
+        calibrationStatusText = "VIS controls reset"
+    }
+
+    private func toolbarMenuLabel(systemName: String, label: String, isActive: Bool) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.9))
+                .frame(width: 32, height: 32)
+                .background(isActive ? Color.cyan : Color.white.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(isActive ? 0.0 : 0.18), lineWidth: 1)
+                )
+            Text(label.uppercased())
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(isActive ? Color.cyan.opacity(0.9) : Color.white.opacity(0.62))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .frame(width: 58)
+        }
+        .frame(width: 60)
+    }
+
+    private func controlButton(
+        systemName: String,
+        label: String,
+        help: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: systemName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.9))
+                    .frame(width: 32, height: 32)
+                    .background(isActive ? Color.cyan : Color.white.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(isActive ? 0.0 : 0.18), lineWidth: 1)
+                    )
+                Text(label.uppercased())
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(isActive ? Color.cyan.opacity(0.9) : Color.white.opacity(0.62))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .frame(width: 52)
+            }
+            .frame(width: 54)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+private enum CalibrationWizardStepStatus {
+    case pending
+    case active
+    case done
+    case blocked
+
+    var label: String {
+        switch self {
+        case .pending:
+            return "--"
+        case .active:
+            return "DO"
+        case .done:
+            return "OK"
+        case .blocked:
+            return "BLOCK"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .pending:
+            return .white.opacity(0.42)
+        case .active:
+            return .yellow.opacity(0.95)
+        case .done:
+            return .green.opacity(0.95)
+        case .blocked:
+            return .red.opacity(0.95)
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .pending:
+            return "circle"
+        case .active:
+            return "arrow.right.circle.fill"
+        case .done:
+            return "checkmark.circle.fill"
+        case .blocked:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+private struct CalibrationWizardStepRow: View {
+    let index: Int
+    let title: String
+    let detail: String
+    let status: CalibrationWizardStepStatus
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(index)")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.black.opacity(0.82))
+                .frame(width: 18, height: 18)
+                .background(status.color, in: Circle())
+            Image(systemName: status.symbolName)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(status.color)
+                .frame(width: 15)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                    Text(status.label)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(status.color)
+                }
+                Text(detail)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.56))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 32)
+    }
+}
+
+private enum CameraLayoutMode: String, CaseIterable, Identifiable {
+    case both
+    case plotter
+    case face
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .both:
+            return "Both"
+        case .plotter:
+            return "Plotter"
+        case .face:
+            return "Face"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .both:
+            return "rectangle.split.2x1"
+        case .plotter:
+            return "rectangle.dashed"
+        case .face:
+            return "person.crop.rectangle"
+        }
+    }
+}
+
+private struct CameraLayoutControl: View {
+    @Binding var selection: CameraLayoutMode
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(CameraLayoutMode.allCases) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    Label(mode.title, systemImage: mode.icon)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(selection == mode ? Color.black : Color.white.opacity(0.84))
+                        .frame(width: 30, height: 30)
+                        .background(selection == mode ? Color.cyan : Color.white.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Show \(mode.title.lowercased()) camera view")
+            }
+        }
+        .padding(4)
+        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+}
+
+private struct PlotterViewportTransform<Content: View>: View {
+    let settings: PlotterViewportSettings
+    let content: Content
+
+    init(settings: PlotterViewportSettings, @ViewBuilder content: () -> Content) {
+        self.settings = settings
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            content
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .rotationEffect(.degrees(settings.rotationDegrees))
+                .scaleEffect(rotationFitScale(size: geometry.size, degrees: settings.rotationDegrees))
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .clipped()
+    }
+}
+
+private struct PlotterViewportBoxOverlay: View {
+    let settings: PlotterViewportSettings
+
+    var body: some View {
+        Canvas { context, size in
+            guard settings.boxEnabled else { return }
+
+            let rect = plotterViewportBoxRect(settings: settings, size: size)
+            let opacity = max(0.0, min(1.0, settings.boxOpacity))
+            let color = plotterViewportColor(settings.boxColor)
+            let strokeWidth = max(1.0, min(10.0, settings.boxStrokeWidth))
+            let dimColor = Color.black.opacity(0.12 * opacity)
+            context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: rect.minY)), with: .color(dimColor))
+            context.fill(Path(CGRect(x: 0, y: rect.maxY, width: size.width, height: size.height - rect.maxY)), with: .color(dimColor))
+            context.fill(Path(CGRect(x: 0, y: rect.minY, width: rect.minX, height: rect.height)), with: .color(dimColor))
+            context.fill(Path(CGRect(x: rect.maxX, y: rect.minY, width: size.width - rect.maxX, height: rect.height)), with: .color(dimColor))
+
+            let boxPath = Path(roundedRect: rect, cornerRadius: 3)
+            context.fill(boxPath, with: .color(color.opacity(0.22 * opacity)))
+            context.stroke(
+                boxPath,
+                with: .color(color.opacity(0.52 + 0.45 * opacity)),
+                style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round, dash: settings.boxLocked ? [] : [8, 5])
+            )
+            context.stroke(boxPath, with: .color(.white.opacity(0.36 * opacity)), lineWidth: max(0.8, strokeWidth * 0.28))
+
+            for handle in PlotterFrameHandle.allCases {
+                let point = handle.point(in: rect)
+                let handleRect = CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)
+                context.fill(
+                    Path(roundedRect: handleRect, cornerRadius: 2),
+                    with: .color(settings.boxLocked ? .gray.opacity(0.72) : color.opacity(0.95))
+                )
+                context.stroke(
+                    Path(roundedRect: handleRect, cornerRadius: 2),
+                    with: .color(.black.opacity(0.62)),
+                    lineWidth: max(0.8, strokeWidth * 0.24)
+                )
+            }
+
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            var cross = Path()
+            cross.move(to: CGPoint(x: center.x - 16, y: center.y))
+            cross.addLine(to: CGPoint(x: center.x + 16, y: center.y))
+            cross.move(to: CGPoint(x: center.x, y: center.y - 16))
+            cross.addLine(to: CGPoint(x: center.x, y: center.y + 16))
+            context.stroke(cross, with: .color(color.opacity(0.52 * opacity)), lineWidth: max(1.0, strokeWidth * 0.50))
+
+            let label = Text(String(format: "PLOTTER BOX %.2f", settings.boxAspectRatio))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(color.opacity(0.92))
+            context.draw(label, at: CGPoint(x: rect.minX + 8, y: rect.minY + 14), anchor: .leading)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct PlotterViewportGestureLayer: View {
+    @Binding var settings: PlotterViewportSettings
+    @State private var activeAction: PlotterViewportDragAction?
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 3)
+                        .onChanged { value in
+                            guard settings.boxEnabled, !settings.boxLocked else { return }
+                            let size = geometry.size
+                            let currentRect = plotterViewportBoxRect(settings: settings, size: size)
+                            if activeAction == nil {
+                                activeAction = dragAction(
+                                    startLocation: value.startLocation,
+                                    currentRect: currentRect
+                                )
+                            }
+                            guard let activeAction else { return }
+                            let nextRect: CGRect
+                            switch activeAction {
+                            case .move(let startRect):
+                                nextRect = startRect.offsetBy(
+                                    dx: value.translation.width,
+                                    dy: value.translation.height
+                                )
+                            case .draw(let anchor):
+                                nextRect = CGRect(
+                                    x: min(anchor.x, value.location.x),
+                                    y: min(anchor.y, value.location.y),
+                                    width: abs(value.location.x - anchor.x),
+                                    height: abs(value.location.y - anchor.y)
+                                )
+                            case .resize(let anchor):
+                                nextRect = CGRect(
+                                    x: min(anchor.x, value.location.x),
+                                    y: min(anchor.y, value.location.y),
+                                    width: abs(value.location.x - anchor.x),
+                                    height: abs(value.location.y - anchor.y)
+                                )
+                            }
+                            applyPlotterViewportBox(rect: nextRect, size: size, to: &settings)
+                        }
+                        .onEnded { _ in
+                            activeAction = nil
+                        }
+                )
+        }
+    }
+
+    private func dragAction(startLocation: CGPoint, currentRect: CGRect) -> PlotterViewportDragAction {
+        if let handle = PlotterFrameHandle.nearest(to: startLocation, in: currentRect, threshold: 24) {
+            return .resize(anchor: handle.opposite.point(in: currentRect))
+        }
+        if currentRect.insetBy(dx: -8, dy: -8).contains(startLocation) {
+            return .move(startRect: currentRect)
+        }
+        return .draw(anchor: startLocation)
+    }
+}
+
+private struct ManualFiducialOverlay: View {
+    let points: [ManualFiducialPoint]
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard !points.isEmpty || isActive else { return }
+
+            if isActive {
+                let label = Text("CLICK FIDUCIALS \(min(points.count, 4))/4")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.yellow.opacity(0.95))
+                context.draw(label, at: CGPoint(x: size.width - 12, y: 14), anchor: .topTrailing)
+            }
+
+            for point in points {
+                let center = CGPoint(
+                    x: point.point.x * size.width,
+                    y: point.point.y * size.height
+                )
+                let color = Color.yellow
+                let outer = CGRect(x: center.x - 9, y: center.y - 9, width: 18, height: 18)
+                context.stroke(Path(ellipseIn: outer), with: .color(color.opacity(0.96)), lineWidth: 2.2)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: center.x - 3, y: center.y - 3, width: 6, height: 6)),
+                    with: .color(color.opacity(0.98))
+                )
+
+                var cross = Path()
+                cross.move(to: CGPoint(x: center.x - 15, y: center.y))
+                cross.addLine(to: CGPoint(x: center.x + 15, y: center.y))
+                cross.move(to: CGPoint(x: center.x, y: center.y - 15))
+                cross.addLine(to: CGPoint(x: center.x, y: center.y + 15))
+                context.stroke(cross, with: .color(.black.opacity(0.78)), lineWidth: 1.0)
+
+                let label = Text(point.label)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(color.opacity(0.95))
+                context.draw(label, at: CGPoint(x: center.x + 12, y: center.y), anchor: .leading)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct ObservedPenOverlay: View {
+    let point: ObservedPenPoint?
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            if isActive {
+                let label = Text("CLICK OBSERVED PEN")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.green.opacity(0.96))
+                context.draw(label, at: CGPoint(x: size.width - 12, y: 32), anchor: .topTrailing)
+            }
+
+            guard let point else { return }
+
+            let center = CGPoint(
+                x: point.point.x * size.width,
+                y: point.point.y * size.height
+            )
+            let outer = CGRect(x: center.x - 25, y: center.y - 25, width: 50, height: 50)
+            let middle = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
+            let inner = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
+
+            context.stroke(Path(ellipseIn: outer), with: .color(.black.opacity(0.86)), lineWidth: 7.0)
+            context.stroke(Path(ellipseIn: middle), with: .color(.green.opacity(0.98)), lineWidth: 4.0)
+            context.fill(Path(ellipseIn: inner), with: .color(.white.opacity(0.98)))
+
+            var cross = Path()
+            cross.move(to: CGPoint(x: center.x - 35, y: center.y))
+            cross.addLine(to: CGPoint(x: center.x + 35, y: center.y))
+            cross.move(to: CGPoint(x: center.x, y: center.y - 35))
+            cross.addLine(to: CGPoint(x: center.x, y: center.y + 35))
+            context.stroke(cross, with: .color(.black.opacity(0.82)), lineWidth: 7.0)
+            context.stroke(cross, with: .color(.green.opacity(0.98)), lineWidth: 3.2)
+
+            let label = Text(point.label)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.green.opacity(0.98))
+            context.draw(label, at: CGPoint(x: center.x + 16, y: center.y - 16), anchor: .leading)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct CapColorPickOverlay: View {
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard isActive else { return }
+
+            let label = Text("CLICK CAP COLOR")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.cyan.opacity(0.96))
+            context.draw(label, at: CGPoint(x: size.width - 12, y: 50), anchor: .topTrailing)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct ManualFiducialClickLayer: View {
+    let settings: PlotterViewportSettings
+    let videoSize: CGSize
+    let onMark: (CGPoint, CGPoint) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            let width = max(geometry.size.width, 1)
+                            let height = max(geometry.size.height, 1)
+                            let viewPoint = CGPoint(
+                                x: value.location.x / width,
+                                y: value.location.y / height
+                            )
+                            let cameraPoint = plotterCameraNormFromViewPoint(
+                                value.location,
+                                viewSize: geometry.size,
+                                videoSize: videoSize,
+                                settings: settings
+                            )
+                            onMark(
+                                viewPoint,
+                                cameraPoint
+                            )
+                        }
+                )
+        }
+    }
+}
+
+private struct ManualPenClickLayer: View {
+    let settings: PlotterViewportSettings
+    let videoSize: CGSize
+    let onMark: (CGPoint, CGPoint) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            let width = max(geometry.size.width, 1)
+                            let height = max(geometry.size.height, 1)
+                            let viewPoint = CGPoint(
+                                x: value.location.x / width,
+                                y: value.location.y / height
+                            )
+                            let cameraPoint = plotterCameraNormFromViewPoint(
+                                value.location,
+                                viewSize: geometry.size,
+                                videoSize: videoSize,
+                                settings: settings
+                            )
+                            onMark(viewPoint, cameraPoint)
+                        }
+                )
+        }
+    }
+}
+
+private enum PlotterViewportDragAction: Equatable {
+    case move(startRect: CGRect)
+    case draw(anchor: CGPoint)
+    case resize(anchor: CGPoint)
+}
+
+private enum PlotterFrameHandle: CaseIterable {
+    case topLeft
+    case top
+    case topRight
+    case right
+    case bottomRight
+    case bottom
+    case bottomLeft
+    case left
+
+    var opposite: PlotterFrameHandle {
+        switch self {
+        case .topLeft:
+            return .bottomRight
+        case .top:
+            return .bottom
+        case .topRight:
+            return .bottomLeft
+        case .right:
+            return .left
+        case .bottomRight:
+            return .topLeft
+        case .bottom:
+            return .top
+        case .bottomLeft:
+            return .topRight
+        case .left:
+            return .right
+        }
+    }
+
+    func point(in rect: CGRect) -> CGPoint {
+        switch self {
+        case .topLeft:
+            return CGPoint(x: rect.minX, y: rect.minY)
+        case .top:
+            return CGPoint(x: rect.midX, y: rect.minY)
+        case .topRight:
+            return CGPoint(x: rect.maxX, y: rect.minY)
+        case .right:
+            return CGPoint(x: rect.maxX, y: rect.midY)
+        case .bottomRight:
+            return CGPoint(x: rect.maxX, y: rect.maxY)
+        case .bottom:
+            return CGPoint(x: rect.midX, y: rect.maxY)
+        case .bottomLeft:
+            return CGPoint(x: rect.minX, y: rect.maxY)
+        case .left:
+            return CGPoint(x: rect.minX, y: rect.midY)
+        }
+    }
+
+    static func nearest(to point: CGPoint, in rect: CGRect, threshold: CGFloat) -> PlotterFrameHandle? {
+        allCases
+            .map { handle in
+                (handle: handle, distance: hypot(handle.point(in: rect).x - point.x, handle.point(in: rect).y - point.y))
+            }
+            .filter { $0.distance <= threshold }
+            .min { $0.distance < $1.distance }?
+            .handle
+    }
+}
+
+private struct CameraPlaceholder: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: camera.role == .plotter ? "rectangle.dashed" : "person.crop.rectangle")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.28))
+            Text(camera.role.title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.72))
+            Text(camera.statusText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.50))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct CameraPaneBadge: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(cameraBadgeColor)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 6) {
+                            Text(camera.role.shortTitle)
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.86))
+                            Text(camera.selectedCameraName)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.64))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Text(camera.statusText)
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.48))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 82)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var cameraBadgeColor: Color {
+        if camera.isRunning && camera.isReceivingFrames { return .green }
+        if camera.isRunning { return .yellow }
+        return .gray
+    }
+}
+
+private struct CameraSelector: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        Menu {
+            Button {
+                camera.refreshCameraDevices(reconnect: true)
+            } label: {
+                Label("Refresh & Reconnect", systemImage: "arrow.clockwise")
+            }
+
+            Button {
+                camera.reconnectSelectedCamera()
+            } label: {
+                Label("Reconnect Selected", systemImage: "video.badge.checkmark")
+            }
+
+            Divider()
+
+            if camera.availableCameras.isEmpty {
+                Text("No cameras")
+            } else {
+                ForEach(camera.availableCameras) { option in
+                    Button {
+                        camera.selectCamera(option.id)
+                    } label: {
+                        Label(
+                            option.displayName,
+                            systemImage: option.id == camera.selectedCameraID ? "checkmark.circle.fill" : "video"
+                        )
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "video.badge.ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(camera.role.shortTitle)
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.54))
+                    Text(camera.selectedCameraName)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Select \(camera.role.title)")
+    }
+}
+
+private struct StatPill: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.58))
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(minWidth: 58, maxWidth: 92)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct StatusLamp: View {
+    let title: String
+    let value: String
+    let color: Color
+    let help: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 9, height: 9)
+                .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.50))
+                Text(value)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+        }
+        .frame(minWidth: 64, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .help(help)
+    }
+}
+
+private struct ConnectionDot: View {
+    @ObservedObject var bridge: PlotterBridgeModel
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 12, height: 12)
+            .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+            .help(bridge.machineStatus)
+    }
+
+    private var color: Color {
+        if bridge.isMachineAlarm { return .red }
+        if bridge.isMachineBusy || bridge.isRunning { return .yellow }
+        if bridge.isOnline { return bridge.isDryRun ? .orange : .green }
+        return .gray
+    }
+}
+
+private func plotterViewportBoxRect(settings: PlotterViewportSettings, size: CGSize) -> CGRect {
+    let safeWidth = max(size.width, 1)
+    let safeHeight = max(size.height, 1)
+    let targetAspect = max(0.1, CGFloat(settings.boxAspectRatio))
+    var width = safeWidth * CGFloat(clampDouble(settings.boxWidthNorm, min: 0.05, max: 1.0))
+    var height = width / targetAspect
+    let maxHeight = safeHeight * 0.98
+    if height > maxHeight {
+        height = maxHeight
+        width = height * targetAspect
+    }
+    width = min(width, safeWidth * 0.98)
+    height = min(height, safeHeight * 0.98)
+
+    let centerX = safeWidth * CGFloat(clampDouble(settings.boxCenterXNorm, min: 0.0, max: 1.0))
+    let centerY = safeHeight * CGFloat(clampDouble(settings.boxCenterYNorm, min: 0.0, max: 1.0))
+    let originX = min(safeWidth - width, max(0, centerX - width / 2))
+    let originY = min(safeHeight - height, max(0, centerY - height / 2))
+    return CGRect(x: originX, y: originY, width: width, height: height)
+}
+
+private func plotterCameraNormFromViewPoint(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    videoSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let unrotated = inversePlotterViewportPoint(point, viewSize: viewSize, settings: settings)
+    let displayRect = videoDisplayRect(
+        viewSize: viewSize,
+        videoSize: videoSize,
+        previewMode: settings.previewMode
+    )
+    guard displayRect.width > 0, displayRect.height > 0 else {
+        return CGPoint(x: 0.5, y: 0.5)
+    }
+    let x = (unrotated.x - displayRect.minX) / displayRect.width
+    let y = 1.0 - ((unrotated.y - displayRect.minY) / displayRect.height)
+    return CGPoint(
+        x: clampDouble(Double(x), min: 0.0, max: 1.0),
+        y: clampDouble(Double(y), min: 0.0, max: 1.0)
+    )
+}
+
+private func inversePlotterViewportPoint(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+    let scale = max(rotationFitScale(size: viewSize, degrees: settings.rotationDegrees), 0.0001)
+    let translated = CGPoint(
+        x: (point.x - center.x) / scale,
+        y: (point.y - center.y) / scale
+    )
+    let radians = -CGFloat(settings.rotationDegrees) * .pi / 180.0
+    let cosTheta = cos(radians)
+    let sinTheta = sin(radians)
+    return CGPoint(
+        x: center.x + translated.x * cosTheta - translated.y * sinTheta,
+        y: center.y + translated.x * sinTheta + translated.y * cosTheta
+    )
+}
+
+private func videoDisplayRect(
+    viewSize: CGSize,
+    videoSize: CGSize,
+    previewMode: CameraPreviewMode
+) -> CGRect {
+    let sourceSize = videoSize.width > 0 && videoSize.height > 0
+        ? videoSize
+        : CGSize(width: 1280, height: 720)
+    let imageAspect = sourceSize.width / sourceSize.height
+    let viewAspect = max(viewSize.width, 1) / max(viewSize.height, 1)
+    let displaySize: CGSize
+    let offset: CGPoint
+
+    switch previewMode {
+    case .fill:
+        if viewAspect > imageAspect {
+            let width = viewSize.width
+            let height = width / imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: 0, y: (viewSize.height - height) / 2)
+        } else {
+            let height = viewSize.height
+            let width = height * imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: (viewSize.width - width) / 2, y: 0)
+        }
+    case .fit:
+        if viewAspect > imageAspect {
+            let height = viewSize.height
+            let width = height * imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: (viewSize.width - width) / 2, y: 0)
+        } else {
+            let width = viewSize.width
+            let height = width / imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: 0, y: (viewSize.height - height) / 2)
+        }
+    }
+
+    return CGRect(origin: offset, size: displaySize)
+}
+
+private func applyPlotterViewportBox(
+    rect proposedRect: CGRect,
+    size: CGSize,
+    to settings: inout PlotterViewportSettings
+) {
+    let safeWidth = max(size.width, 1)
+    let safeHeight = max(size.height, 1)
+    let minDimension: CGFloat = 26
+    let standardized = proposedRect.standardized
+    guard standardized.width >= minDimension || standardized.height >= minDimension else { return }
+
+    let width = min(max(standardized.width, minDimension), safeWidth * 0.98)
+    let height = min(max(standardized.height, minDimension), safeHeight * 0.98)
+    let originX = min(safeWidth - width, max(0, standardized.midX - width / 2))
+    let originY = min(safeHeight - height, max(0, standardized.midY - height / 2))
+    let rect = CGRect(x: originX, y: originY, width: width, height: height)
+
+    settings.boxEnabled = true
+    settings.boxWidthNorm = clampDouble(Double(rect.width / safeWidth), min: 0.05, max: 1.0)
+    settings.boxAspectRatio = clampDouble(Double(rect.width / max(rect.height, 1)), min: 0.2, max: 5.0)
+    settings.boxCenterXNorm = clampDouble(Double(rect.midX / safeWidth), min: 0.0, max: 1.0)
+    settings.boxCenterYNorm = clampDouble(Double(rect.midY / safeHeight), min: 0.0, max: 1.0)
+}
+
+private func rotationFitScale(size: CGSize, degrees: Double) -> CGFloat {
+    let normalized = Int(abs(degrees).rounded()) % 180
+    guard normalized == 90 else { return 1.0 }
+    let width = max(size.width, 1)
+    let height = max(size.height, 1)
+    return min(width / height, height / width)
+}
+
+private func nextQuarterTurn(after degrees: Double) -> Double {
+    let turns = [0.0, 90.0, 180.0, 270.0]
+    let normalized = degrees.truncatingRemainder(dividingBy: 360.0)
+    let positive = normalized < 0 ? normalized + 360.0 : normalized
+    let currentIndex = turns.enumerated().min { lhs, rhs in
+        abs(lhs.element - positive) < abs(rhs.element - positive)
+    }?.offset ?? 0
+    return turns[(currentIndex + 1) % turns.count]
+}
+
+private func clampDouble(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
+    Swift.min(maximum, Swift.max(minimum, value))
+}
+
+private func normalizedDistance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+    hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+}
+
+private func plotterViewportColor(_ color: PlotterViewportBoxColor) -> Color {
+    switch color {
+    case .cyan:
+        return Color(red: 0.10, green: 0.88, blue: 1.0)
+    case .yellow:
+        return Color(red: 1.0, green: 0.86, blue: 0.12)
+    case .magenta:
+        return Color(red: 1.0, green: 0.18, blue: 0.72)
+    case .green:
+        return Color(red: 0.20, green: 1.0, blue: 0.40)
+    case .white:
+        return .white
+    case .red:
+        return Color(red: 1.0, green: 0.18, blue: 0.18)
+    }
+}
+
+private struct PlotterVideoFilterModifier: ViewModifier {
+    let filter: PlotterVideoFilter
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch filter {
+        case .normal:
+            content
+        case .monochrome:
+            content
+                .saturation(0.0)
+                .contrast(1.18)
+        case .highContrast:
+            content
+                .contrast(1.75)
+                .saturation(1.08)
+        case .inverted:
+            content
+                .colorInvert()
+                .contrast(1.10)
+        case .inkCheck:
+            content
+                .saturation(0.0)
+                .contrast(2.10)
+                .brightness(-0.08)
+        }
+    }
+}
+
+private struct MenuSliderControl: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let display: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(label)
+                Spacer(minLength: 8)
+                Text(display)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: $value, in: range, step: step)
+        }
+        .frame(width: 220)
+    }
+}
+
+private struct ToolbarSliderControl: View {
+    let icon: String
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let display: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                    .frame(width: 13)
+                Text(label.uppercased())
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text(display)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .frame(width: 34, alignment: .trailing)
+            }
+            Slider(value: $value, in: range)
+                .tint(.cyan)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+}

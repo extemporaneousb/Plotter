@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plotter Development"
+  short_description: "Repo-local development overlay"
+  default_prompt: "Use $plotter do <task-description> for repo work."

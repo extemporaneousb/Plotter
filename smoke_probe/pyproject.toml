@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbx32-smoke"
+version = "0.1.0"
+description = "No-motion and gated-motion smoke tester for a BlackBox X32 / grblHAL controller"
+requires-python = ">=3.10"
+dependencies = [
+  "pyserial>=3.5",
+]
+
+[project.scripts]
+bbx32-smoke = "bbx32_smoke:main"
+
+[tool.setuptools]
+py-modules = ["bbx32_smoke"]
