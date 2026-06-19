@@ -20,7 +20,7 @@ struct ContentView: View {
     @State private var awaitingAssessment = false
     @State private var didLoadSavedFrameState = false
     @State private var calibrationStatusText = "CAL idle"
-    @State private var showCalibrationWizard = true
+    @State private var showCalibrationWizard = false
     @State private var manualFiducialMode = false
     @State private var manualFiducials: [ManualFiducialPoint] = []
     @State private var manualPenMode = false
@@ -1278,11 +1278,11 @@ struct ContentView: View {
 
                 controlButton(
                     systemName: "checklist.checked",
-                    label: "Wizard",
-                    help: "Show calibration workflow",
-                    isActive: showCalibrationWizard
+                    label: "Calibrate",
+                    help: "Start calibration wizard",
+                    isActive: showCalibrationWizard || manualFiducialMode
                 ) {
-                    showCalibrationWizard.toggle()
+                    startCalibrationWizard()
                 }
 
                 visualControlsMenu
@@ -1421,7 +1421,7 @@ struct ContentView: View {
                             .foregroundStyle(.white.opacity(0.92))
                         Spacer(minLength: 0)
                         Button {
-                            showCalibrationWizard = false
+                            hideCalibrationWizard()
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.system(size: 10, weight: .bold))
@@ -1645,23 +1645,12 @@ struct ContentView: View {
 
     private func runCalibrationWizardPrimaryAction() {
         if manualFiducials.count < 4 {
-            manualFiducialMode = true
-            manualPenMode = false
-            manualCapColorMode = false
-            calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+            startCalibrationWizard()
             return
         }
 
         if !bridge.hasPaperLock {
-            calibrationStatusText = "WIZ solving paper homography"
-            Task {
-                _ = await bridge.registerPaperHomography(
-                    fiducials: manualFiducials,
-                    paperWidthMm: bridge.workspaceXMm,
-                    paperHeightMm: bridge.workspaceYMm
-                )
-                calibrationStatusText = "WIZ \(bridge.paperTransformStatus)"
-            }
+            solvePaperHomographyFromWizard()
             return
         }
 
@@ -1699,8 +1688,64 @@ struct ContentView: View {
         }
     }
 
-    private func resetCalibrationWizard() {
+    private func startCalibrationWizard() {
+        showCalibrationWizard = true
+        cameraLayout = .plotter
+        showLiveVideo = true
+        plotterCamera.fiducialDetectionEnabled = true
+        startVisibleCameras()
+
+        if manualFiducials.count < 4 {
+            manualFiducialMode = true
+            manualPenMode = false
+            manualCapColorMode = false
+            calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+            return
+        }
+
         manualFiducialMode = false
+        if !bridge.hasPaperLock {
+            solvePaperHomographyFromWizard()
+            return
+        }
+
+        calibrationStatusText = "WIZ paper locked"
+    }
+
+    private func hideCalibrationWizard() {
+        showCalibrationWizard = false
+        manualFiducialMode = false
+        manualPenMode = false
+        manualCapColorMode = false
+        calibrationStatusText = "WIZ hidden"
+    }
+
+    private func solvePaperHomographyFromWizard() {
+        guard manualFiducials.count >= 4 else {
+            startCalibrationWizard()
+            return
+        }
+        guard bridge.isOnline else {
+            calibrationStatusText = "WIZ connect plotter to solve homography"
+            return
+        }
+        guard !bridge.isCalibrating else { return }
+
+        manualFiducialMode = false
+        calibrationStatusText = "WIZ solving paper homography"
+        Task {
+            _ = await bridge.registerPaperHomography(
+                fiducials: manualFiducials,
+                paperWidthMm: bridge.workspaceXMm,
+                paperHeightMm: bridge.workspaceYMm
+            )
+            calibrationStatusText = "WIZ \(bridge.paperTransformStatus)"
+        }
+    }
+
+    private func resetCalibrationWizard() {
+        showCalibrationWizard = true
+        manualFiducialMode = true
         manualPenMode = false
         manualCapColorMode = false
         manualFiducials = []
@@ -1711,7 +1756,7 @@ struct ContentView: View {
         frameLearning = .idle
         bridge.clearDotTestOverlay()
         bridge.visualCenterDotStatus = "VIS --"
-        calibrationStatusText = "WIZ reset"
+        calibrationStatusText = "WIZ reset; click FID-BL"
     }
 
     private var topStatusLights: some View {
@@ -2240,9 +2285,12 @@ struct ContentView: View {
             normalizedCamera.y
         )
         if showCalibrationWizard {
-            calibrationStatusText = manualFiducials.count >= 4
-                ? "WIZ fiducials captured; solve homography"
-                : "WIZ click \(nextFiducialLabel)"
+            if manualFiducials.count >= 4 {
+                calibrationStatusText = "WIZ fiducials captured"
+                solvePaperHomographyFromWizard()
+            } else {
+                calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+            }
         }
     }
 
