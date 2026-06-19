@@ -7,7 +7,7 @@ struct PlotterVisionCameraApp: App {
     @StateObject private var bridge = PlotterBridgeModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(PlotterWindowConfiguration.mainTitle) {
             ContentView(bridge: bridge)
                 .frame(minWidth: 1120, minHeight: 720)
                 .preferredColorScheme(.dark)
@@ -17,7 +17,7 @@ struct PlotterVisionCameraApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        Window("Machine", id: "machine-controls") {
+        Window(PlotterWindowConfiguration.machineTitle, id: "machine-controls") {
             MachineControlPanel(bridge: bridge)
                 .frame(width: 320)
                 .padding(14)
@@ -28,9 +28,17 @@ struct PlotterVisionCameraApp: App {
     }
 }
 
+private enum PlotterWindowConfiguration {
+    static let mainTitle = "Plotter Vision"
+    static let machineTitle = "Machine"
+    static let mainIdentifier = NSUserInterfaceItemIdentifier("plotter-main-window")
+    static let mainFrameAutosaveName = NSWindow.FrameAutosaveName("PlotterVisionMainWindow")
+}
+
 final class WindowPlacementDelegate: NSObject, NSApplicationDelegate {
     private let minimumSize = NSSize(width: 1120, height: 720)
     private let preferredSize = NSSize(width: 1320, height: 820)
+    private var configuredWindows = Set<ObjectIdentifier>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
@@ -44,10 +52,32 @@ final class WindowPlacementDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        saveOpenWindowFrames()
+    }
+
     private func normalizeOpenWindows() {
         for window in NSApplication.shared.windows where window.isVisible {
-            guard window.title != "Machine" else { continue }
+            guard window.title != PlotterWindowConfiguration.machineTitle else { continue }
+            configureMainWindow(window)
             normalize(window)
+        }
+    }
+
+    private func configureMainWindow(_ window: NSWindow) {
+        window.title = PlotterWindowConfiguration.mainTitle
+        window.identifier = PlotterWindowConfiguration.mainIdentifier
+        window.setFrameAutosaveName(PlotterWindowConfiguration.mainFrameAutosaveName)
+
+        let windowID = ObjectIdentifier(window)
+        guard !configuredWindows.contains(windowID) else { return }
+        configuredWindows.insert(windowID)
+        window.setFrameUsingName(PlotterWindowConfiguration.mainFrameAutosaveName, force: true)
+    }
+
+    private func saveOpenWindowFrames() {
+        for window in NSApplication.shared.windows where window.identifier == PlotterWindowConfiguration.mainIdentifier {
+            window.saveFrame(usingName: PlotterWindowConfiguration.mainFrameAutosaveName)
         }
     }
 

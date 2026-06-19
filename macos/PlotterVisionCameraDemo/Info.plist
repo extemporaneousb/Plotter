@@ -7,12 +7,14 @@
   <string>en</string>
   <key>CFBundleExecutable</key>
   <string>PlotterVisionCamera</string>
+  <key>CFBundleDisplayName</key>
+  <string>Plotter Vision</string>
   <key>CFBundleIdentifier</key>
   <string>com.plottervision.camera</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Plotter Vision Camera</string>
+  <string>Plotter Vision</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

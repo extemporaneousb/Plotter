@@ -1,4 +1,4 @@
-# Plotter Vision Camera Demo
+# Plotter Vision
 
 Native macOS camera scaffold for inspecting a plotter drawing surface. It is intentionally isolated
 from the machine-control core: this app does not talk to serial ports, move the plotter, unlock
@@ -13,7 +13,7 @@ alarms, home axes, or write settings.
 The script creates:
 
 ```text
-build/PlotterVisionCameraDemo.app
+build/PlotterVisionCamera.app
 ```
 
 ## Run
@@ -23,9 +23,9 @@ build/PlotterVisionCameraDemo.app
 ```
 
 macOS will ask for camera permission the first time the app opens. If permission is denied, enable it
-in System Settings > Privacy & Security > Camera for `Plotter Vision Camera Demo`.
+in System Settings > Privacy & Security > Camera for `Plotter Vision`.
 
-## Controller Bridge Demo
+## Controller Bridge Preview
 
 From the repository root, start the local dry-run hardware-standby bridge in the background before
 using machine controls in the app:
@@ -45,17 +45,17 @@ The bridge uses logical plotter coordinates for planning: `X0 Y0` is the corner 
 homing switches. It converts those logical coordinates to the controller's negative `G53` machine
 coordinates when sending motion commands.
 
-## What The Demo Does
+## What The App Does
 
 - Shows a native AVFoundation camera preview.
 - Runs a Vision contour pass on live frames.
 - Compares averaged frame windows to find what changed roughly once per second.
 - Draws translucent contours, boxes, center marks, grid lines, and numeric measurement labels.
-- Assigns stable demo labels to changed regions such as `OBJ-03` with normalized coordinates.
+- Assigns stable labels to changed regions such as `OBJ-03` with normalized coordinates.
 - Supports pausing/resuming the stream and scanning the most recent frame.
-- Sends a named dry-run or armed demo request to the local controller bridge.
+- Sends a named dry-run or armed plotter request to the local controller bridge.
 - Exposes segmentation, motion sensitivity, report interval, and minimum-area controls for quickly
-  tuning a drawn-surface demo.
+  tuning a drawn-surface preview.
 
 The measurements are pixel-space placeholders. Calibration to plotter coordinates belongs in the
 Python core once the safety and human-assisted calibration phases are ready.
