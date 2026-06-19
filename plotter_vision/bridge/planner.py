@@ -42,6 +42,7 @@ class PolygonDrawRequest(BaseModel):
     draw_feed_mm_min: float = 180.0
     travel_feed_mm_min: float = 500.0
     max_segment_mm: float = 25.0
+    max_polyline_count: int = 1600
     request_id: str | None = None
 
 
@@ -82,6 +83,8 @@ class PolygonDrawPlanSummary(BaseModel):
     polyline_count: int
     outline_polyline_count: int
     hatch_polyline_count: int
+    mark_polyline_count: int = 0
+    contour_polyline_count: int = 0
     draw_segment_count: int
     command_count: int
     drawn_length_mm: float
@@ -126,7 +129,10 @@ def build_polygon_draw_plan(
 
     pen_down = _validated_pen_command(machine.pen.down_command, safety)
     pen_up = _validated_pen_command(machine.pen.up_command, safety)
-    if pen_down is None or pen_up is None:
+    if safety.dry_run:
+        pen_down = pen_down or "M3 S1"
+        pen_up = pen_up or "M5"
+    elif pen_down is None or pen_up is None:
         raise MotionSafetyError("Polygon drawing requires configured pen up/down commands.")
 
     frame = request.frame or _default_drawing_frame(machine)
@@ -136,6 +142,13 @@ def build_polygon_draw_plan(
     ]
     if not polylines:
         raise MotionSafetyError("Polygon drawing requires at least one polygon or polyline.")
+    if request.max_polyline_count < 1:
+        raise MotionSafetyError("max_polyline_count must be positive.")
+    if len(polylines) > request.max_polyline_count:
+        raise MotionSafetyError(
+            f"Polygon drawing produced {len(polylines)} polylines; "
+            f"limit is {request.max_polyline_count}."
+        )
 
     validate_polylines_in_workspace(polylines=polylines, machine=machine)
     split_polylines = [
@@ -177,6 +190,8 @@ def build_polygon_draw_plan(
         polyline_count=len(polylines),
         outline_polyline_count=sum(1 for polyline in polylines if polyline.role == "outline"),
         hatch_polyline_count=sum(1 for polyline in polylines if polyline.role == "hatch"),
+        mark_polyline_count=sum(1 for polyline in polylines if polyline.role == "mark"),
+        contour_polyline_count=sum(1 for polyline in polylines if polyline.role == "contour"),
         draw_segment_count=draw_segment_count,
         command_count=len(commands),
         drawn_length_mm=simulation.drawn_length_mm,

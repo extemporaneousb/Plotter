@@ -92,11 +92,26 @@ struct BridgeRasterPolygonOptionsRequest: Encodable {
     let maxPolygons: Int
 }
 
+struct BridgeRasterContourOptionsRequest: Encodable {
+    let darknessThreshold: Double
+    let autoContrast: Bool
+    let maxContours: Int
+}
+
 struct BridgeFaceRasterDrawRequest: Encodable {
     let raster: BridgeLuminanceRasterRequest
     let frame: BridgeDrawingFrameRequest
     let options: BridgeRasterPolygonOptionsRequest
     let includeHoming: Bool
+    let drawFeedMmMin: Double
+    let travelFeedMmMin: Double
+    let maxSegmentMm: Double
+}
+
+struct BridgeImageShapePreviewRequest: Encodable {
+    let raster: BridgeLuminanceRasterRequest
+    let frame: BridgeDrawingFrameRequest
+    let options: BridgeRasterContourOptionsRequest
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
@@ -125,6 +140,16 @@ struct BridgeRasterPolygonSummary: Decodable {
     let maxShade: Double?
 }
 
+struct BridgeRasterContourSummary: Decodable {
+    let rasterWidth: Int
+    let rasterHeight: Int
+    let cellCount: Int
+    let selectedCellCount: Int
+    let contourCount: Int
+    let minLuminance: Double
+    let maxLuminance: Double
+}
+
 struct BridgeFaceRasterDrawResponse: Decodable {
     let commandId: String
     let status: String
@@ -136,6 +161,21 @@ struct BridgeFaceRasterDrawResponse: Decodable {
     let eventLog: String
     let controllerTranscript: String?
     let machineStatus: MachineStatusResponse?
+    let error: String?
+}
+
+struct BridgeImageShapePreviewResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let previewOnly: Bool
+    let eligibleForBridgePreview: Bool
+    let plannedCommands: [String]
+    let simulation: BridgeDemoSimulation?
+    let summary: BridgePolygonDrawSummary?
+    let rasterSummary: BridgeRasterContourSummary?
+    let eventLog: String
+    let controllerTranscript: String?
     let error: String?
 }
 
@@ -427,6 +467,18 @@ final class PlotterBridgeClient {
         return try decoder.decode(BridgeFaceRasterDrawResponse.self, from: data)
     }
 
+    func previewImageShape(_ request: BridgeImageShapePreviewRequest) async throws -> BridgeImageShapePreviewResponse {
+        let url = baseURL.appendingPathComponent("draw/image/preview")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try encoder.encode(request)
+
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        try validate(response: response, data: data)
+        return try decoder.decode(BridgeImageShapePreviewResponse.self, from: data)
+    }
+
     func startCalibration(_ request: CalibrationStartRequest) async throws -> CalibrationSessionResponse {
         let url = baseURL.appendingPathComponent("calibration/start")
         var urlRequest = URLRequest(url: url)
@@ -569,6 +621,10 @@ final class PlotterBridgeClient {
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
+            if let failure = try? decoder.decode(BridgeImageShapePreviewResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
             if let failure = try? decoder.decode(CalibrationSessionResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
@@ -619,6 +675,10 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var machineHomingTrusted = false
     @Published var machineAxisModelTrusted = false
     @Published var previewStatus = "SIM --"
+    @Published var imagePreviewStatus = "IMG --"
+    @Published var imagePreviewDetail = "VISUAL ONLY"
+    @Published var imagePreviewContourCount = 0
+    @Published var imagePreviewEligibleForBridgePreview = false
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var dotTestPreviewStatus = "DOT --"
     @Published var visualCenterDotStatus = "VIS --"
@@ -1121,6 +1181,67 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func previewImageContours(
+        _ raster: FaceRasterSample,
+        frame: BridgeDrawingFrameRequest
+    ) async -> Bool {
+        guard !isRunning && !isMachineBusy else { return false }
+        guard isOnline else {
+            imagePreviewStatus = "IMG OFF"
+            imagePreviewDetail = "BRIDGE OFFLINE"
+            statusText = "Bridge offline"
+            return false
+        }
+
+        isCalibrating = true
+        activeAction = "image-preview"
+        imagePreviewStatus = "IMG PREVIEW"
+        imagePreviewDetail = "BRIDGE PREVIEW"
+        statusText = "Previewing image contours"
+        defer {
+            isCalibrating = false
+            activeAction = ""
+        }
+
+        do {
+            let response = try await client.previewImageShape(
+                BridgeImageShapePreviewRequest(
+                    raster: BridgeLuminanceRasterRequest(samples: raster.samples),
+                    frame: frame,
+                    options: BridgeRasterContourOptionsRequest(
+                        darknessThreshold: 0.38,
+                        autoContrast: true,
+                        maxContours: 900
+                    ),
+                    drawFeedMmMin: shapeDrawFeedMmMin,
+                    travelFeedMmMin: 500.0,
+                    maxSegmentMm: 25.0
+                )
+            )
+            expectedPathSegments = response.simulation?.previewSegments ?? []
+            let contours = response.rasterSummary?.contourCount ?? 0
+            let segments = response.summary?.drawSegmentCount ?? 0
+            imagePreviewContourCount = contours
+            imagePreviewEligibleForBridgePreview = response.eligibleForBridgePreview
+            imagePreviewStatus = String(format: "IMG %dC %dS", contours, segments)
+            imagePreviewDetail = response.previewOnly ? "PREVIEW ONLY" : "EXECUTION"
+            previewStatus = "SIM IMAGE \(response.status.uppercased())"
+            let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
+            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
+            statusText = "\(response.commandId) image contour preview"
+            return response.status == "ready"
+        } catch {
+            expectedPathSegments = []
+            imagePreviewContourCount = 0
+            imagePreviewEligibleForBridgePreview = false
+            imagePreviewStatus = "IMG ERR"
+            imagePreviewDetail = "VISUAL ONLY"
+            previewStatus = "SIM ERR"
+            statusText = error.localizedDescription
+            return false
+        }
+    }
+
     func replayExpectedPath() {
         let length = expectedPathSegments.reduce(0.0) { partial, segment in
             partial + segment.lengthMm
@@ -1556,7 +1677,7 @@ final class PlotterBridgeModel: ObservableObject {
                 CalibrationStartRequest(
                     marginMm: 25.0,
                     travelFeedMmMin: 500.0,
-                    includeHoming: true,
+                    includeHoming: false,
                     simulateObservations: isDryRun,
                     syntheticNoiseNorm: 0.0
                 )

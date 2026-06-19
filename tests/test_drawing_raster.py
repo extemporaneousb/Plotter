@@ -4,7 +4,9 @@ import pytest
 
 from plotter_vision.drawing import (
     LuminanceRaster,
+    RasterContourOptions,
     RasterPolygonOptions,
+    build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
 )
 
@@ -44,6 +46,25 @@ def test_all_light_raster_produces_empty_program() -> None:
     assert summary.selected_cell_count == 0
     assert summary.min_shade is None
     assert summary.max_shade is None
+
+
+def test_contour_baseline_outputs_polylines_without_hatch_fill() -> None:
+    program, summary = build_paper_contour_program_from_luminance_raster(
+        raster=LuminanceRaster(
+            samples=[
+                [1.0, 1.0, 1.0],
+                [1.0, 0.0, 0.1],
+                [1.0, 1.0, 1.0],
+            ]
+        ),
+        options=RasterContourOptions(auto_contrast=False, darkness_threshold=0.5),
+    )
+
+    assert summary.contour_count == 2
+    assert len(program.polylines) == 2
+    assert program.polygons == []
+    assert all(polyline.role == "contour" for polyline in program.polylines)
+    assert all(polyline.closed for polyline in program.polylines)
 
 
 def test_auto_contrast_stretches_face_luminance_range() -> None:

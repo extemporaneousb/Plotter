@@ -10,7 +10,8 @@ from plotter_vision.config import MachineConfig
 from plotter_vision.machine.safety import validate_workspace_point
 
 
-PolylineRole = Literal["outline", "hatch"]
+PolylineRole = Literal["outline", "hatch", "mark", "contour"]
+SimpleShapeKind = Literal["triangle", "square"]
 
 
 class PaperPointNorm(BaseModel):
@@ -88,20 +89,93 @@ class PolygonPrimitive(BaseModel):
         return self
 
 
+class PointMarkPrimitive(BaseModel):
+    center: PaperPointNorm
+    mark_size_mm: float = 4.0
+
+    @field_validator("mark_size_mm")
+    @classmethod
+    def _validate_mark_size(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("mark_size_mm must be positive and finite.")
+        if value > 50.0:
+            raise ValueError("mark_size_mm is limited to 50 mm.")
+        return value
+
+
+class PolylinePrimitive(BaseModel):
+    points: list[PaperPointNorm]
+    role: Literal["outline", "contour"] = "contour"
+    closed: bool = False
+
+    @model_validator(mode="after")
+    def _validate_points(self) -> PolylinePrimitive:
+        if len(self.points) < 2:
+            raise ValueError("polyline primitives require at least two points.")
+        return self
+
+
+class ContourGroupPrimitive(BaseModel):
+    contours: list[list[PaperPointNorm]]
+
+    @model_validator(mode="after")
+    def _validate_contours(self) -> ContourGroupPrimitive:
+        if not self.contours:
+            raise ValueError("contour groups require at least one contour.")
+        for contour in self.contours:
+            if len(contour) < 2:
+                raise ValueError("each contour requires at least two points.")
+        return self
+
+
+class SimpleShapePrimitive(BaseModel):
+    kind: SimpleShapeKind
+    center: PaperPointNorm
+    size_norm: float = 0.2
+
+    @field_validator("size_norm")
+    @classmethod
+    def _validate_size(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("shape size_norm must be positive and finite.")
+        if value > 1.0:
+            raise ValueError("shape size_norm is limited to 1.0.")
+        return value
+
+
 class PaperDrawingProgram(BaseModel):
     polygons: list[PolygonPrimitive] = Field(default_factory=list)
+    point_marks: list[PointMarkPrimitive] = Field(default_factory=list)
+    polylines: list[PolylinePrimitive] = Field(default_factory=list)
+    contour_groups: list[ContourGroupPrimitive] = Field(default_factory=list)
+    simple_shapes: list[SimpleShapePrimitive] = Field(default_factory=list)
     min_hatch_spacing_mm: float = 1.2
     max_hatch_spacing_mm: float = 9.0
     max_hatch_segments: int = 1200
+    max_primitive_count: int = 1600
 
     @model_validator(mode="after")
-    def _validate_hatching(self) -> PaperDrawingProgram:
+    def _validate_program(self) -> PaperDrawingProgram:
         if self.min_hatch_spacing_mm <= 0 or self.max_hatch_spacing_mm <= 0:
             raise ValueError("hatch spacing values must be positive.")
         if self.min_hatch_spacing_mm > self.max_hatch_spacing_mm:
             raise ValueError("min_hatch_spacing_mm cannot exceed max_hatch_spacing_mm.")
         if self.max_hatch_segments < 1:
             raise ValueError("max_hatch_segments must be positive.")
+        if self.max_primitive_count < 1:
+            raise ValueError("max_primitive_count must be positive.")
+        primitive_count = (
+            len(self.polygons)
+            + len(self.point_marks)
+            + len(self.polylines)
+            + len(self.simple_shapes)
+            + sum(len(group.contours) for group in self.contour_groups)
+        )
+        if primitive_count > self.max_primitive_count:
+            raise ValueError(
+                f"drawing program contains {primitive_count} primitives; "
+                f"limit is {self.max_primitive_count}."
+            )
         return self
 
 
@@ -123,6 +197,26 @@ def build_polygon_polylines(
 ) -> list[PlannedPolyline]:
     polylines: list[PlannedPolyline] = []
     hatch_count = 0
+
+    for mark in program.point_marks:
+        polylines.extend(_point_mark_polylines(mark=mark, frame=frame))
+
+    for polyline in program.polylines:
+        polylines.append(_map_polyline_primitive(polyline=polyline, frame=frame))
+
+    for group in program.contour_groups:
+        for contour in group.contours:
+            polylines.append(
+                _planned_polyline_from_paper_points(
+                    points=contour,
+                    role="contour",
+                    closed=False,
+                    frame=frame,
+                )
+            )
+
+    for shape in program.simple_shapes:
+        polylines.append(_simple_shape_polyline(shape=shape, frame=frame))
 
     for polygon in program.polygons:
         logical_vertices = [frame.map_point(vertex) for vertex in polygon.vertices]
@@ -152,6 +246,90 @@ def build_polygon_polylines(
             polylines.append(PlannedPolyline(role="hatch", points=list(segment)))
 
     return polylines
+
+
+def _point_mark_polylines(
+    *,
+    mark: PointMarkPrimitive,
+    frame: DrawingFrameMM,
+) -> list[PlannedPolyline]:
+    center = frame.map_point(mark.center)
+    half = mark.mark_size_mm / 2.0
+    return [
+        PlannedPolyline(
+            role="mark",
+            points=[
+                LogicalPointMM(x=center.x - half, y=center.y),
+                LogicalPointMM(x=center.x + half, y=center.y),
+            ],
+        ),
+        PlannedPolyline(
+            role="mark",
+            points=[
+                LogicalPointMM(x=center.x, y=center.y - half),
+                LogicalPointMM(x=center.x, y=center.y + half),
+            ],
+        ),
+    ]
+
+
+def _map_polyline_primitive(
+    *,
+    polyline: PolylinePrimitive,
+    frame: DrawingFrameMM,
+) -> PlannedPolyline:
+    return _planned_polyline_from_paper_points(
+        points=polyline.points,
+        role=polyline.role,
+        closed=polyline.closed,
+        frame=frame,
+    )
+
+
+def _planned_polyline_from_paper_points(
+    *,
+    points: list[PaperPointNorm],
+    role: PolylineRole,
+    closed: bool,
+    frame: DrawingFrameMM,
+) -> PlannedPolyline:
+    logical_points = [frame.map_point(point) for point in points]
+    if closed and logical_points[0] != logical_points[-1]:
+        logical_points.append(logical_points[0])
+    return PlannedPolyline(role=role, points=logical_points)
+
+
+def _simple_shape_polyline(
+    *,
+    shape: SimpleShapePrimitive,
+    frame: DrawingFrameMM,
+) -> PlannedPolyline:
+    vertices = _simple_shape_vertices(shape)
+    return _planned_polyline_from_paper_points(
+        points=vertices,
+        role="outline",
+        closed=True,
+        frame=frame,
+    )
+
+
+def _simple_shape_vertices(shape: SimpleShapePrimitive) -> list[PaperPointNorm]:
+    half = shape.size_norm / 2.0
+    if shape.kind == "square":
+        raw_vertices = [
+            (shape.center.x - half, shape.center.y - half),
+            (shape.center.x + half, shape.center.y - half),
+            (shape.center.x + half, shape.center.y + half),
+            (shape.center.x - half, shape.center.y + half),
+        ]
+    else:
+        height = shape.size_norm * math.sqrt(3.0) / 2.0
+        raw_vertices = [
+            (shape.center.x - half, shape.center.y - height / 3.0),
+            (shape.center.x + half, shape.center.y - height / 3.0),
+            (shape.center.x, shape.center.y + 2.0 * height / 3.0),
+        ]
+    return [PaperPointNorm(x=x, y=y) for x, y in raw_vertices]
 
 
 def validate_polylines_in_workspace(

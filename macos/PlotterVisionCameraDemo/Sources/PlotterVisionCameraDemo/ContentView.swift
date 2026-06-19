@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var didLoadSavedFrameState = false
     @State private var calibrationStatusText = "CAL idle"
     @State private var showCalibrationWizard = false
+    @State private var showImageProcessingPanel = true
     @State private var manualFiducialMode = false
     @State private var manualFiducials: [ManualFiducialPoint] = []
     @State private var manualPenMode = false
@@ -194,6 +195,22 @@ struct ContentView: View {
                 CameraPlaceholder(camera: faceCamera)
             }
 
+            if faceCamera.segmentationEnabled {
+                FaceContourOverlay(
+                    segments: faceCamera.segments,
+                    videoSize: faceCamera.videoSize,
+                    previewMode: .fill
+                )
+            }
+
+            if showImageProcessingPanel {
+                ImageProcessingPanel(
+                    bridge: bridge,
+                    visualContourCount: faceCamera.segments.count,
+                    isBridgeOnline: bridge.isOnline
+                )
+            }
+
             CameraPaneBadge(camera: faceCamera)
         }
         .clipped()
@@ -250,6 +267,35 @@ struct ContentView: View {
             awaitingAssessment = false
             faceCamera.statusText = error.localizedDescription
             bridge.statusText = error.localizedDescription
+            bridge.previewStatus = "SIM ERR"
+        }
+    }
+
+    @MainActor
+    private func previewImageFromCurrentFrame() async {
+        do {
+            faceCamera.segmentationEnabled = true
+            let raster = try await faceCamera.captureFaceRaster(columns: 16, rows: 20)
+            let rect = drawingFrame.rect(
+                workspaceXMm: bridge.workspaceXMm,
+                workspaceYMm: bridge.workspaceYMm
+            )
+            let frame = BridgeDrawingFrameRequest(
+                originXMm: Double(rect.minX) * bridge.workspaceXMm,
+                originYMm: Double(rect.minY) * bridge.workspaceYMm,
+                widthMm: Double(rect.width) * bridge.workspaceXMm,
+                heightMm: Double(rect.height) * bridge.workspaceYMm,
+                flipY: false
+            )
+            let completed = await bridge.previewImageContours(raster, frame: frame)
+            calibrationStatusText = completed
+                ? "TEST \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
+                : "TEST \(bridge.imagePreviewStatus)"
+        } catch {
+            faceCamera.statusText = error.localizedDescription
+            bridge.statusText = error.localizedDescription
+            bridge.imagePreviewStatus = "IMG ERR"
+            bridge.imagePreviewDetail = "VISUAL ONLY"
             bridge.previewStatus = "SIM ERR"
         }
     }
@@ -1916,6 +1962,11 @@ struct ContentView: View {
                 }
             }
 
+            Section("Image Baseline") {
+                Toggle("Face Contours", isOn: $faceCamera.segmentationEnabled)
+                Toggle("Image Panel", isOn: $showImageProcessingPanel)
+            }
+
             Section("Reset") {
                 Button("Reset Visual Controls") {
                     resetVisualControls()
@@ -1929,6 +1980,8 @@ struct ContentView: View {
                     || plotterCamera.showGrid
                     || plotterCamera.segmentationEnabled
                     || plotterCamera.changeDetectionEnabled
+                    || faceCamera.segmentationEnabled
+                    || showImageProcessingPanel
             )
         }
         .menuStyle(.button)
@@ -2000,6 +2053,16 @@ struct ContentView: View {
                 .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning)
             }
 
+            Section("Image Baseline") {
+                Button("Preview Image Contours") {
+                    calibrationStatusText = "TEST image contour preview"
+                    Task {
+                        await previewImageFromCurrentFrame()
+                    }
+                }
+                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning || bridge.isMachineBusy)
+            }
+
             Section("Shape Residuals") {
                 Button("Triangle Residual Runner Pending") {
                     calibrationStatusText = "TEST triangle residual runner needs visual-relative execution"
@@ -2025,12 +2088,17 @@ struct ContentView: View {
                     bridge.clearDotTestOverlay()
                     bridge.expectedPathSegments = []
                     bridge.previewStatus = "SIM --"
+                    bridge.imagePreviewStatus = "IMG --"
+                    bridge.imagePreviewDetail = "VISUAL ONLY"
+                    bridge.imagePreviewContourCount = 0
+                    bridge.imagePreviewEligibleForBridgePreview = false
                     calibrationStatusText = "TEST overlays cleared"
                 }
                 .disabled(
                     bridge.expectedPathSegments.isEmpty
                         && bridge.dotTestPreviewPoints.isEmpty
                         && bridge.dotTestPreviewSegments.isEmpty
+                        && bridge.imagePreviewContourCount == 0
                 )
             }
         } label: {
@@ -2040,6 +2108,7 @@ struct ContentView: View {
                 isActive: !bridge.expectedPathSegments.isEmpty
                     || !bridge.dotTestPreviewPoints.isEmpty
                     || visualCenterDotIsActive
+                    || bridge.imagePreviewContourCount > 0
             )
         }
         .menuStyle(.button)
@@ -2433,6 +2502,8 @@ struct ContentView: View {
         plotterCamera.fiducialDetectionEnabled = true
         plotterCamera.segmentationEnabled = true
         plotterCamera.changeDetectionEnabled = true
+        faceCamera.segmentationEnabled = true
+        showImageProcessingPanel = true
         calibrationStatusText = "VIS controls reset"
     }
 
@@ -3037,6 +3108,101 @@ private struct CameraPlaceholder: View {
     }
 }
 
+private struct FaceContourOverlay: View {
+    let segments: [VisionSegment]
+    let videoSize: CGSize
+    let previewMode: CameraPreviewMode
+
+    var body: some View {
+        Canvas { context, size in
+            let displayRect = videoDisplayRect(
+                viewSize: size,
+                videoSize: videoSize,
+                previewMode: previewMode
+            )
+            for (index, segment) in segments.prefix(80).enumerated() {
+                let color = faceContourColor(for: segment.kind, index: index)
+                if segment.points.count > 1 {
+                    var path = Path()
+                    path.move(to: faceOverlayPoint(segment.points[0], displayRect: displayRect))
+                    for point in segment.points.dropFirst() {
+                        path.addLine(to: faceOverlayPoint(point, displayRect: displayRect))
+                    }
+                    if segment.points.count > 2 {
+                        path.closeSubpath()
+                        context.fill(path, with: .color(color.opacity(0.10)))
+                    }
+                    context.stroke(path, with: .color(.black.opacity(0.68)), lineWidth: 3.4)
+                    context.stroke(path, with: .color(color.opacity(0.90)), lineWidth: 1.5)
+                }
+
+                let rect = faceOverlayRect(segment.boundingBox, displayRect: displayRect)
+                context.stroke(
+                    Path(roundedRect: rect, cornerRadius: 2),
+                    with: .color(color.opacity(0.70)),
+                    lineWidth: 0.9
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+private struct ImageProcessingPanel: View {
+    @ObservedObject var bridge: PlotterBridgeModel
+    let visualContourCount: Int
+    let isBridgeOnline: Bool
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 8, height: 8)
+                        Text("IMAGE")
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.74))
+                        Text(bridge.imagePreviewStatus)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 8) {
+                        Text(String(format: "VIS %dC", visualContourCount))
+                        Text(bridge.imagePreviewDetail)
+                    }
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                }
+                .frame(minWidth: 158, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+            }
+            .padding(.top, 68)
+            .padding(.horizontal, 18)
+            Spacer()
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var statusColor: Color {
+        if !isBridgeOnline { return .gray }
+        if bridge.imagePreviewStatus.contains("ERR") { return .red }
+        if bridge.imagePreviewEligibleForBridgePreview { return .green }
+        return .yellow
+    }
+}
+
 private struct CameraPaneBadge: View {
     @ObservedObject var camera: CameraModel
 
@@ -3225,6 +3391,35 @@ private struct ConnectionDot: View {
         if bridge.isMachineBusy || bridge.isRunning { return .yellow }
         if bridge.isOnline { return bridge.isDryRun ? .orange : .green }
         return .gray
+    }
+}
+
+private func faceOverlayPoint(_ normalized: CGPoint, displayRect: CGRect) -> CGPoint {
+    CGPoint(
+        x: displayRect.minX + normalized.x * displayRect.width,
+        y: displayRect.minY + (1.0 - normalized.y) * displayRect.height
+    )
+}
+
+private func faceOverlayRect(_ normalized: CGRect, displayRect: CGRect) -> CGRect {
+    CGRect(
+        x: displayRect.minX + normalized.minX * displayRect.width,
+        y: displayRect.minY + (1.0 - normalized.maxY) * displayRect.height,
+        width: normalized.width * displayRect.width,
+        height: normalized.height * displayRect.height
+    )
+}
+
+private func faceContourColor(for kind: SegmentKind, index: Int) -> Color {
+    switch kind {
+    case .line:
+        return .cyan
+    case .shape:
+        return .mint
+    case .mark:
+        return .yellow
+    case .contour:
+        return index.isMultiple(of: 2) ? .orange : .pink
     }
 }
 

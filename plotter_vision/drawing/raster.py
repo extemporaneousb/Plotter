@@ -7,6 +7,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from plotter_vision.drawing.polygons import (
     PaperDrawingProgram,
     PaperPointNorm,
+    PolylinePrimitive,
     PolygonPrimitive,
 )
 
@@ -87,6 +88,30 @@ class RasterPolygonSummary(BaseModel):
     max_shade: float | None = None
 
 
+class RasterContourOptions(BaseModel):
+    darkness_threshold: float = 0.35
+    auto_contrast: bool = True
+    max_contours: int = 900
+
+    @model_validator(mode="after")
+    def _validate_options(self) -> RasterContourOptions:
+        if not 0.0 <= self.darkness_threshold <= 1.0:
+            raise ValueError("darkness_threshold must be in [0, 1].")
+        if self.max_contours < 1:
+            raise ValueError("max_contours must be positive.")
+        return self
+
+
+class RasterContourSummary(BaseModel):
+    raster_width: int
+    raster_height: int
+    cell_count: int
+    selected_cell_count: int
+    contour_count: int
+    min_luminance: float
+    max_luminance: float
+
+
 def build_paper_program_from_luminance_raster(
     *,
     raster: LuminanceRaster,
@@ -147,6 +172,63 @@ def build_paper_program_from_luminance_raster(
             min_hatch_spacing_mm=opts.min_hatch_spacing_mm,
             max_hatch_spacing_mm=opts.max_hatch_spacing_mm,
             max_hatch_segments=opts.max_hatch_segments,
+        ),
+        summary,
+    )
+
+
+def build_paper_contour_program_from_luminance_raster(
+    *,
+    raster: LuminanceRaster,
+    options: RasterContourOptions | None = None,
+) -> tuple[PaperDrawingProgram, RasterContourSummary]:
+    opts = options or RasterContourOptions()
+    darkness_values = _darkness_values(raster.samples, auto_contrast=opts.auto_contrast)
+
+    polylines: list[PolylinePrimitive] = []
+    width = raster.width
+    height = raster.height
+
+    for row_index, row in enumerate(darkness_values):
+        for column_index, darkness in enumerate(row):
+            if darkness < opts.darkness_threshold:
+                continue
+
+            x0 = column_index / width
+            x1 = (column_index + 1) / width
+            y_top = 1.0 - row_index / height
+            y_bottom = 1.0 - (row_index + 1) / height
+            polylines.append(
+                PolylinePrimitive(
+                    role="contour",
+                    closed=True,
+                    points=[
+                        PaperPointNorm(x=x0, y=y_bottom),
+                        PaperPointNorm(x=x1, y=y_bottom),
+                        PaperPointNorm(x=x1, y=y_top),
+                        PaperPointNorm(x=x0, y=y_top),
+                    ],
+                )
+            )
+            if len(polylines) > opts.max_contours:
+                raise ValueError(
+                    f"raster contour expansion exceeded {opts.max_contours} contours."
+                )
+
+    luminance_values = [sample for row in raster.samples for sample in row]
+    summary = RasterContourSummary(
+        raster_width=width,
+        raster_height=height,
+        cell_count=width * height,
+        selected_cell_count=len(polylines),
+        contour_count=len(polylines),
+        min_luminance=min(luminance_values),
+        max_luminance=max(luminance_values),
+    )
+    return (
+        PaperDrawingProgram(
+            polylines=polylines,
+            max_primitive_count=max(opts.max_contours, 1),
         ),
         summary,
     )

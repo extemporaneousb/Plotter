@@ -10,8 +10,10 @@ from plotter_vision.bridge.server import (
     AxisModelTrustRequest,
     AxisModelTrustSample,
     BridgeRuntimeConfig,
+    CalibrationMarkPlanRequest,
     CalibrationObservationRequest,
     CalibrationStartRequest,
+    ImageShapePreviewRequest,
     MachineArmRequest,
     DotTestPreviewRequest,
     DotTestRunRequest,
@@ -37,6 +39,7 @@ from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.controller.grbl import GrblHalController
 from plotter_vision.controller.mock import MockTransport
 from plotter_vision.controller.serial_transport import SerialPortInfo
+from plotter_vision.drawing import LuminanceRaster
 
 
 def test_demo_plan_builds_homing_center_triangle_and_park() -> None:
@@ -190,7 +193,8 @@ def test_bridge_calibration_start_persists_planned_session(tmp_path: Path) -> No
 
     assert response.status == "awaiting_observations"
     assert response.observed_count == 0
-    assert response.planned_commands[0] == "$H"
+    assert response.planned_commands[0] == "G21"
+    assert "$H" not in response.planned_commands
     assert "G53 G1 X-266.7 Y-107.95" in response.planned_commands
     assert Path(response.session_file).exists()
 
@@ -204,8 +208,90 @@ def test_bridge_calibration_can_solve_with_synthetic_observations(tmp_path: Path
     assert response.status == "solved"
     assert response.observed_count == 5
     assert response.model["transform"] is not None
+    assert response.model["residuals"]
     assert response.model["rms_error_norm"] == pytest.approx(0.0, abs=1e-12)
+    assert response.latest_model_file is not None
     assert (tmp_path / "calibration" / "latest_machine_model.json").exists()
+
+
+def test_bridge_calibration_mark_preview_is_preview_only(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+
+    response = bridge.preview_calibration_marks(
+        CalibrationMarkPlanRequest(request_id="cal-preview")
+    )
+
+    assert response.status == "ready"
+    assert response.dry_run is True
+    assert response.preview_only is True
+    assert response.controller_transcript is None
+    assert "$H" not in response.planned_commands
+    assert response.summary is not None
+    assert response.summary.mark_polyline_count == 10
+    assert not (tmp_path / "transcripts" / "cal-preview.jsonl").exists()
+
+
+def test_bridge_image_contour_preview_is_preview_only_without_hatching(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+
+    response = bridge.preview_image_contours(
+        ImageShapePreviewRequest(
+            raster=LuminanceRaster(
+                samples=[
+                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
+                ]
+            ),
+            request_id="image-preview",
+        )
+    )
+
+    assert response.status == "ready"
+    assert response.preview_only is True
+    assert response.dry_run is True
+    assert response.controller_transcript is None
+    assert response.raster_summary is not None
+    assert response.raster_summary.contour_count == 1
+    assert response.summary is not None
+    assert response.summary.contour_polyline_count == 1
+    assert response.summary.hatch_polyline_count == 0
+    assert not (tmp_path / "transcripts" / "image-preview.jsonl").exists()
+
+
+def test_bridge_mock_live_calibration_marks_write_transcript_without_homing(tmp_path: Path) -> None:
+    config_path = tmp_path / "machine_config.json"
+    machine = _machine_with_pen()
+    machine.axis_model_trusted = True
+    machine.homing_trusted = True
+    machine.save_json(config_path)
+    bridge = PlotterBridge(
+        BridgeRuntimeConfig(
+            dry_run=False,
+            mock=True,
+            arm_motion=True,
+            arm_pen=True,
+            arm_homing=False,
+            config_path=config_path,
+            event_log_path=tmp_path / "events.jsonl",
+            transcript_dir=tmp_path / "transcripts",
+            workspace_x_max=533.4,
+            workspace_y_max=215.9,
+        )
+    )
+
+    response = bridge.run_calibration_marks(
+        CalibrationMarkPlanRequest(request_id="cal-run", include_homing=False)
+    )
+
+    assert response.status == "completed"
+    assert response.dry_run is False
+    assert response.controller_transcript is not None
+    text = Path(response.controller_transcript).read_text(encoding="utf-8")
+    assert '"payload":"$H"' not in text
+    assert '"payload":"M3 S720"' in text
 
 
 def test_bridge_calibration_observations_can_resume_session(tmp_path: Path) -> None:
@@ -246,6 +332,12 @@ def test_bridge_calibration_observations_can_resume_session(tmp_path: Path) -> N
     assert response.status == "solved"
     assert response.observed_count == 3
     assert response.model["transform"] is not None
+
+    reloaded = _bridge(tmp_path=tmp_path, config_path=config_path)
+    loaded = reloaded.calibration_status(response.session_id)
+    assert loaded.status == "solved"
+    assert loaded.observed_count == 3
+    assert loaded.model["transform"] is not None
 
 
 def test_bridge_paper_registration_solves_and_persists_homography(tmp_path: Path) -> None:

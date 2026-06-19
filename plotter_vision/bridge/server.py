@@ -33,6 +33,7 @@ from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
     LogicalPointMM,
     MachinePointMM,
+    PaperPointNorm,
     VisionCalibrationObservation,
 )
 from plotter_vision.bridge.planner import (
@@ -53,9 +54,15 @@ from plotter_vision.controller.serial_transport import DEFAULT_BAUD, SerialTrans
 from plotter_vision.drawing import (
     DrawingFrameMM,
     LuminanceRaster,
+    PaperDrawingProgram,
+    PaperPointNorm as DrawingPaperPointNorm,
     PlannedPolyline,
+    PointMarkPrimitive,
+    RasterContourOptions,
+    RasterContourSummary,
     RasterPolygonOptions,
     RasterPolygonSummary,
+    build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
 )
 from plotter_vision.machine.homing import validate_homing_request
@@ -140,16 +147,29 @@ class DemoRunResponse(BaseModel):
 class CalibrationStartRequest(BaseModel):
     margin_mm: float = 25.0
     travel_feed_mm_min: float = 500.0
-    include_homing: bool = True
+    include_homing: bool = False
     simulate_observations: bool = False
     synthetic_noise_norm: float = 0.0
+
+
+class CalibrationMarkPlanRequest(BaseModel):
+    margin_mm: float = 25.0
+    mark_size_mm: float = 4.0
+    include_homing: bool = False
+    draw_feed_mm_min: float = 180.0
+    travel_feed_mm_min: float = 500.0
+    max_segment_mm: float = 25.0
+    request_id: str | None = None
 
 
 class CalibrationObservationRequest(BaseModel):
     session_id: str
     point_id: str
     observed_norm: CameraPointNorm
+    observed_paper_norm: PaperPointNorm | None = None
     reported_machine_mm: MachinePointMM | None = None
+    camera_id: str | None = None
+    camera_name: str | None = None
     strength: float = 1.0
 
 
@@ -157,6 +177,9 @@ class PaperRegistrationCornerRequest(BaseModel):
     corner: PaperCorner
     observed_norm: CameraPointNorm
     strength: float = 1.0
+    observation_source: Literal["manual_click", "red_fiducial", "synthetic"] = "manual_click"
+    camera_id: str | None = None
+    camera_name: str | None = None
 
 
 class PaperRegistrationRequest(BaseModel):
@@ -175,6 +198,7 @@ class CalibrationSessionResponse(BaseModel):
     observed_count: int
     model: dict[str, Any]
     session_file: str
+    latest_model_file: str | None = None
     error: str | None = None
 
 
@@ -296,6 +320,46 @@ class FaceRasterDrawRequest(BaseModel):
 
 class FaceRasterDrawResponse(PolygonDrawResponse):
     raster_summary: RasterPolygonSummary | None = None
+
+
+class ImageShapePreviewRequest(BaseModel):
+    raster: LuminanceRaster
+    frame: DrawingFrameMM | None = None
+    options: RasterContourOptions = Field(default_factory=RasterContourOptions)
+    draw_feed_mm_min: float = 180.0
+    travel_feed_mm_min: float = 500.0
+    max_segment_mm: float = 25.0
+    request_id: str | None = None
+
+
+class ImageShapePreviewResponse(BaseModel):
+    command_id: str
+    status: str
+    dry_run: bool = True
+    preview_only: bool = True
+    eligible_for_bridge_preview: bool = False
+    planned_commands: list[str] = Field(default_factory=list)
+    simulation: SimulatedPath | None = None
+    summary: PolygonDrawPlanSummary | None = None
+    raster_summary: RasterContourSummary | None = None
+    event_log: str
+    controller_transcript: str | None = None
+    error: str | None = None
+
+
+class CalibrationMarkPlanResponse(BaseModel):
+    command_id: str
+    status: str
+    dry_run: bool
+    preview_only: bool = False
+    waypoints: list[dict[str, Any]]
+    planned_commands: list[str]
+    simulation: SimulatedPath | None = None
+    summary: PolygonDrawPlanSummary | None = None
+    event_log: str
+    controller_transcript: str | None = None
+    machine_status: MachineStatusResponse | None = None
+    error: str | None = None
 
 
 class MachineJogRequest(BaseModel):
@@ -839,6 +903,129 @@ class PlotterBridge:
                 error=str(exc),
             )
 
+    def preview_polygon(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
+        command_id = request.request_id or f"draw-preview-{uuid.uuid4().hex[:12]}"
+
+        try:
+            machine = self._load_machine_config()
+            plan = build_polygon_draw_plan(
+                request=request,
+                machine=machine,
+                safety=SafetyState(dry_run=True),
+                command_id=command_id,
+            )
+            self.event_log.emit(
+                "draw.polygon_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "polyline_count": plan.summary.polyline_count,
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "command_count": len(plan.planned_commands),
+                    "dry_run": True,
+                    "preview_only": True,
+                },
+            )
+            return PolygonDrawResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "draw.polygon_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return PolygonDrawResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+            )
+
+    def preview_image_contours(self, request: ImageShapePreviewRequest) -> ImageShapePreviewResponse:
+        command_id = request.request_id or f"image-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            program, raster_summary = build_paper_contour_program_from_luminance_raster(
+                raster=request.raster,
+                options=request.options,
+            )
+            if not program.polylines:
+                raise MotionSafetyError("Image baseline produced no preview contours.")
+
+            machine = self._load_machine_config()
+            plan = build_polygon_draw_plan(
+                request=PolygonDrawRequest(
+                    program=program,
+                    frame=request.frame,
+                    include_homing=False,
+                    draw_feed_mm_min=request.draw_feed_mm_min,
+                    travel_feed_mm_min=request.travel_feed_mm_min,
+                    max_segment_mm=request.max_segment_mm,
+                    request_id=command_id,
+                ),
+                machine=machine,
+                safety=SafetyState(dry_run=True),
+                command_id=command_id,
+            )
+            self.event_log.emit(
+                "draw.image_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "contour_count": raster_summary.contour_count,
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "dry_run": True,
+                    "preview_only": True,
+                },
+            )
+            return ImageShapePreviewResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                preview_only=True,
+                eligible_for_bridge_preview=True,
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                raster_summary=raster_summary,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "draw.image_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return ImageShapePreviewResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                preview_only=True,
+                eligible_for_bridge_preview=False,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                raster_summary=locals().get("raster_summary"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+            )
+
     def draw_polygon(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
         command_id = request.request_id or f"draw-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
@@ -1058,10 +1245,15 @@ class PlotterBridge:
                 command_id=session.session_id,
                 point_id=waypoint.point_id,
                 role=waypoint.role,
+                observation_source="manual_click",
                 expected_logical_mm=waypoint.logical_mm,
+                expected_paper_norm=waypoint.paper_norm,
                 commanded_machine_mm=waypoint.machine_mm,
                 reported_machine_mm=request.reported_machine_mm,
                 observed_norm=request.observed_norm,
+                observed_paper_norm=request.observed_paper_norm,
+                camera_id=request.camera_id,
+                camera_name=request.camera_name,
                 strength=request.strength,
             )
             session.add_observation(observation)
@@ -1090,6 +1282,127 @@ class PlotterBridge:
         except Exception as exc:
             return self._calibration_error(session_id=session_id, error=str(exc))
 
+    def preview_calibration_marks(
+        self,
+        request: CalibrationMarkPlanRequest,
+    ) -> CalibrationMarkPlanResponse:
+        command_id = request.request_id or f"cal-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            plan, waypoints = self._build_calibration_mark_plan(
+                request=request,
+                command_id=command_id,
+                safety=SafetyState(dry_run=True),
+            )
+            self.event_log.emit(
+                "calibration.mark_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "waypoint_count": len(waypoints),
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "dry_run": True,
+                    "preview_only": True,
+                },
+            )
+            return CalibrationMarkPlanResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                preview_only=True,
+                waypoints=[waypoint.model_dump(mode="json") for waypoint in waypoints],
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.mark_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return CalibrationMarkPlanResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                preview_only=True,
+                waypoints=[],
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+            )
+
+    def run_calibration_marks(
+        self,
+        request: CalibrationMarkPlanRequest,
+    ) -> CalibrationMarkPlanResponse:
+        command_id = request.request_id or f"cal-run-{uuid.uuid4().hex[:12]}"
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        try:
+            machine = self._load_machine_config()
+            self._require_axis_model_trusted(machine)
+            plan, waypoints = self._build_calibration_mark_plan(
+                request=request,
+                command_id=command_id,
+                safety=self._safety_state(),
+                machine=machine,
+            )
+            machine_response = self._run_machine_action(
+                action="calibration_marks",
+                command_id=command_id,
+                planned_commands=plan.planned_commands,
+                transcript_path=transcript_path,
+            )
+            self.event_log.emit(
+                (
+                    "calibration.mark_run_completed"
+                    if machine_response.status == "completed"
+                    else "calibration.mark_run_failed"
+                ),
+                command_id=command_id,
+                status=machine_response.status,
+                payload={
+                    "waypoint_count": len(waypoints),
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "dry_run": machine_response.dry_run,
+                    "transcript": machine_response.controller_transcript,
+                    "error": machine_response.error,
+                },
+            )
+            return CalibrationMarkPlanResponse(
+                command_id=command_id,
+                status=machine_response.status,
+                dry_run=plan.dry_run,
+                preview_only=False,
+                waypoints=[waypoint.model_dump(mode="json") for waypoint in waypoints],
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=machine_response.controller_transcript,
+                machine_status=machine_response.machine_status,
+                error=machine_response.error,
+            )
+        except Exception as exc:
+            return CalibrationMarkPlanResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=self.config.dry_run,
+                preview_only=False,
+                waypoints=[],
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
+                error=str(exc),
+            )
+
     def register_paper(self, request: PaperRegistrationRequest) -> PaperRegistrationResponse:
         try:
             machine = self._load_machine_config()
@@ -1102,6 +1415,9 @@ class PlotterBridge:
                         expected_paper_norm=paper_corner_norm(corner.corner),
                         observed_norm=corner.observed_norm,
                         strength=corner.strength,
+                        observation_source=corner.observation_source,
+                        camera_id=corner.camera_id,
+                        camera_name=corner.camera_name,
                     )
                     for corner in request.corners
                 ]
@@ -1168,7 +1484,7 @@ class PlotterBridge:
             response = DotTestPreviewResponse(
                 command_id=command_id,
                 status="ready",
-                dry_run=self.config.dry_run,
+                dry_run=True,
                 registration_id=dot_plan.registration.registration_id,
                 pattern=request.pattern,
                 point_count=len(dot_plan.points),
@@ -1204,7 +1520,7 @@ class PlotterBridge:
             return DotTestPreviewResponse(
                 command_id=command_id,
                 status="failed",
-                dry_run=self.config.dry_run,
+                dry_run=True,
                 pattern=request.pattern,
                 event_log=str(self.config.event_log_path),
                 error=str(exc),
@@ -1964,6 +2280,50 @@ class PlotterBridge:
     def recent_events(self) -> list[BridgeEvent]:
         return self.event_log.recent()
 
+    def _build_calibration_mark_plan(
+        self,
+        *,
+        request: CalibrationMarkPlanRequest,
+        command_id: str,
+        safety: SafetyState,
+        machine: MachineConfig | None = None,
+    ) -> tuple[PolygonDrawPlan, list[Any]]:
+        active_machine = machine or self._load_machine_config()
+        session = build_calibration_session(
+            machine=active_machine,
+            margin_mm=request.margin_mm,
+            travel_feed_mm_min=request.travel_feed_mm_min,
+            include_homing=request.include_homing,
+        )
+        point_marks = []
+        for waypoint in session.waypoints:
+            if waypoint.paper_norm is None:
+                raise MotionSafetyError("Calibration waypoint has no normalized paper position.")
+            point_marks.append(
+                PointMarkPrimitive(
+                    center=DrawingPaperPointNorm(
+                        x=waypoint.paper_norm.x,
+                        y=waypoint.paper_norm.y,
+                    ),
+                    mark_size_mm=request.mark_size_mm,
+                )
+            )
+
+        plan = build_polygon_draw_plan(
+            request=PolygonDrawRequest(
+                program=PaperDrawingProgram(point_marks=point_marks),
+                include_homing=request.include_homing,
+                draw_feed_mm_min=request.draw_feed_mm_min,
+                travel_feed_mm_min=request.travel_feed_mm_min,
+                max_segment_mm=request.max_segment_mm,
+                request_id=command_id,
+            ),
+            machine=active_machine,
+            safety=safety,
+            command_id=command_id,
+        )
+        return plan, list(session.waypoints)
+
     def _run_plan(self, *, plan: DemoPlan, transcript_path: Path) -> None:
         self._run_planned_commands(
             command_id=plan.command_id,
@@ -2474,8 +2834,10 @@ class PlotterBridge:
     def _save_calibration_session(self, session: CalibrationSession) -> None:
         session.save_json(self._calibration_path(session.session_id))
         if session.status == "solved":
-            latest = self.config.calibration_dir / "latest_machine_model.json"
-            session.model.save_json(latest)
+            session.model.save_json(self._latest_machine_model_path())
+
+    def _latest_machine_model_path(self) -> Path:
+        return self.config.calibration_dir / "latest_machine_model.json"
 
     def _load_calibration_session(self, session_id: str) -> CalibrationSession:
         path = self._calibration_path(session_id)
@@ -2707,6 +3069,11 @@ class PlotterBridge:
             observed_count=session.observed_count,
             model=session.model.model_dump(mode="json"),
             session_file=str(self._calibration_path(session.session_id)),
+            latest_model_file=(
+                str(self._latest_machine_model_path())
+                if session.status == "solved" and self._latest_machine_model_path().exists()
+                else None
+            ),
         )
 
     def _calibration_error(self, *, session_id: str, error: str) -> CalibrationSessionResponse:
@@ -3280,6 +3647,18 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 self._write_model(status, response)
                 return
 
+            if parsed_url.path == "/draw/polygon/preview":
+                try:
+                    request = PolygonDrawRequest.model_validate(self._read_json_body())
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+
+                response = bridge.preview_polygon(request)
+                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
+                self._write_model(status, response)
+                return
+
             if parsed_url.path == "/draw/polygon":
                 try:
                     request = PolygonDrawRequest.model_validate(self._read_json_body())
@@ -3289,6 +3668,18 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
 
                 response = bridge.draw_polygon(request)
                 status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
+                self._write_model(status, response)
+                return
+
+            if parsed_url.path == "/draw/image/preview":
+                try:
+                    request = ImageShapePreviewRequest.model_validate(self._read_json_body())
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+
+                response = bridge.preview_image_contours(request)
+                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
                 self._write_model(status, response)
                 return
 
@@ -3481,6 +3872,30 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
 
                 response = bridge.start_calibration(request)
                 status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.BAD_REQUEST
+                self._write_model(status, response)
+                return
+
+            if parsed_url.path == "/calibration/preview":
+                try:
+                    request = CalibrationMarkPlanRequest.model_validate(self._read_json_body())
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+
+                response = bridge.preview_calibration_marks(request)
+                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
+                self._write_model(status, response)
+                return
+
+            if parsed_url.path == "/calibration/run":
+                try:
+                    request = CalibrationMarkPlanRequest.model_validate(self._read_json_body())
+                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+
+                response = bridge.run_calibration_marks(request)
+                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
                 self._write_model(status, response)
                 return
 

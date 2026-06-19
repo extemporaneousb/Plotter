@@ -6,6 +6,7 @@ from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
     LogicalPointMM,
     MachinePointMM,
+    PaperPointNorm,
     VisionCalibrationObservation,
 )
 from plotter_vision.config import MachineConfig
@@ -33,10 +34,19 @@ def synthetic_observations(
             VisionCalibrationObservation(
                 command_id=command_id,
                 point_id=f"P{index:02d}",
+                observation_source="synthetic",
                 expected_logical_mm=logical,
+                expected_paper_norm=PaperPointNorm(
+                    x=logical.x / machine.axes.x.travel_mm,
+                    y=logical.y / machine.axes.y.travel_mm,
+                ),
                 commanded_machine_mm=MachinePointMM(x=machine_x, y=machine_y),
                 reported_machine_mm=MachinePointMM(x=machine_x, y=machine_y),
                 observed_norm=observed,
+                observed_paper_norm=PaperPointNorm(
+                    x=logical.x / machine.axes.x.travel_mm,
+                    y=logical.y / machine.axes.y.travel_mm,
+                ),
                 strength=1.0,
             )
         )

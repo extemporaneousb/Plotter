@@ -36,10 +36,15 @@ class PaperFiducialDetection(BaseModel):
 
 
 class PaperCornerObservation(BaseModel):
+    schema_version: int = 1
+    created_at: str = Field(default_factory=utc_now_iso)
     corner: PaperCorner
     expected_paper_norm: PaperPointNorm
     observed_norm: CameraPointNorm
     strength: float = 1.0
+    observation_source: Literal["manual_click", "red_fiducial", "synthetic"] = "manual_click"
+    camera_id: str | None = None
+    camera_name: str | None = None
 
 
 class Homography2D(BaseModel):
@@ -67,15 +72,20 @@ class Homography2D(BaseModel):
 
 
 class PaperFrameRegistration(BaseModel):
+    schema_version: int = 1
+    artifact_type: Literal["paper_frame_registration"] = "paper_frame_registration"
     registration_id: str = Field(default_factory=lambda: f"paper-{uuid.uuid4().hex[:12]}")
     created_at: str = Field(default_factory=utc_now_iso)
     status: Literal["locked"] = "locked"
+    method: Literal["manual_or_fiducial_homography"] = "manual_or_fiducial_homography"
     paper_size_mm: PaperSizeMM
     corner_observations: list[PaperCornerObservation]
     paper_to_camera: Homography2D
     camera_to_paper: Homography2D
     rms_error_norm: float
     max_error_norm: float
+    camera_id: str | None = None
+    camera_name: str | None = None
 
     @model_validator(mode="after")
     def _validate_observed_quad(self) -> PaperFrameRegistration:
@@ -147,6 +157,7 @@ def build_corner_observations_from_red_fiducials(
             expected_paper_norm=paper_corner_norm(corner),
             observed_norm=detection.observed_norm,
             strength=detection.strength,
+            observation_source="red_fiducial",
         )
         for corner, detection in zip(corners, ordered)
     ]
@@ -198,6 +209,12 @@ def build_paper_frame_registration(
         camera_to_paper=camera_to_paper,
         rms_error_norm=(sum(error * error for error in residuals) / len(residuals)) ** 0.5,
         max_error_norm=max(residuals),
+        camera_id=_common_optional_value(
+            [observation.camera_id for observation in corner_observations]
+        ),
+        camera_name=_common_optional_value(
+            [observation.camera_name for observation in corner_observations]
+        ),
     )
 
 
@@ -259,6 +276,16 @@ def _orientation(
     c: tuple[float, float],
 ) -> float:
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _common_optional_value(values: list[str | None]) -> str | None:
+    present = [value for value in values if value]
+    if not present:
+        return None
+    first = present[0]
+    if all(value == first for value in present):
+        return first
+    return None
 
 
 def _solve_homography(

@@ -14,6 +14,7 @@ from plotter_vision.drawing import (
     PaperPointNorm,
     PlannedPolyline,
     PolygonPrimitive,
+    SimpleShapePrimitive,
 )
 from plotter_vision.machine.safety import MotionSafetyError
 
@@ -122,6 +123,39 @@ def test_shaded_polygon_program_expands_to_hatch_motion() -> None:
     assert plan.summary.hatch_polyline_count > 0
     assert len(plan.simulation.drawn_segments) == plan.summary.draw_segment_count
     assert plan.summary.drawn_length_mm > 0
+
+
+@pytest.mark.parametrize(("kind", "segment_count"), [("triangle", 3), ("square", 4)])
+def test_simple_shape_primitives_produce_expected_preview_segments(
+    kind: str,
+    segment_count: int,
+) -> None:
+    machine = _machine_with_pen()
+    request = PolygonDrawRequest(
+        program=PaperDrawingProgram(
+            simple_shapes=[
+                SimpleShapePrimitive(
+                    kind=kind,  # type: ignore[arg-type]
+                    center=PaperPointNorm(x=0.5, y=0.5),
+                    size_norm=0.2,
+                )
+            ]
+        ),
+        max_segment_mm=120.0,
+        request_id=f"{kind}-primitive",
+    )
+
+    plan = build_polygon_draw_plan(
+        request=request,
+        machine=machine,
+        safety=SafetyState(dry_run=True),
+        command_id=f"{kind}-primitive",
+    )
+
+    assert plan.summary.outline_polyline_count == 1
+    assert plan.summary.hatch_polyline_count == 0
+    assert plan.summary.draw_segment_count == segment_count
+    assert len(plan.simulation.preview_segments) == segment_count
 
 
 def test_real_polygon_draw_requires_motion_arm() -> None:

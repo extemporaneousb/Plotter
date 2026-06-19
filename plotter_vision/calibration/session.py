@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from plotter_vision.calibration.vision_model import (
     LogicalPointMM,
     MachinePointMM,
+    PaperPointNorm,
     VisionCalibrationObservation,
     VisionMachineModel,
 )
@@ -28,14 +29,18 @@ class CalibrationWaypoint(BaseModel):
     point_id: str
     role: str = "pen_tip_waypoint"
     logical_mm: LogicalPointMM
+    paper_norm: PaperPointNorm | None = None
     machine_mm: MachinePointMM
     observed: bool = False
 
 
 class CalibrationSession(BaseModel):
+    schema_version: int = 1
+    artifact_type: Literal["calibration_session"] = "calibration_session"
     session_id: str = Field(default_factory=lambda: f"cal-{uuid.uuid4().hex[:12]}")
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
+    method: Literal["manual_click_affine"] = "manual_click_affine"
     status: CalibrationSessionStatus = "planned"
     waypoints: list[CalibrationWaypoint]
     planned_commands: list[str]
@@ -68,7 +73,7 @@ def build_calibration_session(
     machine: MachineConfig,
     margin_mm: float = 25.0,
     travel_feed_mm_min: float = 500.0,
-    include_homing: bool = True,
+    include_homing: bool = False,
 ) -> CalibrationSession:
     logical_points = build_logical_calibration_points(machine=machine, margin_mm=margin_mm)
     waypoints: list[CalibrationWaypoint] = []
@@ -78,6 +83,7 @@ def build_calibration_session(
             CalibrationWaypoint(
                 point_id=f"P{index:02d}",
                 logical_mm=logical,
+                paper_norm=_logical_to_paper_norm(logical=logical, machine=machine),
                 machine_mm=MachinePointMM(x=machine_x, y=machine_y),
             )
         )
@@ -115,3 +121,12 @@ def build_logical_calibration_points(
         LogicalPointMM(x=x_max, y=y_max),
         LogicalPointMM(x=x_min, y=y_max),
     ]
+
+
+def _logical_to_paper_norm(*, logical: LogicalPointMM, machine: MachineConfig) -> PaperPointNorm | None:
+    if machine.axes.x.travel_mm <= 0 or machine.axes.y.travel_mm <= 0:
+        return None
+    return PaperPointNorm(
+        x=logical.x / machine.axes.x.travel_mm,
+        y=logical.y / machine.axes.y.travel_mm,
+    )

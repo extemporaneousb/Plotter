@@ -29,6 +29,8 @@ def test_vision_model_solves_synthetic_affine_transform() -> None:
     model.solve()
 
     assert model.transform is not None
+    assert model.schema_version == 1
+    assert len(model.residuals) == len(observations)
     assert model.rms_error_norm == pytest.approx(0.0, abs=1e-12)
     assert model.max_error_norm == pytest.approx(0.0, abs=1e-12)
     predicted = model.transform.map_logical(LogicalPointMM(x=266.7, y=107.95))
@@ -56,15 +58,40 @@ def test_vision_model_requires_three_observations() -> None:
         model.solve()
 
 
+def test_vision_model_rejects_degenerate_observations() -> None:
+    model = VisionMachineModel()
+    for index in range(3):
+        model.add_observation(
+            VisionCalibrationObservation(
+                command_id="cmd",
+                point_id=f"P{index}",
+                expected_logical_mm=LogicalPointMM(x=float(index), y=0.0),
+                commanded_machine_mm=MachinePointMM(x=-float(index), y=0.0),
+                observed_norm=CameraPointNorm(x=0.1 + 0.1 * index, y=0.2),
+            )
+        )
+
+    with pytest.raises(ValueError, match="degenerate"):
+        model.solve()
+
+
 def test_calibration_session_plans_logical_waypoints_and_negative_machine_moves() -> None:
     machine = _machine()
     session = build_calibration_session(machine=machine, margin_mm=25.0)
 
-    assert session.planned_commands[0] == "$H"
+    assert session.planned_commands[0] == "G21"
+    assert "$H" not in session.planned_commands
     assert "G53 G1 X-266.7 Y-107.95" in session.planned_commands
     assert "G53 G1 X-508.4 Y-190.9" in session.planned_commands
     assert session.waypoints[0].logical_mm == LogicalPointMM(x=266.7, y=107.95)
+    assert session.waypoints[0].paper_norm is not None
     assert session.waypoints[0].machine_mm == MachinePointMM(x=-266.7, y=-107.95)
+
+
+def test_calibration_session_homing_is_explicit() -> None:
+    session = build_calibration_session(machine=_machine(), margin_mm=25.0, include_homing=True)
+
+    assert session.planned_commands[0] == "$H"
 
 
 def test_calibration_session_can_resume_from_observations() -> None:
