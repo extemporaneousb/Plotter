@@ -318,12 +318,20 @@ struct ChangeReport: Equatable {
 
 struct PlotterOverlaySettings: Equatable, Codable {
     var enabled = true
-    var locked = false
     var opacity = 0.38
-    var scale = 0.82
-    var offsetX = 0.0
-    var offsetY = 0.02
-    var rotationDegrees = 0.0
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case opacity
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.38
+    }
 }
 
 enum CameraPreviewMode: String, CaseIterable, Codable, Identifiable {
@@ -338,34 +346,6 @@ enum CameraPreviewMode: String, CaseIterable, Codable, Identifiable {
             return "Fit"
         case .fill:
             return "Fill"
-        }
-    }
-}
-
-enum PlotterViewportBoxColor: String, CaseIterable, Codable, Identifiable {
-    case cyan
-    case yellow
-    case magenta
-    case green
-    case white
-    case red
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .cyan:
-            return "Cyan"
-        case .yellow:
-            return "Yellow"
-        case .magenta:
-            return "Magenta"
-        case .green:
-            return "Green"
-        case .white:
-            return "White"
-        case .red:
-            return "Red"
         }
     }
 }
@@ -398,30 +378,12 @@ enum PlotterVideoFilter: String, CaseIterable, Codable, Identifiable {
 struct PlotterViewportSettings: Equatable, Codable {
     var previewMode = CameraPreviewMode.fit
     var rotationDegrees = 0.0
-    var boxEnabled = true
-    var boxLocked = false
-    var boxOpacity = 0.62
-    var boxStrokeWidth = 2.0
-    var boxColor = PlotterViewportBoxColor.cyan
     var videoFilter = PlotterVideoFilter.normal
-    var boxWidthNorm = 0.84
-    var boxAspectRatio = 1.45
-    var boxCenterXNorm = 0.5
-    var boxCenterYNorm = 0.5
 
     enum CodingKeys: String, CodingKey {
         case previewMode
         case rotationDegrees
-        case boxEnabled
-        case boxLocked
-        case boxOpacity
-        case boxStrokeWidth
-        case boxColor
         case videoFilter
-        case boxWidthNorm
-        case boxAspectRatio
-        case boxCenterXNorm
-        case boxCenterYNorm
     }
 
     init() {}
@@ -430,44 +392,7 @@ struct PlotterViewportSettings: Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         previewMode = try container.decodeIfPresent(CameraPreviewMode.self, forKey: .previewMode) ?? .fit
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0.0
-        boxEnabled = try container.decodeIfPresent(Bool.self, forKey: .boxEnabled) ?? true
-        boxLocked = try container.decodeIfPresent(Bool.self, forKey: .boxLocked) ?? false
-        boxOpacity = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxOpacity) ?? 0.62,
-            min: 0.05,
-            max: 1.0
-        )
-        boxStrokeWidth = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxStrokeWidth) ?? 2.0,
-            min: 1.0,
-            max: 10.0
-        )
-        boxColor = try container.decodeIfPresent(PlotterViewportBoxColor.self, forKey: .boxColor) ?? .cyan
         videoFilter = try container.decodeIfPresent(PlotterVideoFilter.self, forKey: .videoFilter) ?? .normal
-        boxWidthNorm = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxWidthNorm) ?? 0.84,
-            min: 0.05,
-            max: 1.0
-        )
-        boxAspectRatio = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxAspectRatio) ?? 1.45,
-            min: 0.2,
-            max: 5.0
-        )
-        boxCenterXNorm = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxCenterXNorm) ?? 0.5,
-            min: 0.0,
-            max: 1.0
-        )
-        boxCenterYNorm = clampDouble(
-            try container.decodeIfPresent(Double.self, forKey: .boxCenterYNorm) ?? 0.5,
-            min: 0.0,
-            max: 1.0
-        )
-    }
-
-    private func clampDouble(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
-        Swift.min(maximum, Swift.max(minimum, value))
     }
 }
 

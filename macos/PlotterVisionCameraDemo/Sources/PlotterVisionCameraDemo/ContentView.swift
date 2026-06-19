@@ -137,10 +137,7 @@ struct ContentView: View {
                         dotTestPreviewPoints: bridge.dotTestPreviewPoints,
                         paperTransform: bridge.paperRegistrationSnapshot,
                         plotterOverlay: plotterOverlay,
-                        drawingFrame: drawingFrame,
                         pathRevealProgress: bridge.pathRevealProgress,
-                        workspaceXMm: bridge.workspaceXMm,
-                        workspaceYMm: bridge.workspaceYMm,
                         videoSize: plotterCamera.videoSize,
                         previewMode: plotterViewport.previewMode,
                         showGrid: plotterCamera.showGrid,
@@ -149,8 +146,6 @@ struct ContentView: View {
 
                 }
             }
-
-            PlotterViewportBoxOverlay(settings: plotterViewport)
 
             ManualFiducialOverlay(points: manualFiducials, isActive: manualFiducialMode)
 
@@ -175,8 +170,6 @@ struct ContentView: View {
                     videoSize: plotterCamera.videoSize,
                     onMark: recordManualFiducial
                 )
-            } else if plotterViewport.boxEnabled && !plotterViewport.boxLocked {
-                PlotterViewportGestureLayer(settings: $plotterViewport)
             }
 
             CameraPaneBadge(camera: plotterCamera)
@@ -1287,24 +1280,6 @@ struct ContentView: View {
                 plotterConnectionButton
 
                 controlButton(
-                    systemName: plotterViewport.boxEnabled ? "rectangle.inset.filled" : "rectangle",
-                    label: "Box",
-                    help: plotterViewport.boxEnabled ? "Hide plotter range box" : "Show plotter range box",
-                    isActive: plotterViewport.boxEnabled
-                ) {
-                    plotterViewport.boxEnabled.toggle()
-                }
-
-                controlButton(
-                    systemName: plotterViewport.boxLocked ? "lock.fill" : "lock.open",
-                    label: "Lock",
-                    help: plotterViewport.boxLocked ? "Unlock plotter range box" : "Lock plotter range box",
-                    isActive: plotterViewport.boxLocked
-                ) {
-                    plotterViewport.boxLocked.toggle()
-                }
-
-                controlButton(
                     systemName: "rotate.right",
                     label: "Rotate",
                     help: "Rotate plotter camera display by 90 degrees",
@@ -1376,7 +1351,7 @@ struct ContentView: View {
                 .frame(height: 24)
                 .overlay(Color.white.opacity(0.18))
 
-            Text("BOX \(plotterViewport.boxLocked ? "LOCKED" : "EDIT")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
+            Text("PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
@@ -1907,40 +1882,8 @@ struct ContentView: View {
 
     private var visualControlsMenu: some View {
         Menu {
-            Section("Plotter Box") {
-                Toggle("Show Box", isOn: $plotterViewport.boxEnabled)
-                Toggle("Lock Box", isOn: $plotterViewport.boxLocked)
-
-                Picker("Box Color", selection: $plotterViewport.boxColor) {
-                    ForEach(PlotterViewportBoxColor.allCases) { color in
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(plotterViewportColor(color))
-                                .frame(width: 10, height: 10)
-                            Text(color.title)
-                        }
-                        .tag(color)
-                    }
-                }
-
-                MenuSliderControl(
-                    label: "Box Alpha",
-                    value: $plotterViewport.boxOpacity,
-                    range: 0.05...1.0,
-                    step: 0.01,
-                    display: String(format: "%.2f", plotterViewport.boxOpacity)
-                )
-                MenuSliderControl(
-                    label: "Box Thickness",
-                    value: $plotterViewport.boxStrokeWidth,
-                    range: 1.0...10.0,
-                    step: 0.5,
-                    display: String(format: "%.1f px", plotterViewport.boxStrokeWidth)
-                )
-            }
-
             Section("Overlays") {
-                Toggle("Grid", isOn: $plotterCamera.showGrid)
+                Toggle("Calibrated Grid", isOn: $plotterCamera.showGrid)
                 Toggle("Measurements", isOn: $plotterCamera.showMeasurements)
                 Toggle("Fiducials", isOn: $plotterCamera.fiducialDetectionEnabled)
                 Toggle("Segmentation", isOn: $plotterCamera.segmentationEnabled)
@@ -1986,7 +1929,7 @@ struct ContentView: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .help("Visual overlays, plotter-box appearance, and video filters")
+        .help("Visual overlays, calibrated paper grid, and video filters")
     }
 
     private var drawingTestsMenu: some View {
@@ -2038,7 +1981,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning)
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating || bridge.isRunning)
 
                 Button("Preview Square Overlay") {
                     calibrationStatusText = "TEST square preview"
@@ -2050,7 +1993,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning)
+                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating || bridge.isRunning)
             }
 
             Section("Image Baseline") {
@@ -2083,7 +2026,7 @@ struct ContentView: View {
                     bridge.replayExpectedPath()
                     calibrationStatusText = "TEST expected path replay"
                 }
-                .disabled(bridge.expectedPathSegments.isEmpty)
+                .disabled(bridge.expectedPathSegments.isEmpty || !bridge.hasPaperLock)
                 Button("Clear Test Overlays") {
                     bridge.clearDotTestOverlay()
                     bridge.expectedPathSegments = []
@@ -2118,21 +2061,6 @@ struct ContentView: View {
 
     private var calibrationMenu: some View {
         Menu {
-            Section("Plotter Box") {
-                Button(plotterViewport.boxEnabled ? "Hide Box" : "Show Box") {
-                    plotterViewport.boxEnabled.toggle()
-                    calibrationStatusText = plotterViewport.boxEnabled ? "CAL box visible" : "CAL box hidden"
-                }
-                Button(plotterViewport.boxLocked ? "Unlock Box" : "Lock Box") {
-                    plotterViewport.boxLocked.toggle()
-                    calibrationStatusText = plotterViewport.boxLocked ? "CAL box locked" : "CAL box unlocked"
-                }
-                Button("Reset Box") {
-                    plotterViewport = PlotterViewportSettings()
-                    calibrationStatusText = "CAL box reset"
-                }
-            }
-
             Section("Observation") {
                 Button("Scan Plotter Frame") {
                     calibrationStatusText = "CAL scan: analyzing plotter frame"
@@ -2492,9 +2420,6 @@ struct ContentView: View {
     }
 
     private func resetVisualControls() {
-        plotterViewport.boxOpacity = 0.62
-        plotterViewport.boxStrokeWidth = 2.0
-        plotterViewport.boxColor = .cyan
         plotterViewport.videoFilter = .normal
         plotterOverlay.opacity = 0.38
         plotterCamera.showGrid = true
@@ -2727,126 +2652,6 @@ private struct PlotterViewportTransform<Content: View>: View {
     }
 }
 
-private struct PlotterViewportBoxOverlay: View {
-    let settings: PlotterViewportSettings
-
-    var body: some View {
-        Canvas { context, size in
-            guard settings.boxEnabled else { return }
-
-            let rect = plotterViewportBoxRect(settings: settings, size: size)
-            let opacity = max(0.0, min(1.0, settings.boxOpacity))
-            let color = plotterViewportColor(settings.boxColor)
-            let strokeWidth = max(1.0, min(10.0, settings.boxStrokeWidth))
-            let dimColor = Color.black.opacity(0.12 * opacity)
-            context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: rect.minY)), with: .color(dimColor))
-            context.fill(Path(CGRect(x: 0, y: rect.maxY, width: size.width, height: size.height - rect.maxY)), with: .color(dimColor))
-            context.fill(Path(CGRect(x: 0, y: rect.minY, width: rect.minX, height: rect.height)), with: .color(dimColor))
-            context.fill(Path(CGRect(x: rect.maxX, y: rect.minY, width: size.width - rect.maxX, height: rect.height)), with: .color(dimColor))
-
-            let boxPath = Path(roundedRect: rect, cornerRadius: 3)
-            context.fill(boxPath, with: .color(color.opacity(0.22 * opacity)))
-            context.stroke(
-                boxPath,
-                with: .color(color.opacity(0.52 + 0.45 * opacity)),
-                style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round, dash: settings.boxLocked ? [] : [8, 5])
-            )
-            context.stroke(boxPath, with: .color(.white.opacity(0.36 * opacity)), lineWidth: max(0.8, strokeWidth * 0.28))
-
-            for handle in PlotterFrameHandle.allCases {
-                let point = handle.point(in: rect)
-                let handleRect = CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)
-                context.fill(
-                    Path(roundedRect: handleRect, cornerRadius: 2),
-                    with: .color(settings.boxLocked ? .gray.opacity(0.72) : color.opacity(0.95))
-                )
-                context.stroke(
-                    Path(roundedRect: handleRect, cornerRadius: 2),
-                    with: .color(.black.opacity(0.62)),
-                    lineWidth: max(0.8, strokeWidth * 0.24)
-                )
-            }
-
-            let center = CGPoint(x: rect.midX, y: rect.midY)
-            var cross = Path()
-            cross.move(to: CGPoint(x: center.x - 16, y: center.y))
-            cross.addLine(to: CGPoint(x: center.x + 16, y: center.y))
-            cross.move(to: CGPoint(x: center.x, y: center.y - 16))
-            cross.addLine(to: CGPoint(x: center.x, y: center.y + 16))
-            context.stroke(cross, with: .color(color.opacity(0.52 * opacity)), lineWidth: max(1.0, strokeWidth * 0.50))
-
-            let label = Text(String(format: "PLOTTER BOX %.2f", settings.boxAspectRatio))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(color.opacity(0.92))
-            context.draw(label, at: CGPoint(x: rect.minX + 8, y: rect.minY + 14), anchor: .leading)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-private struct PlotterViewportGestureLayer: View {
-    @Binding var settings: PlotterViewportSettings
-    @State private var activeAction: PlotterViewportDragAction?
-
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 3)
-                        .onChanged { value in
-                            guard settings.boxEnabled, !settings.boxLocked else { return }
-                            let size = geometry.size
-                            let currentRect = plotterViewportBoxRect(settings: settings, size: size)
-                            if activeAction == nil {
-                                activeAction = dragAction(
-                                    startLocation: value.startLocation,
-                                    currentRect: currentRect
-                                )
-                            }
-                            guard let activeAction else { return }
-                            let nextRect: CGRect
-                            switch activeAction {
-                            case .move(let startRect):
-                                nextRect = startRect.offsetBy(
-                                    dx: value.translation.width,
-                                    dy: value.translation.height
-                                )
-                            case .draw(let anchor):
-                                nextRect = CGRect(
-                                    x: min(anchor.x, value.location.x),
-                                    y: min(anchor.y, value.location.y),
-                                    width: abs(value.location.x - anchor.x),
-                                    height: abs(value.location.y - anchor.y)
-                                )
-                            case .resize(let anchor):
-                                nextRect = CGRect(
-                                    x: min(anchor.x, value.location.x),
-                                    y: min(anchor.y, value.location.y),
-                                    width: abs(value.location.x - anchor.x),
-                                    height: abs(value.location.y - anchor.y)
-                                )
-                            }
-                            applyPlotterViewportBox(rect: nextRect, size: size, to: &settings)
-                        }
-                        .onEnded { _ in
-                            activeAction = nil
-                        }
-                )
-        }
-    }
-
-    private func dragAction(startLocation: CGPoint, currentRect: CGRect) -> PlotterViewportDragAction {
-        if let handle = PlotterFrameHandle.nearest(to: startLocation, in: currentRect, threshold: 24) {
-            return .resize(anchor: handle.opposite.point(in: currentRect))
-        }
-        if currentRect.insetBy(dx: -8, dy: -8).contains(startLocation) {
-            return .move(startRect: currentRect)
-        }
-        return .draw(anchor: startLocation)
-    }
-}
-
 private struct ManualFiducialOverlay: View {
     let points: [ManualFiducialPoint]
     let isActive: Bool
@@ -3014,75 +2819,6 @@ private struct ManualPenClickLayer: View {
                         }
                 )
         }
-    }
-}
-
-private enum PlotterViewportDragAction: Equatable {
-    case move(startRect: CGRect)
-    case draw(anchor: CGPoint)
-    case resize(anchor: CGPoint)
-}
-
-private enum PlotterFrameHandle: CaseIterable {
-    case topLeft
-    case top
-    case topRight
-    case right
-    case bottomRight
-    case bottom
-    case bottomLeft
-    case left
-
-    var opposite: PlotterFrameHandle {
-        switch self {
-        case .topLeft:
-            return .bottomRight
-        case .top:
-            return .bottom
-        case .topRight:
-            return .bottomLeft
-        case .right:
-            return .left
-        case .bottomRight:
-            return .topLeft
-        case .bottom:
-            return .top
-        case .bottomLeft:
-            return .topRight
-        case .left:
-            return .right
-        }
-    }
-
-    func point(in rect: CGRect) -> CGPoint {
-        switch self {
-        case .topLeft:
-            return CGPoint(x: rect.minX, y: rect.minY)
-        case .top:
-            return CGPoint(x: rect.midX, y: rect.minY)
-        case .topRight:
-            return CGPoint(x: rect.maxX, y: rect.minY)
-        case .right:
-            return CGPoint(x: rect.maxX, y: rect.midY)
-        case .bottomRight:
-            return CGPoint(x: rect.maxX, y: rect.maxY)
-        case .bottom:
-            return CGPoint(x: rect.midX, y: rect.maxY)
-        case .bottomLeft:
-            return CGPoint(x: rect.minX, y: rect.maxY)
-        case .left:
-            return CGPoint(x: rect.minX, y: rect.midY)
-        }
-    }
-
-    static func nearest(to point: CGPoint, in rect: CGRect, threshold: CGFloat) -> PlotterFrameHandle? {
-        allCases
-            .map { handle in
-                (handle: handle, distance: hypot(handle.point(in: rect).x - point.x, handle.point(in: rect).y - point.y))
-            }
-            .filter { $0.distance <= threshold }
-            .min { $0.distance < $1.distance }?
-            .handle
     }
 }
 
@@ -3423,27 +3159,6 @@ private func faceContourColor(for kind: SegmentKind, index: Int) -> Color {
     }
 }
 
-private func plotterViewportBoxRect(settings: PlotterViewportSettings, size: CGSize) -> CGRect {
-    let safeWidth = max(size.width, 1)
-    let safeHeight = max(size.height, 1)
-    let targetAspect = max(0.1, CGFloat(settings.boxAspectRatio))
-    var width = safeWidth * CGFloat(clampDouble(settings.boxWidthNorm, min: 0.05, max: 1.0))
-    var height = width / targetAspect
-    let maxHeight = safeHeight * 0.98
-    if height > maxHeight {
-        height = maxHeight
-        width = height * targetAspect
-    }
-    width = min(width, safeWidth * 0.98)
-    height = min(height, safeHeight * 0.98)
-
-    let centerX = safeWidth * CGFloat(clampDouble(settings.boxCenterXNorm, min: 0.0, max: 1.0))
-    let centerY = safeHeight * CGFloat(clampDouble(settings.boxCenterYNorm, min: 0.0, max: 1.0))
-    let originX = min(safeWidth - width, max(0, centerX - width / 2))
-    let originY = min(safeHeight - height, max(0, centerY - height / 2))
-    return CGRect(x: originX, y: originY, width: width, height: height)
-}
-
 private func plotterCameraNormFromViewPoint(
     _ point: CGPoint,
     viewSize: CGSize,
@@ -3530,30 +3245,6 @@ private func videoDisplayRect(
     return CGRect(origin: offset, size: displaySize)
 }
 
-private func applyPlotterViewportBox(
-    rect proposedRect: CGRect,
-    size: CGSize,
-    to settings: inout PlotterViewportSettings
-) {
-    let safeWidth = max(size.width, 1)
-    let safeHeight = max(size.height, 1)
-    let minDimension: CGFloat = 26
-    let standardized = proposedRect.standardized
-    guard standardized.width >= minDimension || standardized.height >= minDimension else { return }
-
-    let width = min(max(standardized.width, minDimension), safeWidth * 0.98)
-    let height = min(max(standardized.height, minDimension), safeHeight * 0.98)
-    let originX = min(safeWidth - width, max(0, standardized.midX - width / 2))
-    let originY = min(safeHeight - height, max(0, standardized.midY - height / 2))
-    let rect = CGRect(x: originX, y: originY, width: width, height: height)
-
-    settings.boxEnabled = true
-    settings.boxWidthNorm = clampDouble(Double(rect.width / safeWidth), min: 0.05, max: 1.0)
-    settings.boxAspectRatio = clampDouble(Double(rect.width / max(rect.height, 1)), min: 0.2, max: 5.0)
-    settings.boxCenterXNorm = clampDouble(Double(rect.midX / safeWidth), min: 0.0, max: 1.0)
-    settings.boxCenterYNorm = clampDouble(Double(rect.midY / safeHeight), min: 0.0, max: 1.0)
-}
-
 private func rotationFitScale(size: CGSize, degrees: Double) -> CGFloat {
     let normalized = Int(abs(degrees).rounded()) % 180
     guard normalized == 90 else { return 1.0 }
@@ -3578,23 +3269,6 @@ private func clampDouble(_ value: Double, min minimum: Double, max maximum: Doub
 
 private func normalizedDistance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
     hypot(lhs.x - rhs.x, lhs.y - rhs.y)
-}
-
-private func plotterViewportColor(_ color: PlotterViewportBoxColor) -> Color {
-    switch color {
-    case .cyan:
-        return Color(red: 0.10, green: 0.88, blue: 1.0)
-    case .yellow:
-        return Color(red: 1.0, green: 0.86, blue: 0.12)
-    case .magenta:
-        return Color(red: 1.0, green: 0.18, blue: 0.72)
-    case .green:
-        return Color(red: 0.20, green: 1.0, blue: 0.40)
-    case .white:
-        return .white
-    case .red:
-        return Color(red: 1.0, green: 0.18, blue: 0.18)
-    }
 }
 
 private struct PlotterVideoFilterModifier: ViewModifier {

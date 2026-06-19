@@ -12,10 +12,7 @@ struct MeasurementOverlay: View {
     let dotTestPreviewPoints: [DotTestPreviewPoint]
     let paperTransform: PaperRegistrationSnapshot?
     let plotterOverlay: PlotterOverlaySettings
-    let drawingFrame: DrawingFrameSettings
     let pathRevealProgress: Double
-    let workspaceXMm: Double
-    let workspaceYMm: Double
     let videoSize: CGSize
     let previewMode: CameraPreviewMode
     let showGrid: Bool
@@ -25,20 +22,13 @@ struct MeasurementOverlay: View {
         Canvas { context, size in
             let mapper = OverlayMapper(viewSize: size, videoSize: videoSize, previewMode: previewMode)
 
-            if showGrid {
-                drawCameraCoordinateGrid(mapper: mapper, in: &context)
-                if let paperTransform {
+            if let paperTransform {
+                if showGrid {
                     drawPaperCoordinateGrid(paperTransform, mapper: mapper, in: &context)
                 }
-                drawCenterReticle(mapper: mapper, in: &context)
+                drawPaperDrawingRegion(paperTransform, mapper: mapper, in: &context)
+                drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
             }
-
-            let plotterMapper = PlotterPlaneMapper(
-                mapper: mapper,
-                aspectRatio: workspaceXMm / max(workspaceYMm, 1),
-                settings: plotterOverlay
-            )
-            drawExpectedPath(mapper: plotterMapper, in: &context)
 
             if let paperRegistration {
                 draw(paperRegistration: paperRegistration, mapper: mapper, in: &context)
@@ -67,52 +57,6 @@ struct MeasurementOverlay: View {
             }
         }
         .allowsHitTesting(false)
-    }
-
-    private func drawCameraCoordinateGrid(mapper: OverlayMapper, in context: inout GraphicsContext) {
-        let minorValues = stride(from: 0.0, through: 1.000_1, by: 0.1).map { CGFloat(min($0, 1.0)) }
-        var minorGrid = Path()
-        for value in minorValues {
-            minorGrid.move(to: mapper.point(CGPoint(x: value, y: 0)))
-            minorGrid.addLine(to: mapper.point(CGPoint(x: value, y: 1)))
-            minorGrid.move(to: mapper.point(CGPoint(x: 0, y: value)))
-            minorGrid.addLine(to: mapper.point(CGPoint(x: 1, y: value)))
-        }
-        context.stroke(minorGrid, with: .color(.black.opacity(0.48)), lineWidth: 1.5)
-        context.stroke(minorGrid, with: .color(.white.opacity(0.13)), lineWidth: 0.7)
-
-        let majorValues: [CGFloat] = [0.0, 0.25, 0.5, 0.75, 1.0]
-        var majorGrid = Path()
-        for value in majorValues {
-            majorGrid.move(to: mapper.point(CGPoint(x: value, y: 0)))
-            majorGrid.addLine(to: mapper.point(CGPoint(x: value, y: 1)))
-            majorGrid.move(to: mapper.point(CGPoint(x: 0, y: value)))
-            majorGrid.addLine(to: mapper.point(CGPoint(x: 1, y: value)))
-        }
-        context.stroke(majorGrid, with: .color(.black.opacity(0.62)), lineWidth: 3.0)
-        context.stroke(majorGrid, with: .color(.cyan.opacity(0.44)), lineWidth: 1.0)
-
-        guard showMeasurements else { return }
-
-        for value in majorValues {
-            let xLabel = Text(String(format: "cam x%.2f", Double(value)))
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.cyan.opacity(0.86))
-            context.draw(
-                xLabel,
-                at: mapper.point(CGPoint(x: value, y: 0.015)),
-                anchor: .bottom
-            )
-
-            let yLabel = Text(String(format: "y%.2f", Double(value)))
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.cyan.opacity(0.86))
-            context.draw(
-                yLabel,
-                at: mapper.point(CGPoint(x: 0.012, y: value)),
-                anchor: .leading
-            )
-        }
     }
 
     private func drawPaperCoordinateGrid(
@@ -156,128 +100,79 @@ struct MeasurementOverlay: View {
         guard showMeasurements else { return }
 
         if let origin = paperToCameraPoint(CGPoint(x: 0, y: 0), registration: registration) {
-            let label = Text(String(format: "PAPER mm grid %.0fmm", stepMm))
+            let label = Text(String(format: "CAL mm grid %.0fmm", stepMm))
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(color.opacity(0.96))
             context.draw(label, at: mapper.point(origin), anchor: .bottomLeading)
         }
     }
 
-    private func drawCenterReticle(mapper: OverlayMapper, in context: inout GraphicsContext) {
-        let center = mapper.point(CGPoint(x: 0.5, y: 0.5))
-        var reticle = Path()
-        reticle.move(to: CGPoint(x: center.x - 34, y: center.y))
-        reticle.addLine(to: CGPoint(x: center.x - 10, y: center.y))
-        reticle.move(to: CGPoint(x: center.x + 10, y: center.y))
-        reticle.addLine(to: CGPoint(x: center.x + 34, y: center.y))
-        reticle.move(to: CGPoint(x: center.x, y: center.y - 34))
-        reticle.addLine(to: CGPoint(x: center.x, y: center.y - 10))
-        reticle.move(to: CGPoint(x: center.x, y: center.y + 10))
-        reticle.addLine(to: CGPoint(x: center.x, y: center.y + 34))
-
-        context.stroke(reticle, with: .color(.cyan.opacity(0.52)), lineWidth: 1.2)
-        context.stroke(Path(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)),
-                       with: .color(.yellow.opacity(0.72)),
-                       lineWidth: 1.1)
-    }
-
-    private func drawPlotterPlane(mapper: PlotterPlaneMapper, in context: inout GraphicsContext) {
-        guard plotterOverlay.enabled else { return }
-
-        let opacity = plotterOverlay.opacity
-        let bed = mapper.path(for: [
+    private func drawPaperDrawingRegion(
+        _ registration: PaperRegistrationSnapshot,
+        mapper: OverlayMapper,
+        in context: inout GraphicsContext
+    ) {
+        let paperCorners = [
             CGPoint(x: 0, y: 0),
             CGPoint(x: 1, y: 0),
             CGPoint(x: 1, y: 1),
             CGPoint(x: 0, y: 1),
-        ], closed: true)
-
-        context.fill(bed, with: .color(.cyan.opacity(0.28 * opacity)))
-        context.stroke(bed, with: .color(.cyan.opacity(0.94 * opacity)), lineWidth: 2.2)
-
-        var grid = Path()
-        for column in 1..<8 {
-            let x = CGFloat(column) / 8.0
-            grid.move(to: mapper.point(CGPoint(x: x, y: 0)))
-            grid.addLine(to: mapper.point(CGPoint(x: x, y: 1)))
-        }
-        for row in 1..<4 {
-            let y = CGFloat(row) / 4.0
-            grid.move(to: mapper.point(CGPoint(x: 0, y: y)))
-            grid.addLine(to: mapper.point(CGPoint(x: 1, y: y)))
-        }
-        context.stroke(grid, with: .color(.cyan.opacity(0.34 * opacity)), lineWidth: 0.9)
-
-        var rails = Path()
-        rails.move(to: mapper.point(CGPoint(x: 0, y: 1)))
-        rails.addLine(to: mapper.point(CGPoint(x: 1, y: 1)))
-        rails.move(to: mapper.point(CGPoint(x: 0, y: 0)))
-        rails.addLine(to: mapper.point(CGPoint(x: 1, y: 0)))
-        context.stroke(rails, with: .color(.white.opacity(0.32 * opacity)), lineWidth: 2.2)
-
-        let pen = virtualPenPoint
-        var gantry = Path()
-        gantry.move(to: mapper.point(CGPoint(x: pen.x, y: 0)))
-        gantry.addLine(to: mapper.point(CGPoint(x: pen.x, y: 1)))
-        context.stroke(gantry, with: .color(.mint.opacity(0.58 * opacity)), lineWidth: 1.5)
-
-        let penPoint = mapper.point(pen)
-        context.fill(
-            Path(ellipseIn: CGRect(x: penPoint.x - 5, y: penPoint.y - 5, width: 10, height: 10)),
-            with: .color(.yellow.opacity(0.92 * opacity))
-        )
-        context.stroke(
-            Path(ellipseIn: CGRect(x: penPoint.x - 12, y: penPoint.y - 12, width: 24, height: 24)),
-            with: .color(.yellow.opacity(0.45 * opacity)),
-            lineWidth: 1.2
-        )
-
-        guard showMeasurements else { return }
-
-        let label = Text(String(format: "%.0f x %.0f mm", workspaceXMm, workspaceYMm))
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(.cyan.opacity(0.86))
-        context.draw(label, at: mapper.point(CGPoint(x: 0, y: 1)), anchor: .bottomLeading)
-    }
-
-    private func drawDrawingFrame(mapper: PlotterPlaneMapper, in context: inout GraphicsContext) {
-        guard plotterOverlay.enabled else { return }
-
-        let opacity = plotterOverlay.opacity
-        let rect = drawingFrame.rect(workspaceXMm: workspaceXMm, workspaceYMm: workspaceYMm)
-        let corners = [
-            CGPoint(x: rect.minX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.maxY),
-            CGPoint(x: rect.minX, y: rect.maxY),
         ]
-        let framePath = mapper.path(for: corners, closed: true)
+        let cameraCorners = paperCorners.compactMap { paperToCameraPoint($0, registration: registration) }
+        guard cameraCorners.count == paperCorners.count else { return }
 
-        context.fill(framePath, with: .color(.yellow.opacity(0.10 * opacity)))
+        var region = Path()
+        region.move(to: mapper.point(cameraCorners[0]))
+        for corner in cameraCorners.dropFirst() {
+            region.addLine(to: mapper.point(corner))
+        }
+        region.closeSubpath()
+
+        let color = Color(red: 0.12, green: 0.70, blue: 1.0)
+        context.fill(region, with: .color(color.opacity(0.08)))
         context.stroke(
-            framePath,
-            with: .color(.yellow.opacity(0.95 * opacity)),
-            style: StrokeStyle(lineWidth: 2.0, dash: [10, 5])
+            region,
+            with: .color(.black.opacity(0.86)),
+            style: StrokeStyle(lineWidth: 6.0, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            region,
+            with: .color(color.opacity(0.96)),
+            style: StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round)
         )
 
-        var cross = Path()
-        cross.move(to: mapper.point(CGPoint(x: rect.midX, y: rect.minY)))
-        cross.addLine(to: mapper.point(CGPoint(x: rect.midX, y: rect.maxY)))
-        cross.move(to: mapper.point(CGPoint(x: rect.minX, y: rect.midY)))
-        cross.addLine(to: mapper.point(CGPoint(x: rect.maxX, y: rect.midY)))
-        context.stroke(cross, with: .color(.yellow.opacity(0.28 * opacity)), lineWidth: 0.9)
+        for cameraCorner in cameraCorners {
+            let center = mapper.point(cameraCorner)
+            context.fill(
+                Path(ellipseIn: CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)),
+                with: .color(color.opacity(0.95))
+            )
+            context.stroke(
+                Path(ellipseIn: CGRect(x: center.x - 8, y: center.y - 8, width: 16, height: 16)),
+                with: .color(.black.opacity(0.76)),
+                lineWidth: 2.0
+            )
+        }
 
         guard showMeasurements else { return }
 
-        let widthMm = rect.width * workspaceXMm
-        let heightMm = rect.height * workspaceYMm
-        let label = Text(String(format: "FRAME %.0f x %.0f mm", widthMm, heightMm))
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(.yellow.opacity(0.88))
-        context.draw(label, at: mapper.point(CGPoint(x: rect.minX, y: rect.maxY)), anchor: .bottomLeading)
+        let label = Text(
+            String(
+                format: "DRAWING REGION %.0f x %.0f mm",
+                registration.paperSizeMm.width,
+                registration.paperSizeMm.height
+            )
+        )
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundStyle(color.opacity(0.98))
+        context.draw(label, at: mapper.point(cameraCorners[3]), anchor: .bottomLeading)
     }
 
-    private func drawExpectedPath(mapper: PlotterPlaneMapper, in context: inout GraphicsContext) {
+    private func drawExpectedPath(
+        registration: PaperRegistrationSnapshot,
+        mapper: OverlayMapper,
+        in context: inout GraphicsContext
+    ) {
         guard plotterOverlay.enabled else { return }
         guard !expectedPathSegments.isEmpty else { return }
 
@@ -295,8 +190,13 @@ struct MeasurementOverlay: View {
             let remaining = revealLength - consumedLength
             let segmentFraction = min(1.0, remaining / max(segment.lengthMm, 0.000_001))
             let visibleEnd = interpolate(start: start, end: end, fraction: segmentFraction)
-            path.move(to: mapper.point(start))
-            path.addLine(to: mapper.point(visibleEnd))
+            guard let cameraStart = paperToCameraPoint(start, registration: registration),
+                  let cameraEnd = paperToCameraPoint(visibleEnd, registration: registration) else {
+                consumedLength += segment.lengthMm
+                continue
+            }
+            path.move(to: mapper.point(cameraStart))
+            path.addLine(to: mapper.point(cameraEnd))
             consumedLength += segment.lengthMm
         }
 
@@ -311,8 +211,12 @@ struct MeasurementOverlay: View {
                   let end = normalizedPoint(segment.endNorm) else {
                 continue
             }
-            let startPoint = mapper.point(start)
-            let endPoint = mapper.point(end)
+            guard let cameraStart = paperToCameraPoint(start, registration: registration),
+                  let cameraEnd = paperToCameraPoint(end, registration: registration) else {
+                continue
+            }
+            let startPoint = mapper.point(cameraStart)
+            let endPoint = mapper.point(cameraEnd)
             context.fill(
                 Path(ellipseIn: CGRect(x: startPoint.x - 3, y: startPoint.y - 3, width: 6, height: 6)),
                 with: .color(.cyan.opacity(0.9 * plotterOverlay.opacity))
@@ -324,14 +228,15 @@ struct MeasurementOverlay: View {
         }
 
         guard showMeasurements, let first = expectedPathSegments.first,
-              let start = normalizedPoint(first.startNorm) else {
+              let start = normalizedPoint(first.startNorm),
+              let cameraStart = paperToCameraPoint(start, registration: registration) else {
             return
         }
 
         let label = Text("EXPECTED")
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(.yellow.opacity(0.9 * plotterOverlay.opacity))
-        let point = mapper.point(start)
+        let point = mapper.point(cameraStart)
         context.draw(label, at: CGPoint(x: point.x + 8, y: point.y - 10), anchor: .leading)
     }
 
@@ -415,32 +320,6 @@ struct MeasurementOverlay: View {
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(pathColor.opacity(0.96))
         context.draw(label, at: CGPoint(x: anchor.x + 14, y: anchor.y + 14), anchor: .leading)
-    }
-
-    private var virtualPenPoint: CGPoint {
-        guard !expectedPathSegments.isEmpty else {
-            return CGPoint(x: 0.5, y: 0.5)
-        }
-
-        let revealLength = revealedLengthMm
-        var consumedLength = 0.0
-        for segment in expectedPathSegments {
-            guard let start = normalizedPoint(segment.startNorm),
-                  let end = normalizedPoint(segment.endNorm) else {
-                continue
-            }
-            if revealLength <= consumedLength + segment.lengthMm {
-                let fraction = (revealLength - consumedLength) / max(segment.lengthMm, 0.000_001)
-                return interpolate(start: start, end: end, fraction: fraction)
-            }
-            consumedLength += segment.lengthMm
-        }
-
-        guard let last = expectedPathSegments.last,
-              let end = normalizedPoint(last.endNorm) else {
-            return CGPoint(x: 0.5, y: 0.5)
-        }
-        return end
     }
 
     private var revealedLengthMm: Double {
@@ -739,61 +618,6 @@ private struct OverlayMapper {
             width: normalized.width * displaySize.width,
             height: normalized.height * displaySize.height
         )
-    }
-}
-
-private struct PlotterPlaneMapper {
-    private let center: CGPoint
-    private let width: CGFloat
-    private let height: CGFloat
-    private let rotationRadians: CGFloat
-
-    init(mapper: OverlayMapper, aspectRatio: Double, settings: PlotterOverlaySettings) {
-        let displaySize = mapper.displaySize
-        let displayCenter = CGPoint(
-            x: mapper.offset.x + displaySize.width / 2,
-            y: mapper.offset.y + displaySize.height / 2
-        )
-        let targetAspect = max(CGFloat(aspectRatio), 0.1)
-        let maxWidth = displaySize.width * 0.84
-        let maxHeight = displaySize.height * 0.72
-        let fitWidth = min(maxWidth, maxHeight * targetAspect)
-        let fitHeight = fitWidth / targetAspect
-        let clampedScale = max(0.15, min(1.6, CGFloat(settings.scale)))
-
-        center = CGPoint(
-            x: displayCenter.x + CGFloat(settings.offsetX) * displaySize.width,
-            y: displayCenter.y + CGFloat(settings.offsetY) * displaySize.height
-        )
-        width = fitWidth * clampedScale
-        height = fitHeight * clampedScale
-        rotationRadians = CGFloat(settings.rotationDegrees) * .pi / 180.0
-    }
-
-    func point(_ normalized: CGPoint) -> CGPoint {
-        let local = CGPoint(
-            x: (normalized.x - 0.5) * width,
-            y: (0.5 - normalized.y) * height
-        )
-        let cosTheta = cos(rotationRadians)
-        let sinTheta = sin(rotationRadians)
-        return CGPoint(
-            x: center.x + local.x * cosTheta - local.y * sinTheta,
-            y: center.y + local.x * sinTheta + local.y * cosTheta
-        )
-    }
-
-    func path(for normalizedPoints: [CGPoint], closed: Bool) -> Path {
-        var path = Path()
-        guard let first = normalizedPoints.first else { return path }
-        path.move(to: point(first))
-        for normalized in normalizedPoints.dropFirst() {
-            path.addLine(to: point(normalized))
-        }
-        if closed {
-            path.closeSubpath()
-        }
-        return path
     }
 }
 
