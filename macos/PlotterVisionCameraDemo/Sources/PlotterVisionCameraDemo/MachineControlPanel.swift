@@ -99,27 +99,30 @@ struct MachineControlPanel: View {
     }
 
     private var hardwareControls: some View {
-        HStack(spacing: 9) {
+        VStack(spacing: 9) {
             commandButton(
-                systemName: "link",
-                title: "Connect",
-                disabled: !bridge.canConnectHardware
+                systemName: bridge.plotterConnectionSystemName,
+                title: bridge.plotterConnectionTitle,
+                disabled: !bridge.canUsePlotterConnectionControl,
+                isActive: bridge.isLiveMotionMode
             ) {
-                Task { await bridge.reconnectMachine() }
+                Task { await bridge.connectPlotter() }
             }
-            commandButton(
-                systemName: "bolt.fill",
-                title: "Arm Live",
-                disabled: !bridge.canArmHardware
-            ) {
-                Task { await bridge.armHardware() }
-            }
-            commandButton(
-                systemName: "shield",
-                title: "Disarm",
-                disabled: !bridge.canDisarmHardware
-            ) {
-                Task { await bridge.disarmHardware() }
+            HStack(spacing: 9) {
+                commandButton(
+                    systemName: "link",
+                    title: "Probe",
+                    disabled: !bridge.canConnectHardware
+                ) {
+                    Task { await bridge.reconnectMachine() }
+                }
+                commandButton(
+                    systemName: "shield",
+                    title: "Dry Run",
+                    disabled: !bridge.canDisarmHardware
+                ) {
+                    Task { await bridge.disarmHardware() }
+                }
             }
         }
     }
@@ -253,20 +256,29 @@ struct MachineControlPanel: View {
         systemName: String,
         title: String,
         disabled: Bool? = nil,
+        isActive: Bool = false,
         isDestructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         let isDisabled = disabled ?? commandDisabled
-        let fillColor = isDestructive
+        let fillColor = isActive
+            ? Color.green.opacity(0.28)
+            : isDestructive
             ? Color.red.opacity(isDisabled ? 0.08 : 0.24)
             : Color.white.opacity(isDisabled ? 0.06 : 0.12)
-        let strokeColor = isDestructive
+        let strokeColor = isActive
+            ? Color.green.opacity(0.54)
+            : isDestructive
             ? Color.red.opacity(isDisabled ? 0.14 : 0.38)
             : Color.white.opacity(0.14)
         return Button(action: action) {
             Label(title, systemImage: systemName)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isDisabled ? .white.opacity(0.35) : .white.opacity(0.9))
+                .foregroundStyle(
+                    isDisabled
+                        ? .white.opacity(0.35)
+                        : isActive ? .green.opacity(0.96) : .white.opacity(0.9)
+                )
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(fillColor)

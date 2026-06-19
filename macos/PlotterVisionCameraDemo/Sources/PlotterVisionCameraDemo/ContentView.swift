@@ -1238,6 +1238,8 @@ struct ContentView: View {
                     startVisibleCameras()
                 }
 
+                plotterConnectionButton
+
                 controlButton(
                     systemName: plotterViewport.boxEnabled ? "rectangle.inset.filled" : "rectangle",
                     label: "Box",
@@ -1349,6 +1351,60 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
+    }
+
+    private var plotterConnectionButton: some View {
+        let isActive = bridge.isLiveMotionMode
+        let isDisabled = !bridge.canUsePlotterConnectionControl
+        let fillColor = isActive
+            ? Color.green.opacity(0.30)
+            : Color.white.opacity(isDisabled ? 0.06 : 0.14)
+        let strokeColor = isActive
+            ? Color.green.opacity(0.58)
+            : Color.white.opacity(isDisabled ? 0.12 : 0.22)
+
+        return Button {
+            Task { await bridge.connectPlotter() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: bridge.plotterConnectionSystemName)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(
+                        isDisabled
+                            ? .white.opacity(0.34)
+                            : isActive ? .green.opacity(0.96) : .white.opacity(0.92)
+                    )
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(bridge.plotterConnectionTitle.uppercased())
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(isDisabled ? .white.opacity(0.36) : .white.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Text(bridge.plotterConnectionSubtitle.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(
+                            isActive
+                                ? .green.opacity(0.88)
+                                : isDisabled ? .white.opacity(0.30) : .orange.opacity(0.86)
+                        )
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: 138, height: 38)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(fillColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(strokeColor, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .help(bridge.plotterConnectionHelp)
     }
 
     private var calibrationWizardOverlay: some View {

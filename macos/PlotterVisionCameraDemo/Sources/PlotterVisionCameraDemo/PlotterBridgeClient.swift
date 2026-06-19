@@ -664,8 +664,46 @@ final class PlotterBridgeModel: ObservableObject {
         isOnline && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
     }
 
+    var canUsePlotterConnectionControl: Bool {
+        isLiveMotionMode || canArmHardware
+    }
+
     var canDisarmHardware: Bool {
         isOnline && !isDryRun && !isRunning && !isMachineBusy
+    }
+
+    var plotterConnectionTitle: String {
+        if isRunning || isMachineBusy {
+            return activeAction == "arm" ? "Connecting" : "Busy"
+        }
+        if !isOnline { return "Bridge Offline" }
+        if isMockBridge { return "Preview Only" }
+        if isLiveMotionMode { return "Connected to Plotter" }
+        return "Connect to Plotter"
+    }
+
+    var plotterConnectionSubtitle: String {
+        if isLiveMotionMode { return "Live" }
+        if !isOnline { return "Offline" }
+        if isMockBridge { return "Mock" }
+        if hasControllerPort { return "Dry Run" }
+        return "Dry Run"
+    }
+
+    var plotterConnectionSystemName: String {
+        if isRunning || isMachineBusy { return "hourglass" }
+        if !isOnline { return "bolt.slash" }
+        if isMockBridge { return "eye" }
+        if isLiveMotionMode { return "checkmark.seal.fill" }
+        return "cable.connector"
+    }
+
+    var plotterConnectionHelp: String {
+        if !isOnline { return "Bridge is offline; start the Plotter bridge before connecting." }
+        if isMockBridge { return "Mock preview bridge cannot connect to physical plotter hardware." }
+        if isLiveMotionMode { return "Connected to plotter. Machine controls are live-gated." }
+        if isRunning || isMachineBusy { return "Machine is busy; connection change is blocked." }
+        return "Connect to the physical plotter and leave dry-run mode. This probes status but does not move, home, unlock, or actuate the pen."
     }
 
     var hasPaperLock: Bool {
@@ -864,6 +902,14 @@ final class PlotterBridgeModel: ObservableObject {
 
     func armHardware() async {
         await setHardwareArmed(true)
+    }
+
+    func connectPlotter() async {
+        guard !isLiveMotionMode else {
+            statusText = "Plotter already connected"
+            return
+        }
+        await armHardware()
     }
 
     func disarmHardware() async {
