@@ -3,19 +3,30 @@
 Mac-local control and calibration foundation for one physical machine: a 2-axis servo pen plotter
 driven by an OpenBuilds BlackBox X32 controller running grblHAL-compatible firmware.
 
-The first goal is not a polished app. The first goal is to safely interrogate the controller over
-USB serial, capture real transcripts, and build a cautious core that later motion, calibration, and
-UI work must go through.
+The project is still safety-first: interrogate the controller over USB serial, capture real
+transcripts, and route motion, calibration, and UI work through a cautious core. The current goal is
+to make the fixed-camera operator workflow real enough to prove geometry before expanding into
+larger drawing ingestion.
 
 ## Current Status
 
-Phase 0 is implemented as a minimal, runnable `plotterctl` CLI:
+The active system has three canonical surfaces:
 
-- `plotterctl ports`
-- `plotterctl probe --mock`
-- `plotterctl snapshot --mock --out artifacts/mock_snapshot.json`
-- `plotterctl probe --port /dev/cu.usbmodemXXXX`
-- `plotterctl snapshot --port /dev/cu.usbmodemXXXX --out artifacts/controller_snapshot.json`
+- `plotterctl`: the root CLI for passive probes, guarded setup operations, and launching the bridge.
+- `plotter_vision.bridge`: the local HTTP bridge that owns machine actions, dry-run/live gates,
+  paper registration, dot-test previews, and drawing execution.
+- `macos/PlotterVisionCameraDemo`: the native operator surface. It is a bridge client, not a serial
+  controller owner.
+
+Implemented vertical slices now include:
+
+- passive controller interrogation and parsed snapshots;
+- guarded machine actions through typed bridge requests and responses;
+- paper homography registration from manual or detected fiducials;
+- preview-safe shape, raster, and dot-test planning with command-stream simulation;
+- live-gated motion controls in the macOS app, with controller state and safety gates visible.
+
+The original passive probe remains the safest first hardware contact:
 
 The probe sends only:
 

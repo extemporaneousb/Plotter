@@ -425,46 +425,19 @@ final class PlotterBridgeClient {
     }
 
     func health() async throws -> BridgeHealthResponse {
-        let url = baseURL.appendingPathComponent("health")
-        let (data, response) = try await URLSession.shared.data(from: url)
-        try validate(response: response, data: data)
-        return try decoder.decode(BridgeHealthResponse.self, from: data)
+        try await get(path: "health")
     }
 
     func drawShape(_ request: BridgeDemoRequest) async throws -> BridgeDemoResponse {
-        let url = baseURL.appendingPathComponent("draw/shape")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(BridgeDemoResponse.self, from: data)
+        try await post(path: "draw/shape", request: request)
     }
 
     func previewShape(_ request: BridgeDemoRequest) async throws -> BridgeDemoResponse {
-        let url = baseURL.appendingPathComponent("draw/shape/preview")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(BridgeDemoResponse.self, from: data)
+        try await post(path: "draw/shape/preview", request: request)
     }
 
     func drawFaceRaster(_ request: BridgeFaceRasterDrawRequest) async throws -> BridgeFaceRasterDrawResponse {
-        let url = baseURL.appendingPathComponent("draw/face")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(BridgeFaceRasterDrawResponse.self, from: data)
+        try await post(path: "draw/face", request: request)
     }
 
     func previewImageShape(_ request: BridgeImageShapePreviewRequest) async throws -> BridgeImageShapePreviewResponse {
@@ -480,27 +453,11 @@ final class PlotterBridgeClient {
     }
 
     func startCalibration(_ request: CalibrationStartRequest) async throws -> CalibrationSessionResponse {
-        let url = baseURL.appendingPathComponent("calibration/start")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(CalibrationSessionResponse.self, from: data)
+        try await post(path: "calibration/start", request: request)
     }
 
     func registerPaper(_ request: PaperRegistrationRequest) async throws -> PaperRegistrationResponse {
-        let url = baseURL.appendingPathComponent("paper/register")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(PaperRegistrationResponse.self, from: data)
+        try await post(path: "paper/register", request: request)
     }
 
     func paperStatus() async throws -> PaperRegistrationResponse {
@@ -517,15 +474,7 @@ final class PlotterBridgeClient {
     }
 
     func previewDotTest(_ request: DotTestPreviewRequest) async throws -> DotTestPreviewResponse {
-        let url = baseURL.appendingPathComponent("dot-test/preview")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try encoder.encode(request)
-
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decoder.decode(DotTestPreviewResponse.self, from: data)
+        try await post(path: "dot-test/preview", request: request)
     }
 
     func runDotTest(_ request: DotTestRunRequest) async throws -> MachineCommandResponse {
@@ -533,10 +482,7 @@ final class PlotterBridgeClient {
     }
 
     func machineStatus() async throws -> MachineStatusResponse {
-        let url = baseURL.appendingPathComponent("machine/status")
-        let (data, response) = try await URLSession.shared.data(from: url)
-        try validate(response: response, data: data)
-        return try decoder.decode(MachineStatusResponse.self, from: data)
+        try await get(path: "machine/status")
     }
 
     func arm(_ request: MachineArmRequest) async throws -> MachineCommandResponse {
@@ -599,6 +545,20 @@ final class PlotterBridgeClient {
         path: String,
         request: Request
     ) async throws -> MachineCommandResponse {
+        try await post(path: path, request: request)
+    }
+
+    private func get<Response: Decodable>(path: String) async throws -> Response {
+        let url = baseURL.appendingPathComponent(path)
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try validate(response: response, data: data)
+        return try decoder.decode(Response.self, from: data)
+    }
+
+    private func post<Request: Encodable, Response: Decodable>(
+        path: String,
+        request: Request
+    ) async throws -> Response {
         let url = baseURL.appendingPathComponent(path)
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
@@ -607,7 +567,7 @@ final class PlotterBridgeClient {
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         try validate(response: response, data: data)
-        return try decoder.decode(MachineCommandResponse.self, from: data)
+        return try decoder.decode(Response.self, from: data)
     }
 
     private func validate(response: URLResponse, data: Data) throws {

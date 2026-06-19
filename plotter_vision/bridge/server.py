@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
 from threading import Lock
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field, ValidationError
@@ -362,66 +362,64 @@ class CalibrationMarkPlanResponse(BaseModel):
     error: str | None = None
 
 
-class MachineJogRequest(BaseModel):
-    axis: str
-    distance_mm: float
-    feed_mm_min: float = 500.0
+class MachineActionRequest(BaseModel):
     request_id: str | None = None
 
 
-class MachineRelativeMoveRequest(BaseModel):
+class MachineJogRequest(MachineActionRequest):
+    axis: str
+    distance_mm: float
+    feed_mm_min: float = 500.0
+
+
+class MachineRelativeMoveRequest(MachineActionRequest):
     x_mm: float = 0.0
     y_mm: float = 0.0
     feed_mm_min: float = 300.0
     ensure_pen_up: bool = True
-    request_id: str | None = None
 
 
-class MachineRelativeMarkRequest(BaseModel):
+class MachineRelativeMarkRequest(MachineActionRequest):
     mark_size_mm: float = 6.0
     draw_feed_mm_min: float = 120.0
     travel_feed_mm_min: float = 300.0
-    request_id: str | None = None
 
 
-class MachineHomeRequest(BaseModel):
+class MachineHomeRequest(MachineActionRequest):
     center_after: bool = True
     center_feed_mm_min: float = 500.0
-    request_id: str | None = None
 
 
-class MachineCenterRequest(BaseModel):
+class MachineCenterRequest(MachineActionRequest):
     feed_mm_min: float = 500.0
-    request_id: str | None = None
 
 
-class MachinePenRequest(BaseModel):
-    request_id: str | None = None
+class MachinePenRequest(MachineActionRequest):
+    pass
 
 
-class MachineDotMarkRequest(BaseModel):
-    request_id: str | None = None
+class MachineDotMarkRequest(MachineActionRequest):
+    pass
 
 
-class MachineStopRequest(BaseModel):
-    request_id: str | None = None
+class MachineStopRequest(MachineActionRequest):
+    pass
 
 
-class MachineReconnectRequest(BaseModel):
+class MachineReconnectRequest(MachineActionRequest):
     controller_port: str | None = None
     auto_connect: bool = True
-    request_id: str | None = None
 
 
-class MachineResumeRequest(BaseModel):
-    request_id: str | None = None
+class MachineResumeRequest(MachineActionRequest):
+    pass
 
 
-class MachineUnlockRequest(BaseModel):
-    request_id: str | None = None
+class MachineUnlockRequest(MachineActionRequest):
+    pass
 
 
-class MachineArmRequest(BaseModel):
+class MachineArmRequest(MachineActionRequest):
     live: bool = True
     controller_port: str | None = None
     auto_connect: bool = True
@@ -429,7 +427,6 @@ class MachineArmRequest(BaseModel):
     arm_pen: bool = True
     arm_homing: bool = True
     arm_unlock: bool = True
-    request_id: str | None = None
 
 
 class AxisModelTrustSample(BaseModel):
@@ -440,7 +437,7 @@ class AxisModelTrustSample(BaseModel):
     observed_distance_mm: float
 
 
-class AxisModelTrustRequest(BaseModel):
+class AxisModelTrustRequest(MachineActionRequest):
     source: str = "green_cap_visual_probe"
     sample_count: int
     rms_residual_mm: float
@@ -448,7 +445,6 @@ class AxisModelTrustRequest(BaseModel):
     min_observed_distance_mm: float
     command_distance_mm: float
     samples: list[AxisModelTrustSample] = Field(default_factory=list)
-    request_id: str | None = None
 
 
 class MachineCommandResponse(BaseModel):
@@ -3176,6 +3172,13 @@ class LocalThreadingHTTPServer(ThreadingHTTPServer):
         self.server_port = int(self.server_address[1])
 
 
+@dataclass(frozen=True)
+class PostRoute:
+    request_model: type[BaseModel]
+    handler: Callable[[Any], BaseModel]
+    succeeds: Callable[[BaseModel], bool]
+
+
 def _dot_test_points(
     *,
     registration: PaperFrameRegistration,
@@ -3585,6 +3588,149 @@ def _candidate_serial_ports() -> list[str]:
 
 
 def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
+    post_routes = {
+        "/draw/shape/preview": PostRoute(
+            DemoRunRequest,
+            bridge.preview_demo,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/demo/run": PostRoute(
+            DemoRunRequest,
+            bridge.run_demo,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/draw/shape": PostRoute(
+            DemoRunRequest,
+            bridge.run_demo,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/draw/polygon/preview": PostRoute(
+            PolygonDrawRequest,
+            bridge.preview_polygon,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/draw/polygon": PostRoute(
+            PolygonDrawRequest,
+            bridge.draw_polygon,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/draw/image/preview": PostRoute(
+            ImageShapePreviewRequest,
+            bridge.preview_image_contours,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/draw/face": PostRoute(
+            FaceRasterDrawRequest,
+            bridge.draw_face_raster,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/arm": PostRoute(
+            MachineArmRequest,
+            bridge.arm_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/jog": PostRoute(
+            MachineJogRequest,
+            bridge.jog_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/axis-model/trust": PostRoute(
+            AxisModelTrustRequest,
+            bridge.trust_axis_model,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/relative-move": PostRoute(
+            MachineRelativeMoveRequest,
+            bridge.relative_move_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/relative-mark": PostRoute(
+            MachineRelativeMarkRequest,
+            bridge.relative_mark_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/reconnect": PostRoute(
+            MachineReconnectRequest,
+            bridge.reconnect_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/home": PostRoute(
+            MachineHomeRequest,
+            bridge.home_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/center": PostRoute(
+            MachineCenterRequest,
+            bridge.center_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/pen-up": PostRoute(
+            MachinePenRequest,
+            bridge.pen_up_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/pen-down": PostRoute(
+            MachinePenRequest,
+            bridge.pen_down_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/dot-mark": PostRoute(
+            MachineDotMarkRequest,
+            bridge.dot_mark_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/stop": PostRoute(
+            MachineStopRequest,
+            bridge.stop_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/resume": PostRoute(
+            MachineResumeRequest,
+            bridge.resume_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/machine/unlock": PostRoute(
+            MachineUnlockRequest,
+            bridge.unlock_machine,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/calibration/start": PostRoute(
+            CalibrationStartRequest,
+            bridge.start_calibration,
+            lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/calibration/preview": PostRoute(
+            CalibrationMarkPlanRequest,
+            bridge.preview_calibration_marks,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/calibration/run": PostRoute(
+            CalibrationMarkPlanRequest,
+            bridge.run_calibration_marks,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/calibration/observe": PostRoute(
+            CalibrationObservationRequest,
+            bridge.add_calibration_observation,
+            lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/paper/register": PostRoute(
+            PaperRegistrationRequest,
+            bridge.register_paper,
+            lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/dot-test/preview": PostRoute(
+            DotTestPreviewRequest,
+            bridge.preview_dot_test,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/dot-test/run": PostRoute(
+            DotTestRunRequest,
+            bridge.run_dot_test,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+    }
+
     class PlotterBridgeHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed_url = urlparse(self.path)
@@ -3623,325 +3769,9 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             parsed_url = urlparse(self.path)
-            if parsed_url.path == "/draw/shape/preview":
-                try:
-                    request = DemoRunRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.preview_demo(request)
-                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path in {"/demo/run", "/draw/shape"}:
-                try:
-                    request = DemoRunRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.run_demo(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/draw/polygon/preview":
-                try:
-                    request = PolygonDrawRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.preview_polygon(request)
-                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/draw/polygon":
-                try:
-                    request = PolygonDrawRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.draw_polygon(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/draw/image/preview":
-                try:
-                    request = ImageShapePreviewRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.preview_image_contours(request)
-                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/draw/face":
-                try:
-                    request = FaceRasterDrawRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.draw_face_raster(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/arm":
-                try:
-                    request = MachineArmRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.arm_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/jog":
-                try:
-                    request = MachineJogRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.jog_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/axis-model/trust":
-                try:
-                    request = AxisModelTrustRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.trust_axis_model(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/relative-move":
-                try:
-                    request = MachineRelativeMoveRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.relative_move_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/relative-mark":
-                try:
-                    request = MachineRelativeMarkRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.relative_mark_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/reconnect":
-                try:
-                    request = MachineReconnectRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.reconnect_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/home":
-                try:
-                    request = MachineHomeRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.home_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/center":
-                try:
-                    request = MachineCenterRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.center_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/pen-up":
-                try:
-                    request = MachinePenRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.pen_up_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/pen-down":
-                try:
-                    request = MachinePenRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.pen_down_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/dot-mark":
-                try:
-                    request = MachineDotMarkRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.dot_mark_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/stop":
-                try:
-                    request = MachineStopRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.stop_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/resume":
-                try:
-                    request = MachineResumeRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.resume_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/machine/unlock":
-                try:
-                    request = MachineUnlockRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.unlock_machine(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/calibration/start":
-                try:
-                    request = CalibrationStartRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.start_calibration(request)
-                status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/calibration/preview":
-                try:
-                    request = CalibrationMarkPlanRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.preview_calibration_marks(request)
-                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/calibration/run":
-                try:
-                    request = CalibrationMarkPlanRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.run_calibration_marks(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-
-            if parsed_url.path == "/calibration/observe":
-                try:
-                    request = CalibrationObservationRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.add_calibration_observation(request)
-                status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-            if parsed_url.path == "/paper/register":
-                try:
-                    request = PaperRegistrationRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.register_paper(request)
-                status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-            if parsed_url.path == "/dot-test/preview":
-                try:
-                    request = DotTestPreviewRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.preview_dot_test(request)
-                status = HTTPStatus.OK if response.status == "ready" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
-                return
-            if parsed_url.path == "/dot-test/run":
-                try:
-                    request = DotTestRunRequest.model_validate(self._read_json_body())
-                except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                    return
-
-                response = bridge.run_dot_test(request)
-                status = HTTPStatus.OK if response.status == "completed" else HTTPStatus.BAD_REQUEST
-                self._write_model(status, response)
+            route = post_routes.get(parsed_url.path)
+            if route is not None:
+                self._handle_post(route)
                 return
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -3958,6 +3788,17 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
 
         def _write_model(self, status: HTTPStatus, model: BaseModel) -> None:
             self._write_json(status, model.model_dump(mode="json", by_alias=True))
+
+        def _handle_post(self, route: PostRoute) -> None:
+            try:
+                request = route.request_model.model_validate(self._read_json_body())
+            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+
+            response = route.handler(request)
+            status = HTTPStatus.OK if route.succeeds(response) else HTTPStatus.BAD_REQUEST
+            self._write_model(status, response)
 
         def _write_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             encoded = json.dumps(payload).encode("utf-8")

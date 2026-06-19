@@ -12,5 +12,5 @@ def validate_homing_request(*, state: str, pins: str, safety: SafetyState) -> No
         raise HomingSafetyError("Homing requires allow_homing=true.")
     if state != "Idle":
         raise HomingSafetyError(f"Controller must be Idle before homing; got {state!r}.")
-    if pins:
+    if pins and pins != "-":
         raise HomingSafetyError(f"All limit pins must be released before homing; got Pn={pins!r}.")

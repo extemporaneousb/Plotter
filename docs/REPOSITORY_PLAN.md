@@ -3,8 +3,8 @@
 ## Architecture
 
 This repository is moving from a standalone smoke probe toward one core Python package,
-`plotter_vision`, with multiple entrypoints. The controller and calibration core stays
-independent of any future browser, iPad, or native macOS UI.
+`plotter_vision`, with multiple entrypoints. The controller, safety, calibration, drawing, and
+simulation core stays independent of any future browser, iPad, or native macOS UI.
 
 Current package shape:
 
@@ -12,6 +12,14 @@ Current package shape:
 plotter_vision/
   cli.py
   config.py
+  bridge/
+    planner.py
+    server.py
+  calibration/
+    paper.py
+    session.py
+    synthetic.py
+    vision_model.py
   controller/
     base.py
     grbl.py
@@ -19,11 +27,50 @@ plotter_vision/
     parser.py
     serial_transport.py
     snapshot.py
+  drawing/
+    polygons.py
+    raster.py
+  machine/
+    homing.py
+    pen.py
+    safety.py
+    settings.py
+  motion/
+    gcode.py
+    simulator.py
+macos/
+  PlotterVisionCameraDemo/
 tests/
 ```
 
 The older `smoke_probe/` utility is preserved as reference material, but new work should use
 `plotterctl` and the `plotter_vision` package.
+
+## Canonical Interfaces
+
+- SwiftUI is the operator surface and bridge client. It may render camera observations, paper locks,
+  expected paths, dot-test previews, and controller status, but it must not own serial transport or
+  hardware command semantics.
+- `plotter_vision.bridge` is the local process boundary. It accepts typed request/response models,
+  publishes current controller/runtime state, and routes every machine action through the Python
+  safety and controller layers.
+- `plotter_vision.machine` owns safety validation, machine configuration, homing/pen/settings
+  guards, and trust flags such as `homing_trusted` and `axis_model_trusted`.
+- `plotter_vision.motion` and `plotter_vision.bridge.planner` own G-code planning and simulation.
+  Preview routes must stay dry-run even when the bridge is connected to live hardware.
+- `plotter_vision.calibration` and `plotter_vision.drawing` own geometry artifacts and paper-space
+  drawing contracts. Camera-space overlays should be treated as views over these artifacts, not as
+  independent motion authority.
+
+Current doubts to keep explicit:
+
+- The legacy `DemoRunRequest` and `/demo/run` names still exist for compatibility, but the canonical
+  user-facing concept is shape preview/execution.
+- The green-cap visual probe measures relative motion only. It is not enough to set
+  `axis_model_trusted` or unlock absolute drawing.
+- The app still has multiple geometry sources: viewport box, Swift-detected paper quad, bridge paper
+  homography, expected path, and dot-test preview. They need a typed overlay model before larger UI
+  refactors.
 
 ## Staged Task List
 
@@ -59,10 +106,14 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: not started.
+Status: partially implemented. Calibration session/model scaffolding and paper homography
+registration exist; the remaining work is to converge those into the trusted fixed-camera machine
+model used for absolute drawing.
 
-- Add manual measurements, scale/sign solving, affine solving, residuals, and calibration artifact JSON.
-- Add pen command trial workflow with explicit commands and confirmation.
+- Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
+  artifact JSON.
+- Keep paper registration and machine-axis trust separate until the position-binding proof exists.
+- Keep pen command trial workflow behind explicit commands and confirmation.
 
 ### Phase 4 — Local UI/API
 

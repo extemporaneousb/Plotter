@@ -39,3 +39,11 @@ def test_homing_accepts_idle_with_no_active_pins_and_explicit_arm() -> None:
         pins="",
         safety=SafetyState(allow_homing=True),
     )
+
+
+def test_homing_accepts_grbl_no_pin_marker() -> None:
+    validate_homing_request(
+        state="Idle",
+        pins="-",
+        safety=SafetyState(allow_homing=True),
+    )

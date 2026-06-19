@@ -1,8 +1,8 @@
 # Plotter Vision
 
-Native macOS camera scaffold for inspecting a plotter drawing surface. It is intentionally isolated
-from the machine-control core: this app does not talk to serial ports, move the plotter, unlock
-alarms, home axes, or write settings.
+Native macOS camera and operator surface for the fixed-camera Plotter workflow. The app is
+intentionally isolated from the machine-control core: it does not talk to serial ports or implement
+hardware command semantics itself. Machine actions go through the local Python bridge.
 
 ## Build
 
@@ -34,12 +34,23 @@ using machine controls in the app:
 make bridge-standby-bg
 ```
 
-The native app calls `http://127.0.0.1:8765/demo/run`, resets the change baseline before the request,
-and scans the current frame after the bridge reports completion. Real hardware can be connected after
-the app starts: use the Machine panel's Connect button to attach a visible USB serial controller,
-then Arm Live to enable homing, motion, pen, and unlock gates. Arm Live only changes runtime safety
-state after a status query; it does not home, unlock, move, or actuate the pen. Stop the background
-bridge with `make bridge-stop`.
+The native app calls the bridge for typed status, preview, registration, and machine actions,
+including:
+
+- `GET /health`
+- `GET /machine/status`
+- `POST /draw/shape/preview`
+- `POST /draw/shape`
+- `POST /draw/face`
+- `POST /paper/register`
+- `POST /dot-test/preview`
+- `POST /dot-test/run`
+- `POST /machine/...` actions for arm, reconnect, jog, home, center, pen, stop, resume, and unlock
+
+Real hardware can be connected after the app starts: use the Machine panel's Connect button to
+attach a visible USB serial controller and leave dry-run mode. Runtime arming only changes bridge
+safety state after a status query; it does not home, unlock, move, or actuate the pen by itself.
+Stop the background bridge with `make bridge-stop`.
 
 The bridge uses logical plotter coordinates for planning: `X0 Y0` is the corner opposite the X/Y
 homing switches. It converts those logical coordinates to the controller's negative `G53` machine
@@ -47,15 +58,14 @@ coordinates when sending motion commands.
 
 ## What The App Does
 
-- Shows a native AVFoundation camera preview.
-- Runs a Vision contour pass on live frames.
-- Compares averaged frame windows to find what changed roughly once per second.
-- Draws translucent contours, boxes, center marks, grid lines, and numeric measurement labels.
-- Assigns stable labels to changed regions such as `OBJ-03` with normalized coordinates.
-- Supports pausing/resuming the stream and scanning the most recent frame.
-- Sends a named dry-run or armed plotter request to the local controller bridge.
-- Exposes segmentation, motion sensitivity, report interval, and minimum-area controls for quickly
-  tuning a drawn-surface preview.
+- Shows native AVFoundation plotter and face camera previews.
+- Runs Vision passes for line/shape segments, fiducials, carriage markers, and frame-change reports.
+- Renders bridge-planned expected paths, paper homography state, and dot-test preview points over
+  the camera image.
+- Exposes the Machine panel as the operator surface for bridge/controller state, arm gates, alarms,
+  busy state, stop/resume, pen actions, homing, centering, and jogs.
+- Supports manual paper fiducials, paper registration, visual cap-marker probing, center-dot preview,
+  and preview-safe drawing tests.
 
-The measurements are pixel-space placeholders. Calibration to plotter coordinates belongs in the
-Python core once the safety and human-assisted calibration phases are ready.
+Canonical geometry still belongs in the Python bridge/calibration/drawing layers. Swift overlays are
+views over bridge state and local camera observations; they are not motion authority.

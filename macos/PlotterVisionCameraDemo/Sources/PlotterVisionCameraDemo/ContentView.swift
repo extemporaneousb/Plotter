@@ -3057,29 +3057,6 @@ private struct CameraSelector: View {
     }
 }
 
-private struct StatPill: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.58))
-            Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
-                .contentTransition(.numericText())
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(minWidth: 58, maxWidth: 92)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
 private struct StatusLamp: View {
     let title: String
     let value: String
@@ -3108,25 +3085,6 @@ private struct StatusLamp: View {
         .padding(.vertical, 6)
         .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .help(help)
-    }
-}
-
-private struct ConnectionDot: View {
-    @ObservedObject var bridge: PlotterBridgeModel
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 12, height: 12)
-            .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
-            .help(bridge.machineStatus)
-    }
-
-    private var color: Color {
-        if bridge.isMachineAlarm { return .red }
-        if bridge.isMachineBusy || bridge.isRunning { return .yellow }
-        if bridge.isOnline { return bridge.isDryRun ? .orange : .green }
-        return .gray
     }
 }
 
@@ -3319,42 +3277,5 @@ private struct MenuSliderControl: View {
             Slider(value: $value, in: range, step: step)
         }
         .frame(width: 220)
-    }
-}
-
-private struct ToolbarSliderControl: View {
-    let icon: String
-    let label: String
-    @Binding var value: Double
-    let range: ClosedRange<Double>
-    let display: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.cyan)
-                    .frame(width: 13)
-                Text(label.uppercased())
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text(display)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .frame(width: 34, alignment: .trailing)
-            }
-            Slider(value: $value, in: range)
-                .tint(.cyan)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 1)
-        )
     }
 }
