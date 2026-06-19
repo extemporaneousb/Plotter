@@ -5,9 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/plotter_launcher.sh [preview|live|app|stop|help]
+Usage: scripts/plotter_launcher.sh [smart|preview|live|app|stop|help]
 
 Modes:
+  smart    Rebuild/open the latest app. Reuse a live bridge, restart dry-run bridge, or start standby.
   preview  Restart the dry-run hardware-standby bridge and relaunch the native camera app.
   live     Start the dry-run hardware-standby bridge and app; arm from inside the app.
   app      Rebuild and relaunch only the native camera app.
@@ -24,12 +25,52 @@ run_make() {
   /usr/bin/make -C "$ROOT_DIR" "$@"
 }
 
-mode="${1:-preview}"
+health_url() {
+  local http_port="$1"
+  printf 'http://127.0.0.1:%s/health' "$http_port"
+}
+
+bridge_health() {
+  local http_port="$1"
+  curl --max-time 1 -fsS "$(health_url "$http_port")" 2>/dev/null || true
+}
+
+smart_launch() {
+  local http_port="${HTTP_PORT:-8765}"
+  local health
+  health="$(bridge_health "$http_port")"
+
+  if [[ -n "$health" ]]; then
+    if printf "%s" "$health" | grep -Eq '"dry_run"[[:space:]]*:[[:space:]]*false'; then
+      echo "Live bridge is already running at $(health_url "$http_port"); leaving it alone."
+      echo "$health"
+      run_make app "$@"
+    else
+      echo "Dry-run bridge is already running at $(health_url "$http_port"); restarting it from current code."
+      run_make standby-app HTTP_PORT="$http_port" "$@"
+    fi
+    return
+  fi
+
+  if lsof -tiTCP:"$http_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Port $http_port is in use, but it did not answer as the Plotter bridge." >&2
+    echo "Not killing an unknown process. Stop it or choose HTTP_PORT=..." >&2
+    exit 2
+  fi
+
+  echo "No bridge is running at $(health_url "$http_port"); starting safe hardware standby."
+  run_make standby-app HTTP_PORT="$http_port" "$@"
+}
+
+mode="${1:-smart}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
 
 case "$mode" in
+  smart|open|latest)
+    smart_launch "$@"
+    ;;
   preview)
     run_make preview-app "$@"
     ;;
