@@ -965,6 +965,11 @@ struct ContentView: View {
         return isGreenCapInsideSafeZone(observation.paperMm)
     }
 
+    private var confirmedCapSafeZoneReady: Bool {
+        guard let paperMm = observedPenPoint?.paperMm else { return false }
+        return isGreenCapInsideSafeZone(paperMm)
+    }
+
     private var greenCapSafeZoneDetail: String {
         guard bridge.hasPaperLock else { return "Paper homography required" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
@@ -975,6 +980,28 @@ struct ContentView: View {
             )
         }
         return "Cap inside paper safe zone"
+    }
+
+    private var confirmedCapSafeZoneDetail: String {
+        guard bridge.hasPaperLock else { return "Paper homography required" }
+        guard let paperMm = observedPenPoint?.paperMm else { return "Cap position not observed" }
+        guard isGreenCapInsideSafeZone(paperMm) else {
+            return String(
+                format: "Confirmed cap outside %.0fmm motion-safe inset",
+                visualCapSafeZoneMarginMm
+            )
+        }
+        return "Confirmed cap inside motion-safe inset"
+    }
+
+    private var canRunWizardMotionProbe: Bool {
+        bridge.isLiveMotionMode
+            && observedPenPoint?.paperMm != nil
+            && plotterCamera.carriageMarker != nil
+            && currentGreenCapSafeZoneReady
+            && !bridge.isMachineBusy
+            && !bridge.isRunning
+            && !bridge.isMachineAlarm
     }
 
     private var canRunBridgeCenterDotMotion: Bool {
@@ -1363,8 +1390,8 @@ struct ContentView: View {
 
                 controlButton(
                     systemName: "checklist.checked",
-                    label: "Calibrate",
-                    help: "Start calibration wizard",
+                    label: "Wizard",
+                    help: "Open Calibration Wizard",
                     isActive: showCalibrationWizard || manualFiducialMode
                 ) {
                     startCalibrationWizard()
@@ -1564,11 +1591,20 @@ struct ContentView: View {
                     }
 
                     HStack(spacing: 8) {
-                        Button(wizardPrimaryActionTitle) {
+                        Button {
                             runCalibrationWizardPrimaryAction()
+                        } label: {
+                            Label(
+                                wizardPrimaryActionTitle,
+                                systemImage: wizardPrimaryActionEnabled
+                                    ? "arrow.right.circle.fill"
+                                    : "lock.fill"
+                            )
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(wizardPrimaryActionEnabled ? .cyan : .gray)
                         .disabled(!wizardPrimaryActionEnabled)
+                        .help(wizardPrimaryActionDisabledReason ?? wizardPrimaryActionTitle)
 
                         Button("Reset") {
                             resetCalibrationWizard()
@@ -1588,6 +1624,14 @@ struct ContentView: View {
                     }
                     .controlSize(.small)
 
+                    if let disabledReason = wizardPrimaryActionDisabledReason {
+                        Text("Blocked: \(disabledReason)")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.orange.opacity(0.86))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     HStack(spacing: 8) {
                         Label(plotterCamera.carriageMarker == nil ? "cap not detected" : "cap detected", systemImage: "circle.fill")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -1595,7 +1639,7 @@ struct ContentView: View {
                         Text(String(format: "FID %d/4  PAPER %@  CAP %@  LIVE %@",
                                     manualFiducials.count,
                                     bridge.hasPaperLock ? "LOCK" : "--",
-                                    currentGreenCapSafeZoneReady ? "SAFE" : "--",
+                                    wizardCapStateLabel,
                                     bridge.isLiveMotionMode ? "YES" : "NO"))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.54))
@@ -1625,6 +1669,7 @@ struct ContentView: View {
     }
 
     private var wizardGreenCapStatus: CalibrationWizardStepStatus {
+        if observedPenPoint?.paperMm != nil { return .done }
         if plotterCamera.carriageMarker != nil { return .done }
         return bridge.hasPaperLock ? .active : .pending
     }
@@ -1637,7 +1682,7 @@ struct ContentView: View {
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
         if frameLearning.status == "MEASURED" { return .done }
         if observedPenPoint?.paperMm != nil {
-            return bridge.isLiveMotionMode && currentGreenCapSafeZoneReady ? .active : .blocked
+            return canRunWizardMotionProbe ? .active : .blocked
         }
         return .pending
     }
@@ -1656,9 +1701,19 @@ struct ContentView: View {
 
     private var wizardGreenCapDetail: String {
         guard let marker = plotterCamera.carriageMarker else {
+            if observedPenPoint?.paperMm != nil {
+                return "Manual cap position accepted"
+            }
             return "Waiting for bright cap marker"
         }
         return String(format: "%@ cam x%.3f y%.3f %.0f%%", marker.colorName, marker.center.x, marker.center.y, marker.strength * 100)
+    }
+
+    private var wizardCapStateLabel: String {
+        if currentGreenCapSafeZoneReady { return "LIVE-SAFE" }
+        if confirmedCapSafeZoneReady { return "CONF-SAFE" }
+        if observedPenPoint?.paperMm != nil { return "CONF-OUT" }
+        return "--"
     }
 
     private var wizardInstructionText: String {
@@ -1672,10 +1727,15 @@ struct ContentView: View {
             if plotterCamera.carriageMarker == nil {
                 return "Cap marker is not detected. Pick the cap region or click the cap position."
             }
-            if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
-            return "Green cap is detected inside the paper safe zone. Confirm it as the carriage position."
+            if currentGreenCapPaperObservation() == nil {
+                return "Cap marker is detected but not mapped to paper. Click the cap position or re-solve paper."
+            }
+            return "Green cap is detected in paper coordinates. Confirm it as the carriage position."
         }
         if frameLearning.status != "MEASURED" {
+            if plotterCamera.carriageMarker == nil {
+                return "Adaptive probe needs a live cap marker. \(confirmedCapSafeZoneDetail)."
+            }
             if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
             return "Cap position is in paper mm. Run the adaptive probe only when the nearby path is clear."
         }
@@ -1700,7 +1760,7 @@ struct ContentView: View {
         }
         if !bridge.hasPaperLock { return "Solve Homography" }
         if observedPenPoint?.paperMm == nil {
-            return plotterCamera.carriageMarker == nil ? "Click Cap Position" : "Confirm Cap"
+            return currentGreenCapPaperObservation() == nil ? "Click Cap Position" : "Confirm Cap"
         }
         if frameLearning.status != "MEASURED" { return "Run Adaptive Probe" }
         if visualSessionReadyToPlot || visualCenterDotMarked { return "Ready to Plot" }
@@ -1715,19 +1775,41 @@ struct ContentView: View {
             return bridge.isOnline && manualFiducials.count >= 4 && !bridge.isCalibrating
         }
         if observedPenPoint?.paperMm == nil {
-            return plotterCamera.carriageMarker == nil || currentGreenCapSafeZoneReady
+            return true
         }
         if frameLearning.status != "MEASURED" {
-            return bridge.isLiveMotionMode
-                && currentGreenCapSafeZoneReady
-                && !bridge.isMachineBusy
-                && !bridge.isRunning
-                && !bridge.isMachineAlarm
+            return canRunWizardMotionProbe
         }
         if bridge.dotTestPreviewPlanHash.isEmpty {
             return bridge.isOnline && bridge.hasPaperLock && !bridge.isCalibrating
         }
         return canRunVisualCenterDot
+    }
+
+    private var wizardPrimaryActionDisabledReason: String? {
+        guard !wizardPrimaryActionEnabled else { return nil }
+        if !bridge.hasPaperLock {
+            if !bridge.isOnline { return "bridge offline" }
+            if bridge.isCalibrating { return "paper solve already running" }
+            return "paper homography not locked"
+        }
+        if observedPenPoint?.paperMm == nil {
+            return "cap position not observed"
+        }
+        if frameLearning.status != "MEASURED" {
+            if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
+            if bridge.isMachineAlarm { return "machine alarm" }
+            if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
+            if plotterCamera.carriageMarker == nil { return "cap marker not detected for live probe" }
+            if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
+            return "adaptive probe blocked"
+        }
+        if bridge.dotTestPreviewPlanHash.isEmpty {
+            if !bridge.isOnline { return "bridge offline" }
+            if bridge.isCalibrating { return "bridge busy" }
+            return "center preview blocked"
+        }
+        return visualCenterDotDetail
     }
 
     private var nextFiducialLabel: String {
@@ -1755,7 +1837,7 @@ struct ContentView: View {
         }
 
         if observedPenPoint?.paperMm == nil {
-            if plotterCamera.carriageMarker != nil {
+            if currentGreenCapPaperObservation() != nil {
                 useDetectedCarriageMarker()
             } else {
                 startManualPenClick()
@@ -1764,6 +1846,10 @@ struct ContentView: View {
         }
 
         if frameLearning.status != "MEASURED" {
+            guard canRunWizardMotionProbe else {
+                calibrationStatusText = "WIZ adaptive probe blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
+                return
+            }
             calibrationStatusText = "WIZ motion probe requested"
             Task {
                 await runFrameLearning()
@@ -1931,18 +2017,20 @@ struct ContentView: View {
 
     private var penLampColor: Color {
         guard let observedPenPoint else { return .white.opacity(0.45) }
-        return observedPenPoint.paperMm == nil ? .yellow : .green
+        guard let paperMm = observedPenPoint.paperMm else { return .yellow }
+        return isGreenCapInsideSafeZone(paperMm) ? .green : .red
     }
 
     private var observedPenStatusText: String {
         guard let observedPenPoint else { return "Cap position not observed" }
         if let paperMm = observedPenPoint.paperMm {
             return String(
-                format: "CAP cam x%.3f y%.3f paper x%.1f y%.1f mm",
+                format: "CAP cam x%.3f y%.3f paper x%.1f y%.1f mm %@",
                 observedPenPoint.cameraPoint.x,
                 observedPenPoint.cameraPoint.y,
                 paperMm.x,
-                paperMm.y
+                paperMm.y,
+                isGreenCapInsideSafeZone(paperMm) ? "SAFE" : "OUTSIDE"
             )
         }
         return String(
@@ -2327,7 +2415,7 @@ struct ContentView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(Color.white.opacity(0.18), lineWidth: 1)
                     )
-                Text("CALIBRATE")
+                Text("OPTIONS")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.62))
                     .lineLimit(1)
@@ -2338,7 +2426,7 @@ struct ContentView: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .help("Calibration and diagnostic actions")
+        .help("Calibration options and diagnostic actions")
     }
 
     private func recordManualFiducial(viewPoint: CGPoint, cameraPoint: CGPoint) {
