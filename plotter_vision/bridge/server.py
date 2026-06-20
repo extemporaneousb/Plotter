@@ -251,6 +251,7 @@ class PaperRegistrationResponse(BaseModel):
 class VisualCapObservationRequest(BaseModel):
     observed_norm: CameraPointNorm
     observed_paper_norm: PaperPointNorm | None = None
+    observed_logical_mm: LogicalPointMM | None = None
     source: Literal["manual_click", "camera_detection", "operator_confirmed", "synthetic"] = (
         "manual_click"
     )
@@ -277,6 +278,10 @@ class AdaptiveProbePreviewRequest(BaseModel):
     max_y_probe_mm: float = 50.0
     min_probe_mm: float = 10.0
     clearance_mm: float = 2.0
+    bootstrap_only: bool = False
+    bootstrap_target_x_mm: float | None = None
+    bootstrap_bottom_allowance_mm: float = 50.0
+    bootstrap_top_allowance_mm: float = 12.0
     feed_mm_min: float = 300.0
 
 
@@ -3248,17 +3253,21 @@ class PlotterBridge:
             if request.observed_paper_norm is not None
             else registration.camera_norm_to_paper_norm(request.observed_norm)
         )
-        paper_norm = PaperPointNorm(x=raw_paper.x, y=raw_paper.y)
+        paper_norm = PaperPointNorm(
+            x=_clamp(raw_paper.x, 0.0, 1.0),
+            y=_clamp(raw_paper.y, 0.0, 1.0),
+        )
+        logical_mm = request.observed_logical_mm or LogicalPointMM(
+            x=machine.workspace.x_min
+            + raw_paper.x * (machine.workspace.x_max - machine.workspace.x_min),
+            y=machine.workspace.y_min
+            + raw_paper.y * (machine.workspace.y_max - machine.workspace.y_min),
+        )
         return VisualCapObservation(
             source=request.source,
             camera_norm=request.observed_norm,
             paper_norm=paper_norm,
-            logical_mm=LogicalPointMM(
-                x=machine.workspace.x_min
-                + paper_norm.x * (machine.workspace.x_max - machine.workspace.x_min),
-                y=machine.workspace.y_min
-                + paper_norm.y * (machine.workspace.y_max - machine.workspace.y_min),
-            ),
+            logical_mm=logical_mm,
             confidence=request.confidence,
             camera_id=request.camera_id or registration.camera_id,
             camera_name=request.camera_name or registration.camera_name,
@@ -3308,6 +3317,15 @@ class PlotterBridge:
             feed_mm_min=request.feed_mm_min,
             x_probe_max_mm=request.max_x_probe_mm,
             y_probe_max_mm=request.max_y_probe_mm,
+            min_probe_mm=request.min_probe_mm,
+            bootstrap_only=request.bootstrap_only,
+            bootstrap_target_x_mm=(
+                request.bootstrap_target_x_mm
+                if request.bootstrap_target_x_mm is not None
+                else request.max_x_probe_mm
+            ),
+            bootstrap_bottom_allowance_mm=request.bootstrap_bottom_allowance_mm,
+            bootstrap_top_allowance_mm=request.bootstrap_top_allowance_mm,
         )
         if plan.status == "blocked":
             raise MotionSafetyError("; ".join(plan.blockers))
@@ -3747,6 +3765,10 @@ class PostRoute:
     request_model: type[BaseModel]
     handler: Callable[[Any], BaseModel]
     succeeds: Callable[[BaseModel], bool]
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
 
 
 def _dot_test_points(

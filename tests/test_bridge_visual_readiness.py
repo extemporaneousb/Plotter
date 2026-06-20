@@ -81,6 +81,57 @@ def test_visual_probe_preview_is_dry_run_without_transcript_and_bounded_commands
         assert _max_xy_command_distance(preview["planned_commands"]) <= 50.0
 
 
+def test_visual_probe_preview_allows_x_min_bootstrap_without_transcript(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        status_code, _ = client.post("/paper/register", _paper_registration_payload())
+        assert status_code == 200
+        status_code, observed = client.post(
+            "/calibration/pen/observe",
+            _cap_observation_payload(
+                paper_x=0.0,
+                paper_y=0.0,
+                logical_x=0.0,
+                logical_y=-32.0,
+            ),
+        )
+        assert status_code == 200
+        assert observed["readiness"]["cap_inside_safe_zone"] is False
+
+        status_code, preview = client.post(
+            "/calibration/probe/preview",
+            {
+                "request_id": "probe-bootstrap-preview",
+                "bootstrap_only": True,
+                "bootstrap_target_x_mm": 200.0,
+                "max_x_probe_mm": 100.0,
+                "max_y_probe_mm": 50.0,
+                "min_probe_mm": 10.0,
+                "feed_mm_min": 300.0,
+            },
+        )
+
+        assert status_code == 200
+        assert preview["status"] == "ready"
+        assert preview["dry_run"] is True
+        assert preview["preview_only"] is True
+        assert preview["controller_transcript"] is None
+        assert preview["plan"]["plan_mode"] == "x_min_bootstrap"
+        assert preview["plan"]["requires_homing"] is False
+        assert len(preview["plan"]["moves"]) == 1
+        move = preview["plan"]["moves"][0]
+        assert move["axis"] == "X"
+        assert move["direction"] == 1
+        assert move["relative_x_mm"] > 0
+        assert move["relative_y_mm"] == 0.0
+        assert "$H" not in preview["planned_commands"]
+        assert not (tmp_path / "transcripts" / "probe-bootstrap-preview.jsonl").exists()
+        assert _max_xy_command_distance(preview["planned_commands"]) <= 50.0
+
+
 def test_visual_probe_mock_run_writes_transcript_without_homing(
     tmp_path: Path,
 ) -> None:
@@ -120,7 +171,68 @@ def test_visual_probe_mock_run_writes_transcript_without_homing(
         assert '"payload":"G91"' in text
 
 
-def test_visual_probe_run_aborts_outside_safe_zone_before_motion(tmp_path: Path) -> None:
+def test_visual_probe_mock_run_executes_x_min_bootstrap_without_homing(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(
+        tmp_path=tmp_path,
+        config_path=config_path,
+        dry_run=False,
+        arm_motion=True,
+    )
+
+    with _running_bridge(bridge) as client:
+        status_code, _ = client.post("/paper/register", _paper_registration_payload())
+        assert status_code == 200
+        status_code, _ = client.post(
+            "/calibration/pen/observe",
+            _cap_observation_payload(
+                paper_x=0.0,
+                paper_y=0.0,
+                logical_x=0.0,
+                logical_y=-32.0,
+            ),
+        )
+        assert status_code == 200
+        _, preview = client.post(
+            "/calibration/probe/preview",
+            {
+                "request_id": "probe-bootstrap-preview",
+                "bootstrap_only": True,
+                "bootstrap_target_x_mm": 200.0,
+                "max_x_probe_mm": 100.0,
+                "feed_mm_min": 300.0,
+            },
+        )
+
+        status_code, response = client.post(
+            "/calibration/probe/run",
+            {
+                "request_id": "probe-bootstrap-run",
+                "expected_plan_id": preview["plan"]["plan_id"],
+                "bootstrap_only": True,
+                "bootstrap_target_x_mm": 200.0,
+                "max_x_probe_mm": 100.0,
+                "feed_mm_min": 300.0,
+            },
+        )
+
+        assert status_code == 200
+        assert response["status"] == "completed"
+        assert response["dry_run"] is False
+        assert response["controller_transcript"] is not None
+        assert response["plan"]["plan_mode"] == "x_min_bootstrap"
+        assert "$H" not in response["planned_commands"]
+        assert all("Y" not in command for command in response["planned_commands"] if "G0" in command)
+        transcript = Path(response["controller_transcript"])
+        assert transcript.exists()
+        text = transcript.read_text(encoding="utf-8")
+        assert '"payload":"$H"' not in text
+        assert '"payload":"G91"' in text
+
+
+def test_visual_probe_run_aborts_when_projection_outside_bootstrap_band(tmp_path: Path) -> None:
     bridge = _bridge(
         tmp_path=tmp_path,
         config_path=_write_machine_config(tmp_path),
@@ -133,7 +245,12 @@ def test_visual_probe_run_aborts_outside_safe_zone_before_motion(tmp_path: Path)
         assert status_code == 200
         status_code, observed = client.post(
             "/calibration/pen/observe",
-            _cap_observation_payload(paper_x=0.01, paper_y=0.5),
+            _cap_observation_payload(
+                paper_x=0.0,
+                paper_y=0.0,
+                logical_x=0.0,
+                logical_y=-90.0,
+            ),
         )
         assert status_code == 200
         assert observed["status"] == "blocked"
@@ -141,14 +258,19 @@ def test_visual_probe_run_aborts_outside_safe_zone_before_motion(tmp_path: Path)
 
         status_code, response = client.post(
             "/calibration/probe/run",
-            {"request_id": "probe-outside", "feed_mm_min": 300.0},
+            {
+                "request_id": "probe-outside",
+                "bootstrap_only": True,
+                "bootstrap_target_x_mm": 200.0,
+                "feed_mm_min": 300.0,
+            },
         )
 
         assert status_code == 400
         assert response["status"] == "failed"
         assert response["controller_transcript"] is None
         assert response["error"] is not None
-        assert "safe zone" in response["error"]
+        assert "bootstrap band" in response["error"]
         assert not (tmp_path / "transcripts" / "probe-outside.jsonl").exists()
 
 
@@ -306,8 +428,14 @@ def _paper_registration_payload() -> dict[str, Any]:
     }
 
 
-def _cap_observation_payload(*, paper_x: float, paper_y: float) -> dict[str, Any]:
-    return {
+def _cap_observation_payload(
+    *,
+    paper_x: float,
+    paper_y: float,
+    logical_x: float | None = None,
+    logical_y: float | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "observed_norm": {"x": paper_x, "y": paper_y},
         "observed_paper_norm": {"x": paper_x, "y": paper_y},
         "source": "operator_confirmed",
@@ -315,6 +443,9 @@ def _cap_observation_payload(*, paper_x: float, paper_y: float) -> dict[str, Any
         "safe_zone_inset_x_mm": 10.0,
         "safe_zone_inset_y_mm": 10.0,
     }
+    if logical_x is not None and logical_y is not None:
+        payload["observed_logical_mm"] = {"x": logical_x, "y": logical_y}
+    return payload
 
 
 def _trust_sample(

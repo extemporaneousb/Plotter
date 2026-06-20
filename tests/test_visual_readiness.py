@@ -84,15 +84,61 @@ def test_adaptive_probe_respects_x_and_y_maximum_steps() -> None:
     assert y_move.step_mm == pytest.approx(50.0)
 
 
-def test_probe_plan_blocks_cap_outside_safe_zone_without_moves() -> None:
+def test_probe_plan_uses_positive_x_bootstrap_outside_low_x_safe_zone() -> None:
     safe_zone = _safe_zone()
     observation = _cap(paper_x=0.02, paper_y=0.50, logical_x=10.0, logical_y=100.0)
 
     plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
 
+    assert plan.status == "planned"
+    assert plan.plan_mode == "x_min_bootstrap"
+    assert plan.preview_only is True
+    assert plan.requires_homing is False
+    assert len(plan.moves) == 1
+    move = plan.moves[0]
+    assert move.axis == "X"
+    assert move.direction == 1
+    assert move.relative_x_mm > 0
+    assert move.relative_y_mm == 0.0
+    assert move.step_mm <= X_PROBE_MAX_MM
+    assert plan.safe_zone_evaluation.inside is False
+
+
+def test_probe_plan_uses_positive_x_bootstrap_for_low_y_cap_projection() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-35.0)
+
+    plan = plan_adaptive_visual_probe(
+        observation=observation,
+        safe_zone=safe_zone,
+        bootstrap_only=True,
+    )
+
+    assert plan.status == "planned"
+    assert plan.plan_mode == "x_min_bootstrap"
+    assert len(plan.moves) == 1
+    move = plan.moves[0]
+    assert move.axis == "X"
+    assert move.direction == 1
+    assert move.relative_x_mm == pytest.approx(200.0)
+    assert move.relative_y_mm == 0.0
+    assert plan.safe_zone_evaluation.inside is False
+
+
+def test_probe_plan_blocks_projection_too_far_outside_bootstrap_band() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-80.0)
+
+    plan = plan_adaptive_visual_probe(
+        observation=observation,
+        safe_zone=safe_zone,
+        bootstrap_only=True,
+    )
+
     assert plan.status == "blocked"
+    assert plan.plan_mode == "x_min_bootstrap"
     assert plan.moves == []
-    assert any("below safe zone minimum" in blocker for blocker in plan.blockers)
+    assert any("outside X-min bootstrap band" in blocker for blocker in plan.blockers)
 
 
 def test_visual_readiness_serialization_round_trip(tmp_path: Path) -> None:

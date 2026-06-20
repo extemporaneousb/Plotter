@@ -28,6 +28,9 @@ ProbePlanStatus = Literal["planned", "blocked"]
 GREEN_CAP_TARGET = "green_cap_carriage_marker"
 X_PROBE_MAX_MM = 200.0
 Y_PROBE_MAX_MM = 50.0
+X_MIN_BOOTSTRAP_TARGET_MM = 200.0
+X_MIN_BOOTSTRAP_BOTTOM_ALLOWANCE_MM = 50.0
+X_MIN_BOOTSTRAP_TOP_ALLOWANCE_MM = 12.0
 DEFAULT_PROBE_STEP_FRACTION = 0.60
 DEFAULT_MIN_PROBE_OBSERVATIONS = 2
 DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM = 5.0
@@ -210,6 +213,7 @@ class VisualProbeMove(BaseModel):
 class AdaptiveVisualProbePlan(BaseModel):
     schema_version: int = 1
     artifact_type: Literal["adaptive_visual_probe_plan"] = "adaptive_visual_probe_plan"
+    plan_mode: Literal["adaptive_probe", "x_min_bootstrap"] = "adaptive_probe"
     plan_id: str = Field(default_factory=lambda: f"probe-{uuid.uuid4().hex[:12]}")
     target: Literal["green_cap_carriage_marker"] = GREEN_CAP_TARGET
     status: ProbePlanStatus
@@ -367,6 +371,11 @@ def plan_adaptive_visual_probe(
     step_fraction: float = DEFAULT_PROBE_STEP_FRACTION,
     x_probe_max_mm: float = X_PROBE_MAX_MM,
     y_probe_max_mm: float = Y_PROBE_MAX_MM,
+    min_probe_mm: float = 10.0,
+    bootstrap_only: bool = False,
+    bootstrap_target_x_mm: float = X_MIN_BOOTSTRAP_TARGET_MM,
+    bootstrap_bottom_allowance_mm: float = X_MIN_BOOTSTRAP_BOTTOM_ALLOWANCE_MM,
+    bootstrap_top_allowance_mm: float = X_MIN_BOOTSTRAP_TOP_ALLOWANCE_MM,
     feed_mm_min: float = 300.0,
 ) -> AdaptiveVisualProbePlan:
     step_fraction = _finite(step_fraction, label="probe step fraction")
@@ -374,14 +383,75 @@ def plan_adaptive_visual_probe(
         raise ValueError("probe step_fraction must be in (0, 1].")
     x_probe_max_mm = _finite(x_probe_max_mm, label="X probe max")
     y_probe_max_mm = _finite(y_probe_max_mm, label="Y probe max")
+    min_probe_mm = _finite(min_probe_mm, label="minimum probe")
+    bootstrap_target_x_mm = _finite(bootstrap_target_x_mm, label="bootstrap target X")
+    bootstrap_bottom_allowance_mm = _finite(
+        bootstrap_bottom_allowance_mm,
+        label="bootstrap bottom allowance",
+    )
+    bootstrap_top_allowance_mm = _finite(
+        bootstrap_top_allowance_mm,
+        label="bootstrap top allowance",
+    )
     feed_mm_min = _finite(feed_mm_min, label="probe feed")
     if x_probe_max_mm <= 0.0 or y_probe_max_mm <= 0.0:
         raise ValueError("probe axis maxima must be positive.")
+    if min_probe_mm < 0.0:
+        raise ValueError("minimum probe must be non-negative.")
+    if bootstrap_target_x_mm <= 0.0:
+        raise ValueError("bootstrap target X must be positive.")
+    if bootstrap_bottom_allowance_mm < 0.0 or bootstrap_top_allowance_mm < 0.0:
+        raise ValueError("bootstrap projection allowances must be non-negative.")
     if feed_mm_min <= 0.0:
         raise ValueError("probe feed must be positive.")
 
     evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+    bootstrap_move = _plan_x_min_bootstrap_move(
+        safe_zone=safe_zone,
+        logical=evaluation.logical_mm,
+        x_probe_max_mm=x_probe_max_mm,
+        min_probe_mm=min_probe_mm,
+        target_x_mm=bootstrap_target_x_mm,
+        bottom_allowance_mm=bootstrap_bottom_allowance_mm,
+        top_allowance_mm=bootstrap_top_allowance_mm,
+    )
+    if bootstrap_only:
+        if bootstrap_move is None:
+            return AdaptiveVisualProbePlan(
+                plan_mode="x_min_bootstrap",
+                status="blocked",
+                cap_observation_id=observation.observation_id,
+                safe_zone_evaluation=evaluation,
+                blockers=[
+                    _x_min_bootstrap_blocker(
+                        safe_zone=safe_zone,
+                        logical=evaluation.logical_mm,
+                        target_x_mm=bootstrap_target_x_mm,
+                        bottom_allowance_mm=bootstrap_bottom_allowance_mm,
+                        top_allowance_mm=bootstrap_top_allowance_mm,
+                    )
+                ],
+                feed_mm_min=feed_mm_min,
+            )
+        return AdaptiveVisualProbePlan(
+            plan_mode="x_min_bootstrap",
+            status="planned",
+            cap_observation_id=observation.observation_id,
+            safe_zone_evaluation=evaluation,
+            moves=[bootstrap_move],
+            feed_mm_min=feed_mm_min,
+        )
+
     if not evaluation.inside:
+        if bootstrap_move is not None:
+            return AdaptiveVisualProbePlan(
+                plan_mode="x_min_bootstrap",
+                status="planned",
+                cap_observation_id=observation.observation_id,
+                safe_zone_evaluation=evaluation,
+                moves=[bootstrap_move],
+                feed_mm_min=feed_mm_min,
+            )
         return AdaptiveVisualProbePlan(
             status="blocked",
             cap_observation_id=observation.observation_id,
@@ -558,6 +628,66 @@ def _plan_axis_probe_move(
         available_positive_mm=available_positive,
         max_step_mm=max_step,
     )
+
+
+def _plan_x_min_bootstrap_move(
+    *,
+    safe_zone: DrawingSafeZone,
+    logical: LogicalPointMM,
+    x_probe_max_mm: float,
+    min_probe_mm: float,
+    target_x_mm: float,
+    bottom_allowance_mm: float,
+    top_allowance_mm: float,
+) -> VisualProbeMove | None:
+    frame = safe_zone.drawing_frame
+    projection_min_y = frame.origin_y_mm - bottom_allowance_mm
+    projection_max_y = frame.origin_y_mm + frame.height_mm + top_allowance_mm
+    if logical.y < projection_min_y or logical.y > projection_max_y:
+        return None
+
+    target_x = min(target_x_mm, safe_zone.logical_max_x_mm)
+    available_positive = max(0.0, safe_zone.logical_max_x_mm - logical.x)
+    available_negative = max(0.0, logical.x - safe_zone.logical_min_x_mm)
+    step = min(x_probe_max_mm, target_x - logical.x, available_positive)
+    if step < max(min_probe_mm, 1e-9):
+        return None
+
+    return VisualProbeMove(
+        axis="X",
+        direction=1,
+        step_mm=step,
+        relative_x_mm=step,
+        relative_y_mm=0.0,
+        available_negative_mm=available_negative,
+        available_positive_mm=available_positive,
+        max_step_mm=x_probe_max_mm,
+    )
+
+
+def _x_min_bootstrap_blocker(
+    *,
+    safe_zone: DrawingSafeZone,
+    logical: LogicalPointMM,
+    target_x_mm: float,
+    bottom_allowance_mm: float,
+    top_allowance_mm: float,
+) -> str:
+    frame = safe_zone.drawing_frame
+    projection_min_y = frame.origin_y_mm - bottom_allowance_mm
+    projection_max_y = frame.origin_y_mm + frame.height_mm + top_allowance_mm
+    if logical.y < projection_min_y or logical.y > projection_max_y:
+        return (
+            f"Green cap projection Y {logical.y:.3f} mm is outside "
+            f"X-min bootstrap band [{projection_min_y:.3f}, {projection_max_y:.3f}] mm."
+        )
+    target_x = min(target_x_mm, safe_zone.logical_max_x_mm)
+    if logical.x >= target_x:
+        return (
+            f"Green cap logical X {logical.x:.3f} mm is already at or beyond "
+            f"X-min bootstrap target {target_x:.3f} mm."
+        )
+    return "X-min bootstrap has no usable positive-X clearance."
 
 
 def _append_range_reason(

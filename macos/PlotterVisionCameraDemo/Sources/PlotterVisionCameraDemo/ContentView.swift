@@ -2,6 +2,13 @@ import SwiftUI
 
 private let visualProbeMinimumObservedMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
+private let visualProbeBootstrapStepXMm = 100.0
+private let visualProbeBootstrapMaxTotalXMm = 300.0
+private let visualProbeBootstrapMinStepXMm = 15.0
+private let visualProbeBootstrapTargetXMm = 200.0
+private let visualProbeBootstrapMinProgressXMm = 4.0
+private let visualCapProjectionBottomAllowanceMm = 50.0
+private let visualCapProjectionTopAllowanceMm = 12.0
 private let visualCalibrationMarkSizeMm = 6.0
 private let visualCalibrationRetryMarkSizeMm = 10.0
 private let visualCalibrationParkMm = 24.0
@@ -377,7 +384,7 @@ struct ContentView: View {
             return
         }
 
-        guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+        guard var initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
             calibrationStatusText = "CAL cap-marker probe blocked: cap not detected"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
@@ -389,24 +396,8 @@ struct ContentView: View {
             )
             return
         }
-        guard isGreenCapInsideSafeZone(initialObservation.paperMm) else {
-            calibrationStatusText = "CAL cap-marker probe blocked: \(greenCapSafeZoneDetail)"
-            frameLearning = FrameLearningState(
-                status: "BLOCK",
-                detail: greenCapSafeZoneDetail,
-                sampleCount: 0,
-                xPixelsPerMm: 0,
-                yPixelsPerMm: 0,
-                lastPins: bridge.machinePins
-            )
-            return
-        }
 
-        observedPenPoint = ObservedPenPoint(
-            point: CGPoint(x: initialObservation.cameraPoint.x, y: 1.0 - initialObservation.cameraPoint.y),
-            cameraPoint: initialObservation.cameraPoint,
-            paperMm: initialObservation.paperMm
-        )
+        updateObservedPenPoint(initialObservation)
         visualMotionModel = nil
         visualMotionSamples = []
         manualPenMode = false
@@ -430,6 +421,41 @@ struct ContentView: View {
             calibrationStatusText = "CAL cap-marker probe stopped: pen-up failed"
             return
         }
+
+        guard await bridge.observeVisualCapForProbe(
+            cameraPoint: initialObservation.cameraPoint,
+            paperMm: initialObservation.paperMm,
+            confidence: initialObservation.strength,
+            safeZoneInsetXMm: visualCapSafeZoneMarginMm,
+            safeZoneInsetYMm: visualCapSafeZoneMarginMm
+        ) else {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Bridge rejected cap observation"
+            calibrationStatusText = "CAL cap-marker probe stopped: bridge cap observation failed"
+            return
+        }
+
+        if shouldBootstrapFromXMinimum(initialObservation.paperMm) {
+            guard let bootstrapped = await bootstrapVisualProbeFromXMinimum(startingAt: initialObservation) else {
+                return
+            }
+            initialObservation = bootstrapped
+        }
+
+        guard isGreenCapInsideProbeStartZone(initialObservation.paperMm) else {
+            calibrationStatusText = "CAL cap-marker probe blocked: \(greenCapProbeReadinessDetail)"
+            frameLearning = FrameLearningState(
+                status: "BLOCK",
+                detail: greenCapProbeReadinessDetail,
+                sampleCount: 0,
+                xPixelsPerMm: 0,
+                yPixelsPerMm: 0,
+                lastPins: bridge.machinePins
+            )
+            return
+        }
+        updateObservedPenPoint(initialObservation)
+        calibrationStatusText = "CAL cap-marker probe sampling from probe zone"
 
         let commandDistanceMm = 25.0
         let reinforcementDistanceMm = 40.0
@@ -637,6 +663,207 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func bootstrapVisualProbeFromXMinimum(
+        startingAt start: GreenCapPaperObservation
+    ) async -> GreenCapPaperObservation? {
+        var current = start
+        var totalCommandedMm = 0.0
+        var moveIndex = 1
+        updateLearningSummary(
+            samples: [],
+            status: "BOOT-X",
+            detail: String(
+                format: "X-min bootstrap to paper x%.0fmm",
+                visualProbeBootstrapTargetXForWorkspace
+            )
+        )
+        calibrationStatusText = String(
+            format: "CAL cap-marker bootstrap +X only from x%.1f",
+            current.paperMm.x
+        )
+
+        while shouldBootstrapFromXMinimum(current.paperMm) {
+            guard isGreenCapInsideBootstrapYBand(current.paperMm) else {
+                updateLearningSummary(
+                    samples: [],
+                    status: "STOP",
+                    detail: greenCapProbeReadinessDetail
+                )
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: \(greenCapProbeReadinessDetail)"
+                return nil
+            }
+
+            let remainingToTarget = visualProbeBootstrapTargetXForWorkspace - current.paperMm.x
+            var maxCommandMm = min(visualProbeBootstrapStepXMm, max(visualProbeBootstrapMinStepXMm, remainingToTarget))
+            let remainingBudget = visualProbeBootstrapMaxTotalXMm - totalCommandedMm
+            guard remainingBudget >= visualProbeBootstrapMinStepXMm else {
+                updateLearningSummary(
+                    samples: [],
+                    status: "STOP",
+                    detail: "X-min bootstrap travel limit reached"
+                )
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: +X travel limit"
+                return nil
+            }
+            maxCommandMm = min(maxCommandMm, remainingBudget)
+
+            guard await bridge.observeVisualCapForProbe(
+                cameraPoint: current.cameraPoint,
+                paperMm: current.paperMm,
+                confidence: current.strength,
+                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
+                safeZoneInsetYMm: visualCapSafeZoneMarginMm
+            ) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Bridge rejected cap observation"
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge cap observation failed"
+                return nil
+            }
+
+            let requestSuffix = String(format: "%02d", moveIndex)
+            guard let preview = await bridge.previewBootstrapAdaptiveProbe(
+                requestId: "swift-xmin-bootstrap-preview-\(requestSuffix)",
+                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
+                safeZoneInsetYMm: visualCapSafeZoneMarginMm,
+                maxXProbeMm: maxCommandMm,
+                maxYProbeMm: 50.0,
+                minProbeMm: visualProbeBootstrapMinStepXMm,
+                bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
+                bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
+                bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
+                feedMmMin: min(300.0, bridge.manualFeedMmMin)
+            ), preview.status == "ready",
+               let plan = preview.plan,
+               plan.planMode == "x_min_bootstrap",
+               let plannedMove = plan.moves.first,
+               plan.moves.count == 1,
+               plannedMove.axis == "X",
+               plannedMove.direction == 1,
+               plannedMove.relativeXMm > 0.0,
+               abs(plannedMove.relativeYMm) < 0.000_001 else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = bridge.adaptiveProbeStatus
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge did not plan +X bootstrap"
+                return nil
+            }
+
+            let commandMm = plannedMove.relativeXMm
+
+            calibrationStatusText = String(
+                format: "CAL cap-marker bootstrap: move +X %.0f mm",
+                commandMm
+            )
+            frameLearning.detail = String(
+                format: "Bootstrap +X %.0fmm (total %.0f/%.0f)",
+                commandMm,
+                totalCommandedMm + commandMm,
+                visualProbeBootstrapMaxTotalXMm
+            )
+
+            guard let response = await bridge.runBootstrapAdaptiveProbe(
+                requestId: "swift-xmin-bootstrap-run-\(requestSuffix)",
+                expectedPlanId: plan.planId,
+                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
+                safeZoneInsetYMm: visualCapSafeZoneMarginMm,
+                maxXProbeMm: maxCommandMm,
+                maxYProbeMm: 50.0,
+                minProbeMm: visualProbeBootstrapMinStepXMm,
+                bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
+                bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
+                bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
+                feedMmMin: min(300.0, bridge.manualFeedMmMin)
+            ), response.status == "completed" else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Bootstrap move failed or machine busy"
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: move failed"
+                return nil
+            }
+
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Pin active after bootstrap"
+                frameLearning.lastPins = pins
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: pin active \(pins)"
+                return nil
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard let after = await waitForGreenCapPaperObservation(
+                afterFrame: current.frameNumber,
+                timeoutSeconds: 4.0
+            ) else {
+                updateLearningSummary(
+                    samples: [],
+                    status: "STOP",
+                    detail: "Cap marker lost after bootstrap"
+                )
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: cap lost"
+                return nil
+            }
+
+            let observedDx = after.paperMm.x - current.paperMm.x
+            let observedDy = after.paperMm.y - current.paperMm.y
+            let observedDistance = hypot(observedDx, observedDy)
+            guard observedDx >= visualProbeBootstrapMinProgressXMm else {
+                updateLearningSummary(
+                    samples: [],
+                    status: "STOP",
+                    detail: String(
+                        format: "Bootstrap +X saw dx %.1f dy %.1f",
+                        observedDx,
+                        observedDy
+                    )
+                )
+                calibrationStatusText = String(
+                    format: "CAL cap-marker bootstrap stopped: +X saw dx %.1f dy %.1f",
+                    observedDx,
+                    observedDy
+                )
+                updateObservedPenPoint(after)
+                return nil
+            }
+
+            totalCommandedMm += commandMm
+            current = after
+            updateObservedPenPoint(after)
+            guard await bridge.observeVisualCapForProbe(
+                cameraPoint: after.cameraPoint,
+                paperMm: after.paperMm,
+                confidence: after.strength,
+                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
+                safeZoneInsetYMm: visualCapSafeZoneMarginMm
+            ) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Bridge rejected post-bootstrap cap observation"
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge post-observation failed"
+                return nil
+            }
+            updateLearningSummary(
+                samples: [
+                    FrameLearningSample(
+                        axis: "X",
+                        distanceMm: totalCommandedMm,
+                        observedDxMm: after.paperMm.x - start.paperMm.x,
+                        observedDyMm: after.paperMm.y - start.paperMm.y,
+                        observedDistanceMm: hypot(after.paperMm.x - start.paperMm.x, after.paperMm.y - start.paperMm.y),
+                        strength: min(start.strength, after.strength)
+                    )
+                ],
+                status: "BOOT-X",
+                detail: String(
+                    format: "Bootstrap x%.1f observed %.1fmm",
+                    current.paperMm.x,
+                    observedDistance
+                )
+            )
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            moveIndex += 1
+        }
+
+        return current
+    }
+
+    @MainActor
     private func updateLearningSummary(
         samples: [FrameLearningSample],
         status: String,
@@ -775,6 +1002,32 @@ struct ContentView: View {
             && paperMm.y >= visualCapSafeZoneMarginMm
             && paperMm.x <= bridge.workspaceXMm - visualCapSafeZoneMarginMm
             && paperMm.y <= bridge.workspaceYMm - visualCapSafeZoneMarginMm
+    }
+
+    private var visualProbeBootstrapTargetXForWorkspace: Double {
+        let safeMaximum = max(visualCapSafeZoneMarginMm, bridge.workspaceXMm - visualCapSafeZoneMarginMm)
+        let preferred = min(visualProbeBootstrapTargetXMm, bridge.workspaceXMm * 0.40)
+        return clampDouble(
+            preferred,
+            min: visualCapSafeZoneMarginMm + visualProbeBootstrapMinStepXMm,
+            max: safeMaximum
+        )
+    }
+
+    private func isGreenCapInsideBootstrapYBand(_ paperMm: PaperPointMmSnapshot) -> Bool {
+        paperMm.y >= -visualCapProjectionBottomAllowanceMm
+            && paperMm.y <= bridge.workspaceYMm + visualCapProjectionTopAllowanceMm
+    }
+
+    private func isGreenCapInsideProbeStartZone(_ paperMm: PaperPointMmSnapshot) -> Bool {
+        paperMm.x >= visualCapSafeZoneMarginMm
+            && paperMm.x <= bridge.workspaceXMm - visualCapSafeZoneMarginMm
+            && isGreenCapInsideBootstrapYBand(paperMm)
+    }
+
+    private func shouldBootstrapFromXMinimum(_ paperMm: PaperPointMmSnapshot) -> Bool {
+        isGreenCapInsideBootstrapYBand(paperMm)
+            && paperMm.x < visualProbeBootstrapTargetXForWorkspace - visualProbeBootstrapMinStepXMm
     }
 
     private func evaluateVisualAxisProbe(samples: [FrameLearningSample]) -> VisualAxisProbeEvaluation {
@@ -973,6 +1226,22 @@ struct ContentView: View {
         return isGreenCapInsideSafeZone(observation.paperMm)
     }
 
+    private var currentGreenCapProbeStartReady: Bool {
+        guard let observation = currentGreenCapPaperObservation() else { return false }
+        return isGreenCapInsideProbeStartZone(observation.paperMm)
+    }
+
+    private var currentGreenCapBootstrapReady: Bool {
+        guard let observation = currentGreenCapPaperObservation() else { return false }
+        return shouldBootstrapFromXMinimum(observation.paperMm)
+    }
+
+    private var currentGreenCapCanStartProbe: Bool {
+        guard let observation = currentGreenCapPaperObservation() else { return false }
+        return isGreenCapInsideProbeStartZone(observation.paperMm)
+            || shouldBootstrapFromXMinimum(observation.paperMm)
+    }
+
     private var confirmedCapSafeZoneReady: Bool {
         guard let paperMm = observedPenPoint?.paperMm else { return false }
         return isGreenCapInsideSafeZone(paperMm)
@@ -988,6 +1257,40 @@ struct ContentView: View {
             )
         }
         return "Cap inside paper safe zone"
+    }
+
+    private var greenCapProbeReadinessDetail: String {
+        guard bridge.hasPaperLock else { return "Paper homography required" }
+        guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
+        let paperMm = observation.paperMm
+        if shouldBootstrapFromXMinimum(paperMm) {
+            return String(
+                format: "X-min bootstrap ready: +X only from x%.1f toward x%.0f",
+                paperMm.x,
+                visualProbeBootstrapTargetXForWorkspace
+            )
+        }
+        if isGreenCapInsideSafeZone(paperMm) {
+            return "Cap inside paper safe zone"
+        }
+        if isGreenCapInsideProbeStartZone(paperMm) {
+            return String(
+                format: "Cap projection is outside drawing inset but inside probe band y %.1f",
+                paperMm.y
+            )
+        }
+        if !isGreenCapInsideBootstrapYBand(paperMm) {
+            return String(
+                format: "Cap projection y %.1f outside probe band %.0f..%.0f",
+                paperMm.y,
+                -visualCapProjectionBottomAllowanceMm,
+                bridge.workspaceYMm + visualCapProjectionTopAllowanceMm
+            )
+        }
+        return String(
+            format: "Cap x %.1f outside +X bootstrap/probe range",
+            paperMm.x
+        )
     }
 
     private var confirmedCapSafeZoneDetail: String {
@@ -1006,7 +1309,17 @@ struct ContentView: View {
         bridge.isLiveMotionMode
             && observedPenPoint?.paperMm != nil
             && plotterCamera.carriageMarker != nil
-            && currentGreenCapSafeZoneReady
+            && currentGreenCapCanStartProbe
+            && !bridge.isMachineBusy
+            && !bridge.isRunning
+            && !bridge.isMachineAlarm
+    }
+
+    private var canRunAdaptiveMotionProbe: Bool {
+        bridge.isLiveMotionMode
+            && bridge.hasPaperLock
+            && plotterCamera.carriageMarker != nil
+            && currentGreenCapCanStartProbe
             && !bridge.isMachineBusy
             && !bridge.isRunning
             && !bridge.isMachineAlarm
@@ -1724,6 +2037,8 @@ struct ContentView: View {
 
     private var wizardCapStateLabel: String {
         if currentGreenCapSafeZoneReady { return "LIVE-SAFE" }
+        if currentGreenCapBootstrapReady { return "BOOT-X" }
+        if currentGreenCapProbeStartReady { return "PROBE" }
         if confirmedCapSafeZoneReady { return "CONF-SAFE" }
         if observedPenPoint?.paperMm != nil { return "CONF-OUT" }
         return "--"
@@ -1749,7 +2064,10 @@ struct ContentView: View {
             if plotterCamera.carriageMarker == nil {
                 return "Adaptive probe needs a live cap marker. \(confirmedCapSafeZoneDetail)."
             }
-            if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
+            if currentGreenCapBootstrapReady {
+                return "X-min bootstrap will move +X only until the cap reaches the probe zone, then sample X/Y motion."
+            }
+            if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
             return "Cap position is in paper mm. Run the adaptive probe only when the nearby path is clear."
         }
         if visualCenterDotIsActive {
@@ -1814,7 +2132,7 @@ struct ContentView: View {
             if bridge.isMachineAlarm { return "machine alarm" }
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
             if plotterCamera.carriageMarker == nil { return "cap marker not detected for live probe" }
-            if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
+            if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
             return "adaptive probe blocked"
         }
         if bridge.dotTestPreviewPlanHash.isEmpty {
@@ -2424,11 +2742,7 @@ struct ContentView: View {
                     }
                 }
                 .disabled(
-                    bridge.isRunning
-                        || bridge.isMachineBusy
-                        || !bridge.isLiveMotionMode
-                        || bridge.isMachineAlarm
-                        || !currentGreenCapSafeZoneReady
+                    !canRunAdaptiveMotionProbe
                 )
             }
         } label: {

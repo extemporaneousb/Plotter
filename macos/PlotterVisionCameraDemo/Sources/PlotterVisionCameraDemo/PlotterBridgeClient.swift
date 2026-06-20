@@ -572,6 +572,7 @@ struct AxisModelTrustRequest: Encodable {
 struct BridgeVisualCapObservationRequest: Encodable {
     let observedNorm: NormPoint
     let observedPaperNorm: NormPoint?
+    let observedLogicalMm: PaperPointMmSnapshot?
     let source: String
     let confidence: Double
     let cameraId: String?
@@ -588,6 +589,10 @@ struct BridgeAdaptiveProbePreviewRequest: Encodable {
     let maxYProbeMm: Double
     let minProbeMm: Double
     let clearanceMm: Double
+    let bootstrapOnly: Bool
+    let bootstrapTargetXMm: Double?
+    let bootstrapBottomAllowanceMm: Double
+    let bootstrapTopAllowanceMm: Double
     let feedMmMin: Double
 }
 
@@ -599,6 +604,10 @@ struct BridgeAdaptiveProbeRunRequest: Encodable {
     let maxYProbeMm: Double
     let minProbeMm: Double
     let clearanceMm: Double
+    let bootstrapOnly: Bool
+    let bootstrapTargetXMm: Double?
+    let bootstrapBottomAllowanceMm: Double
+    let bootstrapTopAllowanceMm: Double
     let feedMmMin: Double
     let expectedPlanId: String?
 }
@@ -676,6 +685,7 @@ struct BridgeSafeZoneAbortReason: Decodable, Equatable {
 struct BridgeAdaptiveVisualProbePlan: Decodable, Equatable {
     let schemaVersion: Int
     let artifactType: String
+    let planMode: String?
     let planId: String
     let target: String
     let status: String
@@ -973,7 +983,9 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var imagePreviewEligibleForBridgePreview = false
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var dotTestPreviewStatus = "DOT --"
+    @Published var adaptiveProbeStatus = "PROBE --"
     @Published var visualCenterDotStatus = "VIS --"
+    @Published var latestAdaptiveProbePlan: BridgeAdaptiveVisualProbePlan?
     @Published var dotTestPreviewPoints: [DotTestPreviewPoint] = []
     @Published var dotTestPreviewSegments: [DotTestPreviewSegment] = []
     @Published var dotTestPreviewPlanHash = ""
@@ -1749,6 +1761,166 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = "ERR"
             statusText = error.localizedDescription
             machineStatus = error.localizedDescription
+            isMachineBusy = false
+            isMachineAlarm = true
+            return nil
+        }
+    }
+
+    func observeVisualCapForProbe(
+        cameraPoint: CGPoint,
+        paperMm: PaperPointMmSnapshot,
+        confidence: Double,
+        safeZoneInsetXMm: Double,
+        safeZoneInsetYMm: Double
+    ) async -> Bool {
+        let paperNorm = NormPoint(
+            CGPoint(
+                x: min(1.0, max(0.0, paperMm.x / max(workspaceXMm, 0.000_001))),
+                y: min(1.0, max(0.0, paperMm.y / max(workspaceYMm, 0.000_001)))
+            )
+        )
+        do {
+            let response = try await client.observeVisualCap(
+                BridgeVisualCapObservationRequest(
+                    observedNorm: NormPoint(cameraPoint),
+                    observedPaperNorm: paperNorm,
+                    observedLogicalMm: paperMm,
+                    source: "camera_detection",
+                    confidence: confidence,
+                    cameraId: "plotter-camera",
+                    cameraName: "Plotter Camera",
+                    safeZoneInsetXMm: safeZoneInsetXMm,
+                    safeZoneInsetYMm: safeZoneInsetYMm
+                )
+            )
+            isOnline = true
+            adaptiveProbeStatus = response.status == "ready" ? "PROBE CAP SAFE" : "PROBE CAP OBS"
+            statusText = response.readiness?.blockers.joined(separator: ", ") ?? adaptiveProbeStatus
+            return response.status != "failed"
+        } catch {
+            shortStatus = "ERR"
+            adaptiveProbeStatus = "PROBE OBS ERR"
+            statusText = error.localizedDescription
+            return false
+        }
+    }
+
+    func previewBootstrapAdaptiveProbe(
+        requestId: String,
+        safeZoneInsetXMm: Double,
+        safeZoneInsetYMm: Double,
+        maxXProbeMm: Double,
+        maxYProbeMm: Double,
+        minProbeMm: Double,
+        bootstrapTargetXMm: Double,
+        bootstrapBottomAllowanceMm: Double,
+        bootstrapTopAllowanceMm: Double,
+        feedMmMin: Double
+    ) async -> BridgeAdaptiveProbeResponse? {
+        do {
+            let response = try await client.previewAdaptiveProbe(
+                BridgeAdaptiveProbePreviewRequest(
+                    requestId: requestId,
+                    safeZoneInsetXMm: safeZoneInsetXMm,
+                    safeZoneInsetYMm: safeZoneInsetYMm,
+                    maxXProbeMm: maxXProbeMm,
+                    maxYProbeMm: maxYProbeMm,
+                    minProbeMm: minProbeMm,
+                    clearanceMm: 2.0,
+                    bootstrapOnly: true,
+                    bootstrapTargetXMm: bootstrapTargetXMm,
+                    bootstrapBottomAllowanceMm: bootstrapBottomAllowanceMm,
+                    bootstrapTopAllowanceMm: bootstrapTopAllowanceMm,
+                    feedMmMin: feedMmMin
+                )
+            )
+            isOnline = true
+            latestAdaptiveProbePlan = response.plan
+            adaptiveProbeStatus = response.status == "ready" ? "PROBE BOOT PREVIEW" : "PROBE BOOT BLOCK"
+            statusText = response.error ?? adaptiveProbeStatus
+            return response
+        } catch {
+            shortStatus = "ERR"
+            adaptiveProbeStatus = "PROBE PREVIEW ERR"
+            statusText = error.localizedDescription
+            return nil
+        }
+    }
+
+    func runBootstrapAdaptiveProbe(
+        requestId: String,
+        expectedPlanId: String,
+        safeZoneInsetXMm: Double,
+        safeZoneInsetYMm: Double,
+        maxXProbeMm: Double,
+        maxYProbeMm: Double,
+        minProbeMm: Double,
+        bootstrapTargetXMm: Double,
+        bootstrapBottomAllowanceMm: Double,
+        bootstrapTopAllowanceMm: Double,
+        feedMmMin: Double
+    ) async -> BridgeAdaptiveProbeResponse? {
+        guard isLiveMotionMode else {
+            shortStatus = isOnline ? "DRY" : "OFF"
+            adaptiveProbeStatus = "PROBE LIVE BLOCK"
+            statusText = motionGateMessage
+            return nil
+        }
+        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+            adaptiveProbeStatus = "PROBE BUSY"
+            statusText = "Machine did not become ready for bootstrap probe"
+            return nil
+        }
+        guard !isMachineAlarm else {
+            adaptiveProbeStatus = "PROBE ALARM"
+            statusText = "Machine alarm blocks bootstrap probe"
+            return nil
+        }
+
+        isRunning = true
+        isMachineBusy = true
+        activeAction = "probe-bootstrap"
+        shortStatus = "RUN"
+        adaptiveProbeStatus = "PROBE BOOT RUN"
+        defer {
+            isRunning = false
+            activeAction = ""
+        }
+
+        do {
+            let response = try await client.runAdaptiveProbe(
+                BridgeAdaptiveProbeRunRequest(
+                    requestId: requestId,
+                    safeZoneInsetXMm: safeZoneInsetXMm,
+                    safeZoneInsetYMm: safeZoneInsetYMm,
+                    maxXProbeMm: maxXProbeMm,
+                    maxYProbeMm: maxYProbeMm,
+                    minProbeMm: minProbeMm,
+                    clearanceMm: 2.0,
+                    bootstrapOnly: true,
+                    bootstrapTargetXMm: bootstrapTargetXMm,
+                    bootstrapBottomAllowanceMm: bootstrapBottomAllowanceMm,
+                    bootstrapTopAllowanceMm: bootstrapTopAllowanceMm,
+                    feedMmMin: feedMmMin,
+                    expectedPlanId: expectedPlanId
+                )
+            )
+            isOnline = true
+            latestAdaptiveProbePlan = response.plan
+            if let machineStatus = response.machineStatus {
+                applyMachineStatus(machineStatus)
+            } else {
+                await refreshMachineStatus()
+            }
+            adaptiveProbeStatus = response.status == "completed" ? "PROBE BOOT DONE" : "PROBE BOOT FAIL"
+            shortStatus = response.dryRun ? "DRY" : (response.status == "completed" ? "DONE" : "ERR")
+            statusText = response.error ?? adaptiveProbeStatus
+            return response
+        } catch {
+            shortStatus = "ERR"
+            adaptiveProbeStatus = "PROBE RUN ERR"
+            statusText = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
             return nil
