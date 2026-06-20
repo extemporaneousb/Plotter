@@ -27,6 +27,16 @@ from plotter_vision.calibration.paper import (
     build_paper_frame_registration,
     build_paper_registration_from_red_fiducials,
 )
+from plotter_vision.calibration.readiness import (
+    AdaptiveVisualProbePlan,
+    DrawingSafeZone,
+    SafeZoneMarginsMM,
+    VisualCapObservation,
+    VisualReadinessState,
+    build_visual_readiness_state,
+    evaluate_cap_inside_safe_zone,
+    plan_adaptive_visual_probe,
+)
 from plotter_vision.calibration.session import CalibrationSession, build_calibration_session
 from plotter_vision.calibration.synthetic import synthetic_observations
 from plotter_vision.calibration.vision_model import (
@@ -210,6 +220,57 @@ class PaperRegistrationResponse(BaseModel):
     error: str | None = None
 
 
+class VisualCapObservationRequest(BaseModel):
+    observed_norm: CameraPointNorm
+    observed_paper_norm: PaperPointNorm | None = None
+    source: Literal["manual_click", "camera_detection", "operator_confirmed", "synthetic"] = (
+        "manual_click"
+    )
+    confidence: float = 1.0
+    camera_id: str | None = None
+    camera_name: str | None = None
+    safe_zone_inset_x_mm: float = 10.0
+    safe_zone_inset_y_mm: float = 10.0
+
+
+class VisualReadinessResponse(BaseModel):
+    status: str
+    dry_run: bool
+    readiness: dict[str, Any] | None = None
+    readiness_file: str = ""
+    error: str | None = None
+
+
+class AdaptiveProbePreviewRequest(BaseModel):
+    request_id: str | None = None
+    safe_zone_inset_x_mm: float = 10.0
+    safe_zone_inset_y_mm: float = 10.0
+    max_x_probe_mm: float = 200.0
+    max_y_probe_mm: float = 50.0
+    min_probe_mm: float = 10.0
+    clearance_mm: float = 2.0
+    feed_mm_min: float = 300.0
+
+
+class AdaptiveProbeRunRequest(AdaptiveProbePreviewRequest):
+    expected_plan_id: str | None = None
+
+
+class AdaptiveProbeResponse(BaseModel):
+    command_id: str
+    status: str
+    dry_run: bool
+    preview_only: bool
+    plan: dict[str, Any] | None = None
+    readiness: dict[str, Any] | None = None
+    readiness_file: str = ""
+    planned_commands: list[str] = Field(default_factory=list)
+    event_log: str
+    controller_transcript: str | None = None
+    machine_status: MachineStatusResponse | None = None
+    error: str | None = None
+
+
 class DotTestPreviewRequest(BaseModel):
     pattern: DotTestPattern = "center"
     margin_mm: float = 25.0
@@ -282,6 +343,8 @@ class MachineStatusResponse(BaseModel):
     state: str
     homing_trusted: bool = False
     axis_model_trusted: bool = False
+    visual_ready_to_plot: bool = False
+    visual_readiness_blockers: list[str] = Field(default_factory=list)
     mpos_mm: tuple[float, ...] | None = None
     wpos_mm: tuple[float, ...] | None = None
     pins: str = ""
@@ -1029,8 +1092,11 @@ class PlotterBridge:
         try:
             machine = self._load_machine_config()
             self._require_axis_model_trusted(machine)
+            draw_request = request
+            if self._visual_ready_to_plot():
+                draw_request = request.model_copy(update={"visual_position_trusted": True})
             plan = build_polygon_draw_plan(
-                request=request,
+                request=draw_request,
                 machine=machine,
                 safety=self._safety_state(),
                 command_id=command_id,
@@ -1469,6 +1535,213 @@ class PlotterBridge:
                 error=str(exc),
             )
 
+    def visual_readiness_status(self) -> VisualReadinessResponse:
+        try:
+            state = self._load_latest_visual_readiness()
+            return self._visual_readiness_response(state)
+        except Exception as exc:
+            paper_registered = False
+            paper_registration_id: str | None = None
+            try:
+                registration = self._load_latest_paper_registration()
+                paper_registered = True
+                paper_registration_id = registration.registration_id
+            except Exception:
+                pass
+            state = build_visual_readiness_state(
+                paper_registered=paper_registered,
+                cap_observation=None,
+                safe_zone_evaluation=None,
+                probe_observation_count=0,
+            )
+            state.paper_registration_id = paper_registration_id
+            return VisualReadinessResponse(
+                status="blocked",
+                dry_run=self.config.dry_run,
+                readiness=state.model_dump(mode="json"),
+                readiness_file=str(self._latest_visual_readiness_path()),
+                error=str(exc),
+            )
+
+    def observe_visual_cap(self, request: VisualCapObservationRequest) -> VisualReadinessResponse:
+        try:
+            machine = self._load_machine_config()
+            registration = self._load_latest_paper_registration()
+            cap = self._visual_cap_observation(
+                request=request,
+                machine=machine,
+                registration=registration,
+            )
+            previous = self._load_latest_visual_readiness_or_none()
+            safe_zone = self._drawing_safe_zone(
+                machine=machine,
+                inset_x_mm=request.safe_zone_inset_x_mm,
+                inset_y_mm=request.safe_zone_inset_y_mm,
+            )
+            evaluation = evaluate_cap_inside_safe_zone(observation=cap, safe_zone=safe_zone)
+            state = self._visual_state_from_evidence(
+                cap=cap,
+                safe_zone_evaluation=evaluation,
+                previous=previous,
+            )
+            self._save_visual_readiness(state)
+            self.event_log.emit(
+                "calibration.visual_cap_observed",
+                command_id=cap.observation_id,
+                status="ready" if state.cap_inside_safe_zone else "blocked",
+                payload={
+                    "paper_registration_id": registration.registration_id,
+                    "cap_inside_safe_zone": state.cap_inside_safe_zone,
+                    "visual_ready_to_plot": state.visual_ready_to_plot,
+                    "blockers": state.blockers,
+                },
+            )
+            return self._visual_readiness_response(state)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.visual_cap_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return VisualReadinessResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                readiness_file=str(self._latest_visual_readiness_path()),
+                error=str(exc),
+            )
+
+    def preview_adaptive_probe(
+        self,
+        request: AdaptiveProbePreviewRequest,
+    ) -> AdaptiveProbeResponse:
+        command_id = request.request_id or f"probe-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            plan, state = self._build_adaptive_probe_plan_from_request(
+                request=request,
+                dry_run=True,
+            )
+            state.latest_probe_plan = plan
+            self._save_visual_readiness(state)
+            planned_commands = self._adaptive_probe_commands(plan, dry_run=True)
+            requested_total_x_mm = sum(move.relative_x_mm for move in plan.moves)
+            requested_total_y_mm = sum(move.relative_y_mm for move in plan.moves)
+            self.event_log.emit(
+                "calibration.probe_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "preview_only": True,
+                    "move_count": len(plan.moves),
+                    "command_count": len(planned_commands),
+                    "requested_total_x_mm": requested_total_x_mm,
+                    "requested_total_y_mm": requested_total_y_mm,
+                },
+            )
+            return AdaptiveProbeResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                preview_only=True,
+                plan=plan.model_dump(mode="json"),
+                readiness=state.model_dump(mode="json"),
+                readiness_file=str(self._latest_visual_readiness_path()),
+                planned_commands=[planned.command for planned in planned_commands],
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.probe_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return AdaptiveProbeResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                preview_only=True,
+                readiness_file=str(self._latest_visual_readiness_path()),
+                planned_commands=[],
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+            )
+
+    def run_adaptive_probe(self, request: AdaptiveProbeRunRequest) -> AdaptiveProbeResponse:
+        command_id = request.request_id or f"probe-run-{uuid.uuid4().hex[:12]}"
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        try:
+            plan, state = self._build_adaptive_probe_plan_from_request(
+                request=request,
+                dry_run=self.config.dry_run,
+            )
+            expected_plan = state.latest_probe_plan
+            if (
+                request.expected_plan_id
+                and (expected_plan is None or request.expected_plan_id != expected_plan.plan_id)
+            ):
+                raise MotionSafetyError(
+                    "Adaptive probe plan changed after preview; preview the probe again."
+                )
+            planned_commands = self._adaptive_probe_commands(plan, dry_run=self.config.dry_run)
+            machine_response = self._run_machine_action(
+                action="adaptive_probe",
+                command_id=command_id,
+                planned_commands=planned_commands,
+                transcript_path=transcript_path,
+            )
+            state.latest_probe_plan = plan
+            self._save_visual_readiness(state)
+            requested_total_x_mm = sum(move.relative_x_mm for move in plan.moves)
+            requested_total_y_mm = sum(move.relative_y_mm for move in plan.moves)
+            self.event_log.emit(
+                (
+                    "calibration.probe_run_completed"
+                    if machine_response.status == "completed"
+                    else "calibration.probe_run_failed"
+                ),
+                command_id=command_id,
+                status=machine_response.status,
+                payload={
+                    "move_count": len(plan.moves),
+                    "command_count": len(planned_commands),
+                    "requested_total_x_mm": requested_total_x_mm,
+                    "requested_total_y_mm": requested_total_y_mm,
+                    "dry_run": machine_response.dry_run,
+                    "transcript": machine_response.controller_transcript,
+                    "visual_ready_to_plot": state.visual_ready_to_plot,
+                    "error": machine_response.error,
+                },
+            )
+            return AdaptiveProbeResponse(
+                command_id=command_id,
+                status=machine_response.status,
+                dry_run=machine_response.dry_run,
+                preview_only=False,
+                plan=plan.model_dump(mode="json"),
+                readiness=state.model_dump(mode="json"),
+                readiness_file=str(self._latest_visual_readiness_path()),
+                planned_commands=[planned.command for planned in planned_commands],
+                event_log=str(self.config.event_log_path),
+                controller_transcript=machine_response.controller_transcript,
+                machine_status=machine_response.machine_status,
+                error=machine_response.error,
+            )
+        except Exception as exc:
+            return AdaptiveProbeResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=self.config.dry_run,
+                preview_only=False,
+                readiness_file=str(self._latest_visual_readiness_path()),
+                planned_commands=[],
+                event_log=str(self.config.event_log_path),
+                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
+                machine_status=self._machine_error_status(error=str(exc)),
+                error=str(exc),
+            )
+
     def preview_dot_test(self, request: DotTestPreviewRequest) -> DotTestPreviewResponse:
         command_id = request.request_id or f"dot-preview-{uuid.uuid4().hex[:12]}"
         try:
@@ -1590,6 +1863,7 @@ class PlotterBridge:
             request=PolygonDrawRequest(
                 polylines=polylines,
                 include_homing=request.include_homing,
+                visual_position_trusted=self._visual_ready_to_plot(),
                 draw_feed_mm_min=request.draw_feed_mm_min,
                 travel_feed_mm_min=request.travel_feed_mm_min,
                 max_segment_mm=request.max_segment_mm,
@@ -1764,10 +2038,25 @@ class PlotterBridge:
         try:
             machine = self._load_machine_config()
             self._validate_axis_model_trust_request(request=request, machine=machine)
+            state = self._load_latest_visual_readiness()
+            if not state.cap_inside_safe_zone:
+                raise MotionSafetyError(
+                    "Visual readiness requires the green cap/carriage marker inside "
+                    "the drawing-safe zone."
+                )
+            state = self._visual_state_from_evidence(
+                cap=state.latest_cap_observation,
+                safe_zone_evaluation=state.safe_zone_evaluation,
+                previous=state,
+                sample_count=request.sample_count,
+                rms_residual_mm=request.rms_residual_mm,
+                max_residual_mm=request.max_residual_mm,
+            )
+            self._save_visual_readiness(state)
             self.event_log.emit(
-                "machine.axis_model_probe_rejected",
+                "calibration.visual_readiness_trusted",
                 command_id=command_id,
-                status="failed",
+                status="completed",
                 payload={
                     "source": request.source,
                     "sample_count": request.sample_count,
@@ -1776,16 +2065,23 @@ class PlotterBridge:
                     "min_observed_distance_mm": request.min_observed_distance_mm,
                     "command_distance_mm": request.command_distance_mm,
                     "axis_model_trusted": machine.axis_model_trusted,
+                    "visual_ready_to_plot": state.visual_ready_to_plot,
+                    "readiness_file": str(self._latest_visual_readiness_path()),
                 },
             )
-            raise MotionSafetyError(
-                "Green-cap visual probing measures relative motion only; it cannot set "
-                "axis_model_trusted or unlock absolute drawing. Use homing or a visual "
-                "position binding before real dot/drawing motion."
+            return MachineCommandResponse(
+                command_id=command_id,
+                action="visual_readiness_trust",
+                status="completed" if state.visual_ready_to_plot else "failed",
+                dry_run=self.config.dry_run,
+                planned_commands=["<visual-readiness>"],
+                event_log=str(self.config.event_log_path),
+                machine_status=self.machine_status(),
+                error=None if state.visual_ready_to_plot else "; ".join(state.blockers),
             )
         except Exception as exc:
             return self._machine_command_error(
-                action="axis_model_trust",
+                action="visual_readiness_trust",
                 command_id=command_id,
                 transcript_path=self.config.transcript_dir / f"{command_id}.jsonl",
                 error=str(exc),
@@ -2309,6 +2605,7 @@ class PlotterBridge:
             request=PolygonDrawRequest(
                 program=PaperDrawingProgram(point_marks=point_marks),
                 include_homing=request.include_homing,
+                visual_position_trusted=self._visual_ready_to_plot(),
                 draw_feed_mm_min=request.draw_feed_mm_min,
                 travel_feed_mm_min=request.travel_feed_mm_min,
                 max_segment_mm=request.max_segment_mm,
@@ -2795,9 +3092,11 @@ class PlotterBridge:
             raise MotionSafetyError("Axis model trust requires source=green_cap_visual_probe.")
         if request.sample_count < 4 or len(request.samples) < 4:
             raise MotionSafetyError("Axis model trust requires at least four visual jog samples.")
-        if request.command_distance_mm < 10.0 or request.command_distance_mm > machine.max_jog_mm:
+        max_visual_probe_mm = max(machine.max_jog_mm, 200.0)
+        if request.command_distance_mm < 10.0 or request.command_distance_mm > max_visual_probe_mm:
             raise MotionSafetyError(
-                f"Axis model trust requires command distance from 10mm to {machine.max_jog_mm:g}mm."
+                "Visual readiness requires command distance from 10mm to "
+                f"{max_visual_probe_mm:g}mm."
             )
         if request.min_observed_distance_mm < 8.0:
             raise MotionSafetyError("Axis model trust requires at least 8mm observed cap displacement.")
@@ -2815,11 +3114,12 @@ class PlotterBridge:
                 raise MotionSafetyError("Axis model trust sample observed displacement is too small.")
 
     def _require_axis_model_trusted(self, machine: MachineConfig) -> None:
-        if self.config.dry_run or machine.axis_model_trusted:
+        if self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot():
             return
         raise MotionSafetyError(
-            "Real drawing requires axis_model_trusted=true for machine geometry. "
-            "A green-cap visual probe is only relative motion evidence and is not sufficient."
+            "Real drawing requires axis_model_trusted=true or visual_ready_to_plot=true. "
+            "Homing is not required for visual-session controlled drawing, but paper, "
+            "green-cap safe-zone, and motion residual evidence must be current."
         )
 
     def _calibration_path(self, session_id: str) -> Path:
@@ -2859,6 +3159,203 @@ class PlotterBridge:
             raise ValueError("No paper registration has been saved.")
         return PaperFrameRegistration.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def _latest_visual_readiness_path(self) -> Path:
+        return self.config.calibration_dir / "latest_visual_readiness.json"
+
+    def _save_visual_readiness(self, state: VisualReadinessState) -> None:
+        state.save_json(self._latest_visual_readiness_path())
+
+    def _load_latest_visual_readiness(self) -> VisualReadinessState:
+        path = self._latest_visual_readiness_path()
+        if not path.exists():
+            raise ValueError("No visual readiness artifact has been saved.")
+        return VisualReadinessState.load_json(path)
+
+    def _load_latest_visual_readiness_or_none(self) -> VisualReadinessState | None:
+        try:
+            return self._load_latest_visual_readiness()
+        except Exception:
+            return None
+
+    def _visual_ready_to_plot(self) -> bool:
+        try:
+            return self._load_latest_visual_readiness().visual_ready_to_plot
+        except Exception:
+            return False
+
+    def _visual_readiness_status_fields(self) -> tuple[bool, list[str]]:
+        try:
+            state = self._load_latest_visual_readiness()
+            return (state.visual_ready_to_plot, list(state.blockers))
+        except Exception:
+            return (False, [])
+
+    def _visual_readiness_response(self, state: VisualReadinessState) -> VisualReadinessResponse:
+        return VisualReadinessResponse(
+            status="ready" if state.visual_ready_to_plot else "blocked",
+            dry_run=self.config.dry_run,
+            readiness=state.model_dump(mode="json"),
+            readiness_file=str(self._latest_visual_readiness_path()),
+        )
+
+    def _visual_cap_observation(
+        self,
+        *,
+        request: VisualCapObservationRequest,
+        machine: MachineConfig,
+        registration: PaperFrameRegistration,
+    ) -> VisualCapObservation:
+        raw_paper = (
+            request.observed_paper_norm
+            if request.observed_paper_norm is not None
+            else registration.camera_norm_to_paper_norm(request.observed_norm)
+        )
+        paper_norm = PaperPointNorm(x=raw_paper.x, y=raw_paper.y)
+        return VisualCapObservation(
+            source=request.source,
+            camera_norm=request.observed_norm,
+            paper_norm=paper_norm,
+            logical_mm=LogicalPointMM(
+                x=machine.workspace.x_min
+                + paper_norm.x * (machine.workspace.x_max - machine.workspace.x_min),
+                y=machine.workspace.y_min
+                + paper_norm.y * (machine.workspace.y_max - machine.workspace.y_min),
+            ),
+            confidence=request.confidence,
+            camera_id=request.camera_id or registration.camera_id,
+            camera_name=request.camera_name or registration.camera_name,
+            paper_registration_id=registration.registration_id,
+        )
+
+    def _drawing_safe_zone(
+        self,
+        *,
+        machine: MachineConfig,
+        inset_x_mm: float,
+        inset_y_mm: float,
+    ) -> DrawingSafeZone:
+        return DrawingSafeZone.from_frame(
+            drawing_frame=DrawingFrameMM(
+                origin_x_mm=machine.workspace.x_min,
+                origin_y_mm=machine.workspace.y_min,
+                width_mm=machine.workspace.x_max - machine.workspace.x_min,
+                height_mm=machine.workspace.y_max - machine.workspace.y_min,
+            ),
+            margins_mm=SafeZoneMarginsMM(
+                left=inset_x_mm,
+                right=inset_x_mm,
+                bottom=inset_y_mm,
+                top=inset_y_mm,
+            ),
+        )
+
+    def _build_adaptive_probe_plan_from_request(
+        self,
+        *,
+        request: AdaptiveProbePreviewRequest,
+        dry_run: bool,
+    ) -> tuple[AdaptiveVisualProbePlan, VisualReadinessState]:
+        machine = self._load_machine_config()
+        state = self._load_latest_visual_readiness()
+        if state.latest_cap_observation is None:
+            raise MotionSafetyError("Adaptive probe requires a localized green cap/carriage marker.")
+        safe_zone = self._drawing_safe_zone(
+            machine=machine,
+            inset_x_mm=request.safe_zone_inset_x_mm,
+            inset_y_mm=request.safe_zone_inset_y_mm,
+        )
+        plan = plan_adaptive_visual_probe(
+            observation=state.latest_cap_observation,
+            safe_zone=safe_zone,
+            feed_mm_min=request.feed_mm_min,
+            x_probe_max_mm=request.max_x_probe_mm,
+            y_probe_max_mm=request.max_y_probe_mm,
+        )
+        if plan.status == "blocked":
+            raise MotionSafetyError("; ".join(plan.blockers))
+        state = self._visual_state_from_evidence(
+            cap=state.latest_cap_observation,
+            safe_zone_evaluation=plan.safe_zone_evaluation,
+            previous=state,
+        )
+        return plan, state
+
+    def _adaptive_probe_commands(
+        self,
+        plan: AdaptiveVisualProbePlan,
+        *,
+        dry_run: bool,
+    ) -> list[PlannedCommand]:
+        machine = self._load_machine_config()
+        safety = self._safety_state().model_copy(update={"dry_run": dry_run})
+        planned_commands: list[PlannedCommand] = []
+        for move in plan.moves:
+            move_distance = move.relative_x_mm if move.axis == "X" else move.relative_y_mm
+            remaining = move_distance
+            while abs(remaining) > 1e-9:
+                step = math.copysign(min(abs(remaining), machine.max_jog_mm), remaining)
+                remaining -= step
+                x_mm = step if move.axis == "X" else 0.0
+                y_mm = step if move.axis == "Y" else 0.0
+                validate_relative_xy_move_request(
+                    x_mm=x_mm,
+                    y_mm=y_mm,
+                    feed_mm_min=plan.feed_mm_min,
+                    machine=machine,
+                    safety=safety,
+                )
+                planned_commands.extend(
+                    PlannedCommand(
+                        command=command,
+                        kind="motion",
+                        description=f"Adaptive visual probe {move.axis}",
+                    )
+                    for command in build_relative_xy_move_commands(
+                        x_mm=x_mm,
+                        y_mm=y_mm,
+                        feed_mm_min=plan.feed_mm_min,
+                    )
+                )
+        return planned_commands
+
+    def _visual_state_from_evidence(
+        self,
+        *,
+        cap: VisualCapObservation | None,
+        safe_zone_evaluation: Any | None,
+        previous: VisualReadinessState | None,
+        sample_count: int | None = None,
+        rms_residual_mm: float | None = None,
+        max_residual_mm: float | None = None,
+    ) -> VisualReadinessState:
+        state = build_visual_readiness_state(
+            paper_registered=cap is not None or bool(previous and previous.paper_registered),
+            cap_observation=cap,
+            safe_zone_evaluation=safe_zone_evaluation,
+            probe_observation_count=(
+                sample_count
+                if sample_count is not None
+                else (previous.probe_observation_count if previous is not None else 0)
+            ),
+            probe_rms_residual_mm=(
+                rms_residual_mm
+                if rms_residual_mm is not None
+                else (previous.probe_rms_residual_mm if previous is not None else None)
+            ),
+            probe_max_residual_mm=(
+                max_residual_mm
+                if max_residual_mm is not None
+                else (previous.probe_max_residual_mm if previous is not None else None)
+            ),
+        )
+        if previous is not None:
+            state.state_id = previous.state_id
+            state.latest_probe_plan = previous.latest_probe_plan
+            state.paper_registration_id = previous.paper_registration_id
+        if cap is not None and cap.paper_registration_id is not None:
+            state.paper_registration_id = cap.paper_registration_id
+        return state
+
     def _machine_status_from_report(
         self,
         report: StatusReport,
@@ -2866,6 +3363,7 @@ class PlotterBridge:
         status: str,
     ) -> MachineStatusResponse:
         machine = self._load_machine_config()
+        visual_ready, visual_blockers = self._visual_readiness_status_fields()
         state_root = report.state.split(":", 1)[0]
         pins = report.fields.get("Pn", "")
         is_alarm = state_root == "Alarm" or report.state.lower().startswith("alarm")
@@ -2881,6 +3379,8 @@ class PlotterBridge:
             state=report.state,
             homing_trusted=machine.homing_trusted,
             axis_model_trusted=machine.axis_model_trusted,
+            visual_ready_to_plot=visual_ready,
+            visual_readiness_blockers=visual_blockers,
             mpos_mm=report.machine_position,
             wpos_mm=report.work_position,
             pins=pins,
@@ -2897,6 +3397,7 @@ class PlotterBridge:
         state: str,
         error: str | None = None,
     ) -> MachineStatusResponse:
+        visual_ready, visual_blockers = self._visual_readiness_status_fields()
         return MachineStatusResponse(
             status=status,
             dry_run=self.config.dry_run,
@@ -2908,6 +3409,8 @@ class PlotterBridge:
             state=state,
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
+            visual_ready_to_plot=visual_ready,
+            visual_readiness_blockers=visual_blockers,
             pins="",
             is_busy=False,
             is_alarm=status == "failed" or state.lower().startswith("alarm"),
@@ -2930,6 +3433,7 @@ class PlotterBridge:
                 }
             )
 
+        visual_ready, visual_blockers = self._visual_readiness_status_fields()
         return MachineStatusResponse(
             status="busy",
             dry_run=self.config.dry_run,
@@ -2941,6 +3445,8 @@ class PlotterBridge:
             state="Run",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
+            visual_ready_to_plot=visual_ready,
+            visual_readiness_blockers=visual_blockers,
             mpos_mm=last_status.mpos_mm if last_status else None,
             wpos_mm=last_status.wpos_mm if last_status else None,
             pins=last_status.pins if last_status else "",
@@ -2969,6 +3475,7 @@ class PlotterBridge:
                 }
             )
 
+        visual_ready, visual_blockers = self._visual_readiness_status_fields()
         return MachineStatusResponse(
             status="sampling",
             dry_run=self.config.dry_run,
@@ -2980,6 +3487,8 @@ class PlotterBridge:
             state="Unknown",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
+            visual_ready_to_plot=visual_ready,
+            visual_readiness_blockers=visual_blockers,
             is_busy=False,
             is_alarm=False,
             active_command_id=active_command_id,
@@ -2992,6 +3501,7 @@ class PlotterBridge:
             active_action = self._active_action
             last_status = self._last_machine_status
 
+        visual_ready, visual_blockers = self._visual_readiness_status_fields()
         return MachineStatusResponse(
             status="stopping",
             dry_run=self.config.dry_run,
@@ -3003,6 +3513,8 @@ class PlotterBridge:
             state="Hold",
             homing_trusted=self._load_machine_config().homing_trusted,
             axis_model_trusted=self._load_machine_config().axis_model_trusted,
+            visual_ready_to_plot=visual_ready,
+            visual_readiness_blockers=visual_blockers,
             mpos_mm=last_status.mpos_mm if last_status else None,
             wpos_mm=last_status.wpos_mm if last_status else None,
             pins=last_status.pins if last_status else "",
@@ -3714,6 +4226,21 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.add_calibration_observation,
             lambda response: getattr(response, "status", "") != "failed",
         ),
+        "/calibration/pen/observe": PostRoute(
+            VisualCapObservationRequest,
+            bridge.observe_visual_cap,
+            lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/calibration/probe/preview": PostRoute(
+            AdaptiveProbePreviewRequest,
+            bridge.preview_adaptive_probe,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/calibration/probe/run": PostRoute(
+            AdaptiveProbeRunRequest,
+            bridge.run_adaptive_probe,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
         "/paper/register": PostRoute(
             PaperRegistrationRequest,
             bridge.register_paper,
@@ -3760,6 +4287,9 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 response = bridge.calibration_status(session_id)
                 status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.NOT_FOUND
                 self._write_model(status, response)
+                return
+            if parsed_url.path == "/calibration/workflow/status":
+                self._write_model(HTTPStatus.OK, bridge.visual_readiness_status())
                 return
             if parsed_url.path == "/paper/status":
                 response = bridge.paper_registration_status()

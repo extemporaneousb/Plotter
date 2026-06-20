@@ -298,7 +298,7 @@ struct DotTestPreviewSegment: Decodable, Equatable {
     let lengthMm: Double
 }
 
-struct PaperPointMmSnapshot: Decodable, Equatable {
+struct PaperPointMmSnapshot: Codable, Equatable {
     let x: Double
     let y: Double
 }
@@ -381,7 +381,7 @@ struct MachineArmRequest: Encodable {
     let armUnlock: Bool
 }
 
-struct AxisModelTrustSampleRequest: Encodable {
+struct AxisModelTrustSampleRequest: Codable {
     let axis: String
     let commandedDistanceMm: Double
     let observedDxMm: Double
@@ -397,6 +397,136 @@ struct AxisModelTrustRequest: Encodable {
     let minObservedDistanceMm: Double
     let commandDistanceMm: Double
     let samples: [AxisModelTrustSampleRequest]
+}
+
+struct BridgeVisualCapObservationRequest: Encodable {
+    let observedNorm: NormPoint
+    let observedPaperNorm: NormPoint?
+    let source: String
+    let confidence: Double
+    let cameraId: String?
+    let cameraName: String?
+    let safeZoneInsetXMm: Double
+    let safeZoneInsetYMm: Double
+}
+
+struct BridgeAdaptiveProbePreviewRequest: Encodable {
+    let requestId: String?
+    let safeZoneInsetXMm: Double
+    let safeZoneInsetYMm: Double
+    let maxXProbeMm: Double
+    let maxYProbeMm: Double
+    let minProbeMm: Double
+    let clearanceMm: Double
+    let feedMmMin: Double
+}
+
+struct BridgeAdaptiveProbeRunRequest: Encodable {
+    let requestId: String?
+    let safeZoneInsetXMm: Double
+    let safeZoneInsetYMm: Double
+    let maxXProbeMm: Double
+    let maxYProbeMm: Double
+    let minProbeMm: Double
+    let clearanceMm: Double
+    let feedMmMin: Double
+    let expectedPlanId: String?
+}
+
+struct BridgeVisualReadinessResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let readiness: BridgeVisualReadinessState?
+    let readinessFile: String
+    let error: String?
+}
+
+struct BridgeAdaptiveProbeResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let previewOnly: Bool
+    let plan: BridgeAdaptiveVisualProbePlan?
+    let readiness: BridgeVisualReadinessState?
+    let readinessFile: String
+    let plannedCommands: [String]
+    let eventLog: String
+    let controllerTranscript: String?
+    let machineStatus: MachineStatusResponse?
+    let error: String?
+}
+
+struct BridgeVisualReadinessState: Decodable, Equatable {
+    let schemaVersion: Int
+    let artifactType: String
+    let stateId: String
+    let updatedAt: String
+    let paperRegistered: Bool
+    let paperRegistrationId: String?
+    let capLocalized: Bool
+    let capInsideSafeZone: Bool
+    let latestCapObservation: BridgeVisualCapObservation?
+    let safeZoneEvaluation: BridgeSafeZoneEvaluation?
+    let latestProbePlan: BridgeAdaptiveVisualProbePlan?
+    let probeObservationCount: Int
+    let probeRmsResidualMm: Double?
+    let probeMaxResidualMm: Double?
+    let visualReadyToPlot: Bool
+    let blockers: [String]
+}
+
+struct BridgeVisualCapObservation: Decodable, Equatable {
+    let schemaVersion: Int
+    let observationId: String
+    let target: String
+    let timestamp: String
+    let cameraNorm: NormPoint
+    let paperNorm: NormPoint
+    let logicalMm: PaperPointMmSnapshot?
+    let cameraId: String?
+    let cameraName: String?
+    let paperRegistrationId: String?
+    let confidence: Double
+    let source: String
+}
+
+struct BridgeSafeZoneEvaluation: Decodable, Equatable {
+    let capObservationId: String
+    let target: String
+    let inside: Bool
+    let logicalMm: PaperPointMmSnapshot
+    let abortReasons: [BridgeSafeZoneAbortReason]
+}
+
+struct BridgeSafeZoneAbortReason: Decodable, Equatable {
+    let code: String
+    let message: String
+}
+
+struct BridgeAdaptiveVisualProbePlan: Decodable, Equatable {
+    let schemaVersion: Int
+    let artifactType: String
+    let planId: String
+    let target: String
+    let status: String
+    let previewOnly: Bool
+    let requiresHoming: Bool
+    let capObservationId: String
+    let safeZoneEvaluation: BridgeSafeZoneEvaluation
+    let moves: [BridgeVisualProbeMove]
+    let blockers: [String]
+    let feedMmMin: Double
+}
+
+struct BridgeVisualProbeMove: Decodable, Equatable {
+    let axis: String
+    let direction: Int
+    let stepMm: Double
+    let relativeXMm: Double
+    let relativeYMm: Double
+    let availableNegativeMm: Double
+    let availablePositiveMm: Double
+    let maxStepMm: Double
 }
 
 struct MachineCommandResponse: Decodable {
@@ -541,6 +671,22 @@ final class PlotterBridgeClient {
         try await postMachineCommand(path: "machine/axis-model/trust", request: request)
     }
 
+    func visualReadinessStatus() async throws -> BridgeVisualReadinessResponse {
+        try await get(path: "calibration/workflow/status")
+    }
+
+    func observeVisualCap(_ request: BridgeVisualCapObservationRequest) async throws -> BridgeVisualReadinessResponse {
+        try await post(path: "calibration/pen/observe", request: request)
+    }
+
+    func previewAdaptiveProbe(_ request: BridgeAdaptiveProbePreviewRequest) async throws -> BridgeAdaptiveProbeResponse {
+        try await post(path: "calibration/probe/preview", request: request)
+    }
+
+    func runAdaptiveProbe(_ request: BridgeAdaptiveProbeRunRequest) async throws -> BridgeAdaptiveProbeResponse {
+        try await post(path: "calibration/probe/run", request: request)
+    }
+
     private func postMachineCommand<Request: Encodable>(
         path: String,
         request: Request
@@ -602,6 +748,14 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(MachineStatusResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgeVisualReadinessResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgeAdaptiveProbeResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
@@ -785,21 +939,21 @@ final class PlotterBridgeModel: ObservableObject {
         if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
         if isMachineAlarm { return "Motion blocked: machine alarm" }
         if isMachineBusy || isRunning { return "Motion busy: \(activeAction)" }
-        if !hasPaperLock { return "Drawing blocked: paper homography missing" }
-        if !machineAxisModelTrusted { return "Drawing blocked: axis geometry not trusted" }
-        if !machineHomingTrusted { return "Drawing blocked: absolute position not trusted" }
+        if !hasPaperLock { return "Bridge-run drawing blocked: paper homography missing" }
+        if !machineAxisModelTrusted { return "Bridge-run drawing blocked: axis geometry not trusted" }
+        if !machineHomingTrusted { return "Bridge-run drawing blocked: absolute position not trusted" }
         return "Live motion enabled"
     }
 
     var drawPreflightMessage: String {
         if !isOnline { return "Bridge offline" }
-        if isDryRun { return "Dry-run only" }
+        if isDryRun { return "Bridge-run dry-run only" }
         if !hasPaperLock { return "Paper homography missing" }
         if !machineAxisModelTrusted { return "Axis geometry not trusted" }
         if !machineHomingTrusted { return "Absolute position not trusted" }
         if isMachineAlarm { return "Machine alarm" }
         if isMachineBusy || isRunning { return "Machine busy" }
-        return "Absolute drawing armed"
+        return "Bridge-run drawing armed"
     }
 
     func refreshHealth() async {

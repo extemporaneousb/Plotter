@@ -921,7 +921,7 @@ def test_bridge_dry_run_relative_mark_draws_visible_cross_and_returns_to_center(
     assert response.planned_commands[-1] == "G90"
 
 
-def test_bridge_axis_model_trust_rejects_green_cap_probe_as_draw_authorization(tmp_path: Path) -> None:
+def test_bridge_axis_model_trust_requires_visual_readiness_artifact(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
 
@@ -967,7 +967,7 @@ def test_bridge_axis_model_trust_rejects_green_cap_probe_as_draw_authorization(t
 
     assert response.status == "failed"
     assert response.error is not None
-    assert "relative motion only" in response.error
+    assert "visual readiness artifact" in response.error
     saved = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
     assert saved.axis_model_trusted is False
 

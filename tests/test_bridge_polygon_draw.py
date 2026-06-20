@@ -182,11 +182,11 @@ def test_real_polygon_draw_requires_homing_or_position_trust() -> None:
         )
 
 
-def test_real_polygon_draw_rejects_axis_model_without_absolute_position() -> None:
+def test_real_polygon_draw_rejects_axis_model_without_visual_position() -> None:
     machine = _machine_with_pen()
     machine.axis_model_trusted = True
 
-    with pytest.raises(MotionSafetyError, match="visual axis probe"):
+    with pytest.raises(MotionSafetyError, match="visual_position_trusted"):
         build_polygon_draw_plan(
             request=_line_request(),
             machine=machine,
@@ -197,6 +197,22 @@ def test_real_polygon_draw_rejects_axis_model_without_absolute_position() -> Non
             ),
             command_id="axis-only",
         )
+
+
+def test_real_polygon_draw_allows_visual_position_without_homing() -> None:
+    machine = _machine_with_pen()
+
+    plan = build_polygon_draw_plan(
+        request=_line_request(request_id="visual-position").model_copy(
+            update={"visual_position_trusted": True}
+        ),
+        machine=machine,
+        safety=SafetyState(dry_run=False, armed_motion=True, allow_pen_actuation=True),
+        command_id="visual-position",
+    )
+
+    assert plan.command_id == "visual-position"
+    assert not any(command.kind == "homing" for command in plan.planned_commands)
 
 
 def test_real_polygon_draw_allows_homed_absolute_position_without_include_homing() -> None:

@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from plotter_vision.calibration.readiness import (
+    X_PROBE_MAX_MM,
+    Y_PROBE_MAX_MM,
+    DrawingSafeZone,
+    SafeZoneMarginsMM,
+    VisualCapObservation,
+    VisualReadinessState,
+    build_visual_readiness_state,
+    evaluate_cap_inside_safe_zone,
+    plan_adaptive_visual_probe,
+)
+from plotter_vision.calibration.vision_model import (
+    CameraPointNorm,
+    LogicalPointMM,
+    PaperPointNorm,
+)
+from plotter_vision.drawing import DrawingFrameMM
+
+
+def test_visual_cap_inside_safe_zone_is_accepted() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+
+    assert evaluation.inside is True
+    assert evaluation.abort_reasons == []
+    assert evaluation.logical_mm == LogicalPointMM(x=250.0, y=100.0)
+
+
+def test_visual_cap_outside_safe_zone_has_explicit_abort_reasons() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.02, paper_y=0.98, logical_x=10.0, logical_y=198.0)
+
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+
+    assert evaluation.inside is False
+    assert [reason.code for reason in evaluation.abort_reasons] == [
+        "cap_paper_x_below_safe_zone",
+        "cap_paper_y_above_safe_zone",
+        "cap_logical_x_below_safe_zone",
+        "cap_logical_y_above_safe_zone",
+    ]
+    assert "below safe zone minimum" in evaluation.abort_reasons[0].message
+    assert "above safe zone maximum" in evaluation.abort_reasons[-1].message
+
+
+def test_adaptive_probe_prefers_positive_x_near_low_edge_and_scales_y_smaller() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.10, paper_y=0.50, logical_x=50.0, logical_y=100.0)
+
+    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
+
+    assert plan.status == "planned"
+    assert plan.preview_only is True
+    assert plan.requires_homing is False
+    assert len(plan.moves) == 2
+    x_move = plan.moves[0]
+    y_move = plan.moves[1]
+    assert x_move.axis == "X"
+    assert x_move.direction == 1
+    assert x_move.relative_x_mm > 0
+    assert x_move.step_mm == pytest.approx(200.0)
+    assert y_move.axis == "Y"
+    assert abs(y_move.step_mm) < x_move.step_mm
+
+
+def test_adaptive_probe_respects_x_and_y_maximum_steps() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+
+    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
+
+    x_move, y_move = plan.moves
+    assert x_move.step_mm <= X_PROBE_MAX_MM
+    assert y_move.step_mm <= Y_PROBE_MAX_MM
+    assert x_move.step_mm == pytest.approx(138.0)
+    assert y_move.step_mm == pytest.approx(50.0)
+
+
+def test_probe_plan_blocks_cap_outside_safe_zone_without_moves() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.02, paper_y=0.50, logical_x=10.0, logical_y=100.0)
+
+    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
+
+    assert plan.status == "blocked"
+    assert plan.moves == []
+    assert any("below safe zone minimum" in blocker for blocker in plan.blockers)
+
+
+def test_visual_readiness_serialization_round_trip(tmp_path: Path) -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+    readiness = build_visual_readiness_state(
+        paper_registered=True,
+        cap_observation=observation,
+        safe_zone_evaluation=evaluation,
+        probe_observation_count=2,
+        probe_rms_residual_mm=1.2,
+        probe_max_residual_mm=2.4,
+    )
+
+    path = tmp_path / "visual_readiness.json"
+    readiness.save_json(path)
+
+    loaded = VisualReadinessState.load_json(path)
+    assert loaded == readiness
+    assert loaded.visual_ready_to_plot is True
+    assert loaded.blockers == []
+
+
+def test_visual_readiness_reports_blockers_without_homing_or_axis_trust() -> None:
+    readiness = build_visual_readiness_state(
+        paper_registered=False,
+        cap_observation=None,
+        safe_zone_evaluation=None,
+        probe_observation_count=0,
+    )
+
+    assert readiness.visual_ready_to_plot is False
+    assert readiness.paper_registered is False
+    assert readiness.cap_localized is False
+    assert readiness.cap_inside_safe_zone is False
+    assert any("Paper registration" in blocker for blocker in readiness.blockers)
+    assert any("Green cap/carriage marker is not localized" in blocker for blocker in readiness.blockers)
+    assert any("at least 2 observations" in blocker for blocker in readiness.blockers)
+    assert "homing_trusted" not in readiness.model_dump()
+    assert "axis_model_trusted" not in readiness.model_dump()
+
+
+def test_visual_readiness_blocks_high_probe_residuals() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+
+    readiness = build_visual_readiness_state(
+        paper_registered=True,
+        cap_observation=observation,
+        safe_zone_evaluation=evaluation,
+        probe_observation_count=2,
+        probe_rms_residual_mm=6.1,
+        probe_max_residual_mm=8.1,
+    )
+
+    assert readiness.visual_ready_to_plot is False
+    assert any("RMS residual" in blocker for blocker in readiness.blockers)
+    assert any("max residual" in blocker for blocker in readiness.blockers)
+
+
+def _safe_zone() -> DrawingSafeZone:
+    return DrawingSafeZone.from_frame(
+        drawing_frame=DrawingFrameMM(
+            origin_x_mm=0.0,
+            origin_y_mm=0.0,
+            width_mm=500.0,
+            height_mm=200.0,
+        ),
+        margins_mm=SafeZoneMarginsMM(left=20.0, right=40.0, bottom=10.0, top=20.0),
+    )
+
+
+def _cap(
+    *,
+    paper_x: float,
+    paper_y: float,
+    logical_x: float,
+    logical_y: float,
+) -> VisualCapObservation:
+    return VisualCapObservation(
+        camera_norm=CameraPointNorm(x=paper_x, y=paper_y),
+        paper_norm=PaperPointNorm(x=paper_x, y=paper_y),
+        logical_mm=LogicalPointMM(x=logical_x, y=logical_y),
+        camera_id="cam-1",
+        camera_name="Fixed Camera",
+        confidence=0.94,
+        source="operator_confirmed",
+    )

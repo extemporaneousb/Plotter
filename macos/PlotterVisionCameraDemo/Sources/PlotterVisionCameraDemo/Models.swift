@@ -166,8 +166,8 @@ struct ObservedPenPoint: Identifiable, Equatable {
     var paperMm: PaperPointMmSnapshot?
 
     var label: String {
-        guard let paperMm else { return "PEN PAPER ?" }
-        return String(format: "PEN %.1f,%.1f mm", paperMm.x, paperMm.y)
+        guard let paperMm else { return "CAP PAPER ?" }
+        return String(format: "CAP %.1f,%.1f mm", paperMm.x, paperMm.y)
     }
 }
 

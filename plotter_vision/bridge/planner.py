@@ -39,6 +39,7 @@ class PolygonDrawRequest(BaseModel):
     frame: DrawingFrameMM | None = None
     polylines: list[PlannedPolyline] = Field(default_factory=list)
     include_homing: bool = False
+    visual_position_trusted: bool = False
     draw_feed_mm_min: float = 180.0
     travel_feed_mm_min: float = 500.0
     max_segment_mm: float = 25.0
@@ -120,11 +121,11 @@ def build_polygon_draw_plan(
     )
     if request.include_homing and not safety.dry_run and not safety.allow_homing:
         raise HomingSafetyError("Real polygon drawing homing requires allow_homing=true.")
-    has_trusted_absolute_position = machine.homing_trusted
+    has_trusted_absolute_position = machine.homing_trusted or request.visual_position_trusted
     if not safety.dry_run and not request.include_homing and not has_trusted_absolute_position:
         raise MotionSafetyError(
             "Real absolute polygon drawing requires include_homing=true or "
-            "homing_trusted=true. A visual axis probe is not an absolute position model."
+            "homing_trusted=true or visual_position_trusted=true."
         )
 
     pen_down = _validated_pen_command(machine.pen.down_command, safety)
