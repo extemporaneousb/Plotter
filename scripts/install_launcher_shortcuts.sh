@@ -5,12 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DESKTOP_DIR="${HOME}/Desktop"
 APPLICATIONS_DIR="${HOME}/Applications"
 SMART_COMMAND="${DESKTOP_DIR}/Plotter Vision.command"
-PREVIEW_COMMAND="${DESKTOP_DIR}/Plotter Vision Dry Run Preview.command"
-LEGACY_PREVIEW_COMMAND="${DESKTOP_DIR}/Plotter Vision Preview.command"
-LIVE_COMMAND="${DESKTOP_DIR}/Plotter Vision Live.command"
-STOP_COMMAND="${DESKTOP_DIR}/Plotter Vision Stop Bridge.command"
 SMART_APP="${APPLICATIONS_DIR}/Plotter Vision.app"
-LEGACY_PREVIEW_APP="${APPLICATIONS_DIR}/Plotter Vision Preview.app"
 
 mkdir -p "$DESKTOP_DIR" "$APPLICATIONS_DIR"
 
@@ -27,11 +22,20 @@ EOF
   chmod +x "$path"
 }
 
+remove_legacy_shortcuts() {
+  local path
+  for path in \
+    "${DESKTOP_DIR}/Plotter Vision Preview.command" \
+    "${DESKTOP_DIR}/Plotter Vision Dry Run Preview.command" \
+    "${DESKTOP_DIR}/Plotter Vision Live.command" \
+    "${DESKTOP_DIR}/Plotter Vision Stop Bridge.command" \
+    "${APPLICATIONS_DIR}/Plotter Vision Preview.app"; do
+    rm -rf "$path"
+  done
+}
+
+remove_legacy_shortcuts
 write_command "$SMART_COMMAND" smart
-write_command "$PREVIEW_COMMAND" preview
-write_command "$LEGACY_PREVIEW_COMMAND" smart
-write_command "$LIVE_COMMAND" live
-write_command "$STOP_COMMAND" stop
 
 if command -v osacompile >/dev/null 2>&1; then
   write_app() {
@@ -55,21 +59,12 @@ EOF
   }
 
   write_app "$SMART_APP" smart
-  write_app "$LEGACY_PREVIEW_APP" smart
 else
   echo "osacompile not found; skipped ${SMART_APP}" >&2
-  echo "osacompile not found; skipped ${LEGACY_PREVIEW_APP}" >&2
 fi
 
 echo "Installed launcher shortcuts:"
 echo "  $SMART_COMMAND"
-echo "  $PREVIEW_COMMAND"
-echo "  $LEGACY_PREVIEW_COMMAND"
-echo "  $LIVE_COMMAND"
-echo "  $STOP_COMMAND"
 if [[ -d "$SMART_APP" ]]; then
   echo "  $SMART_APP"
-fi
-if [[ -d "$LEGACY_PREVIEW_APP" ]]; then
-  echo "  $LEGACY_PREVIEW_APP"
 fi

@@ -47,18 +47,14 @@ RUFF := $(BIN)/ruff
 INSTALL_STAMP := $(VENV)/.install-stamp
 SCALE_SNAPSHOT := $(shell if [ -f "$(ARTIFACTS)/controller_snapshot_after_settings.json" ]; then echo "$(ARTIFACTS)/controller_snapshot_after_settings.json"; else echo "$(ARTIFACTS)/controller_snapshot.json"; fi)
 
-.PHONY: help venv install test lint check launch launch-smart launch-preview launch-live launch-stop install-shortcuts app preview-app standby-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-standby bridge-standby-bg bridge-standby-restart bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
+.PHONY: help venv install test lint check launch install-shortcuts app preview-app standby-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-standby bridge-standby-bg bridge-standby-restart bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
 
 help:
 	@echo "Plotter Vision targets:"
 	@echo "  make install                         Create/update .venv and install dev deps"
 	@echo "  make check                           Run tests and lint"
-	@echo "  make launch                          Shortcut target: smart latest-app launch"
-	@echo "  make launch-smart                    Reuse live bridge, restart dry-run bridge, or start standby"
-	@echo "  make launch-preview                  Force dry-run bridge restart plus app; refuses live bridge"
-	@echo "  make launch-live [PORT=/dev/cu...]   Hardware-standby bridge plus app; arm inside app"
-	@echo "  make launch-stop                     Stop the background bridge"
-	@echo "  make install-shortcuts               Install Desktop and Applications launch shortcuts"
+	@echo "  make launch                          Reuse live bridge, restart dry-run bridge, or start standby; then open app"
+	@echo "  make install-shortcuts               Install the Plotter Vision launcher"
 	@echo "  make app                             Build and relaunch the native camera app"
 	@echo "  make preview-app                     Restart dry-run hardware-standby bridge and relaunch app"
 	@echo "  make standby-app [PORT=/dev/cu...]   Start dry-run serial-capable bridge and relaunch app"
@@ -131,19 +127,8 @@ lint: install
 
 check: test lint
 
-launch: launch-smart
-
-launch-smart:
+launch:
 	HTTP_PORT="$(HTTP_PORT)" scripts/plotter_launcher.sh smart
-
-launch-preview:
-	HTTP_PORT="$(HTTP_PORT)" scripts/plotter_launcher.sh preview
-
-launch-live:
-	PORT="$(PORT)" BAUD="$(BAUD)" HTTP_PORT="$(HTTP_PORT)" scripts/plotter_launcher.sh live
-
-launch-stop:
-	scripts/plotter_launcher.sh stop
 
 install-shortcuts:
 	scripts/install_launcher_shortcuts.sh
