@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field, ValidationError
 
+from plotter_vision import __version__ as PLOTTER_VERSION
 from plotter_vision.calibration.paper import (
     PaperCorner,
     PaperCornerObservation,
@@ -96,6 +99,23 @@ from plotter_vision.motion.simulator import (
 )
 
 DotTestPattern = Literal["center", "five", "nine"]
+BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
+BRIDGE_API_VERSION = 2
+BRIDGE_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _bridge_build_id() -> str:
+    env_build_id = os.environ.get("PLOTTER_BRIDGE_BUILD_ID", "").strip()
+    if env_build_id:
+        return env_build_id
+    try:
+        source_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+    except OSError:
+        source_digest = "unknown"
+    return f"plotter-bridge/{PLOTTER_VERSION}+{source_digest}"
+
+
+BRIDGE_BUILD_ID = _bridge_build_id()
 
 
 class BridgeRuntimeConfig(BaseModel):
@@ -129,9 +149,17 @@ class BridgeEvent(BaseModel):
 
 class BridgeHealthResponse(BaseModel):
     status: str = "ready"
-    schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    schema_version: int = Field(default=2, serialization_alias="schema", validation_alias="schema")
     dry_run: bool
     controller: str
+    bridge_api_version: int
+    lifecycle_mode: BridgeLifecycleMode
+    lifecycle_label: str
+    bridge_build_id: str
+    bridge_source_root: str
+    bridge_pid: int
+    bridge_started_at: str
+    can_restart_safely: bool
     arm_motion: bool = False
     arm_pen: bool = False
     arm_homing: bool = False
@@ -561,6 +589,7 @@ class PlotterBridge:
     def __init__(self, config: BridgeRuntimeConfig) -> None:
         self.config = config
         self.event_log = EventLog(config.event_log_path)
+        self._started_at = datetime.now(timezone.utc).isoformat()
         self._machine_lock = Lock()
         self._state_lock = Lock()
         self._active_command_id: str | None = None
@@ -570,9 +599,18 @@ class PlotterBridge:
 
     def health(self) -> BridgeHealthResponse:
         machine = self._load_machine_config()
+        lifecycle_mode = self._lifecycle_mode()
         return BridgeHealthResponse(
             dry_run=self.config.dry_run,
             controller=self._controller_description(),
+            bridge_api_version=BRIDGE_API_VERSION,
+            lifecycle_mode=lifecycle_mode,
+            lifecycle_label=self._lifecycle_label(lifecycle_mode),
+            bridge_build_id=BRIDGE_BUILD_ID,
+            bridge_source_root=str(BRIDGE_SOURCE_ROOT),
+            bridge_pid=os.getpid(),
+            bridge_started_at=self._started_at,
+            can_restart_safely=self._can_restart_safely(),
             arm_motion=self.config.arm_motion,
             arm_pen=self.config.arm_pen,
             arm_homing=self.config.arm_homing,
@@ -3659,6 +3697,26 @@ class PlotterBridge:
             return "unconfigured"
         suffix = "" if Path(self.config.controller_port).exists() else " (missing)"
         return f"serial:{self.config.controller_port}@{self.config.baud}{suffix}"
+
+    def _lifecycle_mode(self) -> BridgeLifecycleMode:
+        if not self.config.dry_run:
+            return "live"
+        if self.config.mock:
+            return "mock_preview"
+        return "hardware_standby"
+
+    def _lifecycle_label(self, mode: BridgeLifecycleMode) -> str:
+        labels: dict[BridgeLifecycleMode, str] = {
+            "mock_preview": "Preview Bridge",
+            "hardware_standby": "Hardware Standby",
+            "live": "Live Bridge",
+        }
+        return labels[mode]
+
+    def _can_restart_safely(self) -> bool:
+        with self._state_lock:
+            active_command_id = self._active_command_id
+        return self.config.dry_run and active_command_id is None
 
 
 def serve_bridge(config: BridgeRuntimeConfig) -> None:

@@ -61,10 +61,18 @@ struct ContentView: View {
             await bridge.refreshHealth()
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
+            var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
+                pollIteration += 1
+                let refreshedHealth = pollIteration.isMultiple(of: 4)
+                if refreshedHealth {
+                    await bridge.refreshHealth()
+                }
                 await bridge.refreshMachineStatus()
-                await bridge.refreshPaperStatus()
+                if !refreshedHealth {
+                    await bridge.refreshPaperStatus()
+                }
             }
         }
         .onChange(of: plotterCamera.changeReport.sequence) { _, _ in
@@ -1442,7 +1450,7 @@ struct ContentView: View {
                 .frame(height: 24)
                 .overlay(Color.white.opacity(0.18))
 
-            Text("PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
+            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
@@ -1468,10 +1476,15 @@ struct ContentView: View {
     private var plotterConnectionButton: some View {
         let isActive = bridge.isLiveMotionMode
         let isDisabled = !bridge.canUsePlotterConnectionControl
-        let fillColor = isActive
+        let isWarning = bridge.hasBridgeApiMismatch || bridge.hasLifecycleBuildMismatch
+        let fillColor = isWarning
+            ? Color.yellow.opacity(0.20)
+            : isActive
             ? Color.green.opacity(0.30)
             : Color.white.opacity(isDisabled ? 0.06 : 0.14)
-        let strokeColor = isActive
+        let strokeColor = isWarning
+            ? Color.yellow.opacity(0.56)
+            : isActive
             ? Color.green.opacity(0.58)
             : Color.white.opacity(isDisabled ? 0.12 : 0.22)
 
@@ -1484,7 +1497,7 @@ struct ContentView: View {
                     .foregroundStyle(
                         isDisabled
                             ? .white.opacity(0.34)
-                            : isActive ? .green.opacity(0.96) : .white.opacity(0.92)
+                            : isWarning ? .yellow.opacity(0.94) : isActive ? .green.opacity(0.96) : .white.opacity(0.92)
                     )
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1498,14 +1511,14 @@ struct ContentView: View {
                         .foregroundStyle(
                             isActive
                                 ? .green.opacity(0.88)
-                                : isDisabled ? .white.opacity(0.30) : .orange.opacity(0.86)
+                                : isWarning ? .yellow.opacity(0.88) : isDisabled ? .white.opacity(0.30) : .orange.opacity(0.86)
                         )
                         .lineLimit(1)
                         .minimumScaleFactor(0.76)
                 }
                 Spacer(minLength: 0)
             }
-            .frame(width: 138, height: 38)
+            .frame(width: 156, height: 38)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(fillColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1949,9 +1962,9 @@ struct ContentView: View {
         HStack(spacing: 7) {
             StatusLamp(
                 title: "BRIDGE",
-                value: bridge.isOnline ? "OK" : "OFF",
-                color: bridge.isOnline ? .green : .red,
-                help: bridge.statusText
+                value: bridge.bridgeLifecycleLampValue,
+                color: bridgeLifecycleLampColor,
+                help: bridge.bridgeLifecycleHelp
             )
             StatusLamp(
                 title: "MOTION",
@@ -1983,6 +1996,21 @@ struct ContentView: View {
                 color: bridge.isMachineAlarm ? .red : (bridge.isMachineBusy || bridge.isRunning ? .yellow : .white.opacity(0.72)),
                 help: bridge.machineStatus
             )
+        }
+    }
+
+    private var bridgeLifecycleLampColor: Color {
+        if !bridge.isOnline { return .red }
+        if bridge.hasBridgeApiMismatch || bridge.hasLifecycleBuildMismatch { return .yellow }
+        switch bridge.bridgeLifecycleTitle {
+        case "Preview Bridge":
+            return .cyan
+        case "Live Bridge":
+            return .green
+        case "Hardware Standby":
+            return .orange
+        default:
+            return .white.opacity(0.72)
         }
     }
 

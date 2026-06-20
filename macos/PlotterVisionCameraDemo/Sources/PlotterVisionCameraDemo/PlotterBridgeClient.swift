@@ -12,6 +12,176 @@ struct BridgeHealthResponse: Decodable {
     let eventLog: String
     let workspaceXMm: Double?
     let workspaceYMm: Double?
+    let bridgeApiVersion: String?
+    let lifecycleMode: String?
+    let lifecycleLabel: String?
+    let bridgeBuildId: String?
+    let bridgeSourceRoot: String?
+    let bridgePid: Int?
+    let bridgeStartedAt: String?
+    let canRestartSafely: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case dryRun
+        case controller
+        case armMotion
+        case armPen
+        case armHoming
+        case armUnlock
+        case eventLog
+        case workspaceXMm
+        case workspaceYMm
+        case bridgeApiVersion
+        case lifecycleMode
+        case lifecycleLabel
+        case bridgeBuildId
+        case bridgeSourceRoot
+        case bridgePid
+        case bridgeStartedAt
+        case canRestartSafely
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decodeIfPresent(String.self, forKey: .status) ?? "ready"
+        dryRun = try container.decodeIfPresent(Bool.self, forKey: .dryRun) ?? true
+        controller = try container.decodeIfPresent(String.self, forKey: .controller) ?? "unknown"
+        armMotion = try container.decodeIfPresent(Bool.self, forKey: .armMotion) ?? false
+        armPen = try container.decodeIfPresent(Bool.self, forKey: .armPen) ?? false
+        armHoming = try container.decodeIfPresent(Bool.self, forKey: .armHoming) ?? false
+        armUnlock = try container.decodeIfPresent(Bool.self, forKey: .armUnlock) ?? false
+        eventLog = try container.decodeIfPresent(String.self, forKey: .eventLog) ?? ""
+        workspaceXMm = container.decodeFlexibleDoubleIfPresent(forKey: .workspaceXMm)
+        workspaceYMm = container.decodeFlexibleDoubleIfPresent(forKey: .workspaceYMm)
+        bridgeApiVersion = container.decodeFlexibleStringIfPresent(forKey: .bridgeApiVersion)
+        lifecycleMode = container.decodeFlexibleStringIfPresent(forKey: .lifecycleMode)
+        lifecycleLabel = container.decodeFlexibleStringIfPresent(forKey: .lifecycleLabel)
+        bridgeBuildId = container.decodeFlexibleStringIfPresent(forKey: .bridgeBuildId)
+        bridgeSourceRoot = container.decodeFlexibleStringIfPresent(forKey: .bridgeSourceRoot)
+        bridgePid = container.decodeFlexibleIntIfPresent(forKey: .bridgePid)
+        bridgeStartedAt = container.decodeFlexibleStringIfPresent(forKey: .bridgeStartedAt)
+        canRestartSafely = container.decodeFlexibleBoolIfPresent(forKey: .canRestartSafely)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeFlexibleStringIfPresent(forKey key: Key) -> String? {
+        if let value = try? decode(String.self, forKey: key) {
+            return cleanBridgeMetadata(value)
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? decode(Int64.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? decode(Double.self, forKey: key) {
+            return value.rounded() == value ? String(Int(value)) : String(value)
+        }
+        if let value = try? decode(Bool.self, forKey: key) {
+            return value ? "true" : "false"
+        }
+        return nil
+    }
+
+    func decodeFlexibleIntIfPresent(forKey key: Key) -> Int? {
+        if let value = try? decode(Int.self, forKey: key) {
+            return value
+        }
+        if let value = try? decode(Int64.self, forKey: key) {
+            return Int(value)
+        }
+        if let value = try? decode(Double.self, forKey: key) {
+            return Int(value)
+        }
+        if let value = try? decode(String.self, forKey: key) {
+            return Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    func decodeFlexibleDoubleIfPresent(forKey key: Key) -> Double? {
+        if let value = try? decode(Double.self, forKey: key) {
+            return value
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return Double(value)
+        }
+        if let value = try? decode(String.self, forKey: key) {
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    func decodeFlexibleBoolIfPresent(forKey key: Key) -> Bool? {
+        if let value = try? decode(Bool.self, forKey: key) {
+            return value
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return value != 0
+        }
+        guard let value = try? decode(String.self, forKey: key) else {
+            return nil
+        }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "y":
+            return true
+        case "0", "false", "no", "n":
+            return false
+        default:
+            return nil
+        }
+    }
+}
+
+private func cleanBridgeMetadata(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    switch trimmed.lowercased() {
+    case "unknown", "none", "null", "--":
+        return nil
+    default:
+        return trimmed
+    }
+}
+
+private func currentAppBuildId() -> String? {
+    let environment = ProcessInfo.processInfo.environment
+    for key in ["PLOTTER_APP_BUILD_ID", "PLOTTER_BUILD_ID"] {
+        if let value = cleanBridgeMetadata(environment[key]) {
+            return value
+        }
+    }
+
+    for key in ["PlotterAppBuildID", "PlotterBuildID", "PLOTTER_APP_BUILD_ID"] {
+        if let value = cleanBridgeMetadata(Bundle.main.object(forInfoDictionaryKey: key) as? String) {
+            return value
+        }
+    }
+
+    return nil
+}
+
+private func currentRequiredBridgeApiVersion() -> Int {
+    if let value = Bundle.main.object(forInfoDictionaryKey: "PlotterRequiredBridgeAPIVersion") as? Int {
+        return value
+    }
+    if let value = Bundle.main.object(forInfoDictionaryKey: "PlotterRequiredBridgeAPIVersion") as? String,
+       let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return parsed
+    }
+    return 2
+}
+
+private func normalizedBuildId(_ value: String?) -> String? {
+    cleanBridgeMetadata(value)?.lowercased()
+}
+
+private func shortBuildId(_ value: String?) -> String? {
+    guard let value = cleanBridgeMetadata(value) else { return nil }
+    return String(value.prefix(10))
 }
 
 struct BridgeDemoRequest: Encodable {
@@ -772,6 +942,14 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var isRunning = false
     @Published var isDryRun = true
     @Published var bridgeController = "unconfigured"
+    @Published var bridgeApiVersion: String?
+    @Published var lifecycleMode: String?
+    @Published var lifecycleLabel: String?
+    @Published var bridgeBuildId: String?
+    @Published var bridgeSourceRoot: String?
+    @Published var bridgePid: Int?
+    @Published var bridgeStartedAt: String?
+    @Published var canRestartSafely: Bool?
     @Published var armMotion = false
     @Published var armPen = false
     @Published var armHoming = false
@@ -815,6 +993,8 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var manualFeedMmMin = 500.0
 
     private let client = PlotterBridgeClient()
+    private let appBuildId = currentAppBuildId()
+    private let requiredBridgeApiVersion = currentRequiredBridgeApiVersion()
     private var animationTask: Task<Void, Never>?
     private var isRefreshingMachineStatus = false
 
@@ -830,12 +1010,104 @@ final class PlotterBridgeModel: ObservableObject {
         bridgeController.hasPrefix("serial:")
     }
 
+    var bridgeLifecycleTitle: String {
+        if !isOnline { return "Offline" }
+        if let title = Self.lifecycleTitle(for: lifecycleLabel) {
+            return title
+        }
+        if let title = Self.lifecycleTitle(for: lifecycleMode) {
+            return title
+        }
+        if isMockBridge { return "Preview Bridge" }
+        if isLiveMotionMode { return "Live Bridge" }
+        return "Hardware Standby"
+    }
+
+    var bridgeLifecycleLampValue: String {
+        if hasBridgeApiMismatch { return "API" }
+        if hasLifecycleBuildMismatch { return "STALE" }
+        switch bridgeLifecycleTitle {
+        case "Offline":
+            return "OFF"
+        case "Preview Bridge":
+            return "PREVIEW"
+        case "Hardware Standby":
+            return "STBY"
+        case "Live Bridge":
+            return "LIVE"
+        default:
+            return String(bridgeLifecycleTitle.uppercased().prefix(8))
+        }
+    }
+
+    var hasLifecycleBuildMismatch: Bool {
+        guard isOnline,
+              let appBuild = normalizedBuildId(appBuildId),
+              let bridgeBuild = normalizedBuildId(bridgeBuildId) else {
+            return false
+        }
+        return appBuild != bridgeBuild
+    }
+
+    var hasBridgeApiMismatch: Bool {
+        guard isOnline,
+              let rawVersion = cleanBridgeMetadata(bridgeApiVersion),
+              let apiVersion = Int(rawVersion) else {
+            return false
+        }
+        return apiVersion < requiredBridgeApiVersion
+    }
+
+    var bridgeLifecycleStatusLine: String {
+        if !isOnline { return "Offline" }
+
+        var parts = [bridgeLifecycleTitle]
+        if hasBridgeApiMismatch,
+           let apiVersion = cleanBridgeMetadata(bridgeApiVersion) {
+            parts.append("API MISMATCH app \(requiredBridgeApiVersion) bridge \(apiVersion)")
+        } else if hasLifecycleBuildMismatch,
+           let appBuild = shortBuildId(appBuildId),
+           let bridgeBuild = shortBuildId(bridgeBuildId) {
+            parts.append("STALE app \(appBuild) bridge \(bridgeBuild)")
+        } else if let build = shortBuildId(bridgeBuildId) {
+            parts.append("build \(build)")
+        }
+        if let apiVersion = cleanBridgeMetadata(bridgeApiVersion) {
+            parts.append("api \(apiVersion)")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    var bridgeLifecycleHelp: String {
+        if !isOnline {
+            return "Offline\nStart a preview or hardware-standby bridge."
+        }
+
+        var lines = [bridgeLifecycleStatusLine]
+        lines.append("Controller: \(bridgeController)")
+        lines.append("Motion: \(motionModeLabel)")
+        lines.append(motionGateMessage)
+        if let pid = bridgePid {
+            lines.append("PID: \(pid)")
+        }
+        if let startedAt = cleanBridgeMetadata(bridgeStartedAt) {
+            lines.append("Started: \(startedAt)")
+        }
+        if let sourceRoot = cleanBridgeMetadata(bridgeSourceRoot) {
+            lines.append("Source: \(sourceRoot)")
+        }
+        if let canRestartSafely {
+            lines.append("Bridge-reported safe restart: \(canRestartSafely ? "yes" : "no")")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     var canConnectHardware: Bool {
         isOnline && !isMockBridge && !isRunning && !isMachineBusy
     }
 
     var canArmHardware: Bool {
-        isOnline && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
+        isOnline && !hasBridgeApiMismatch && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
     }
 
     var canUsePlotterConnectionControl: Bool {
@@ -850,22 +1122,23 @@ final class PlotterBridgeModel: ObservableObject {
         if isRunning || isMachineBusy {
             return activeAction == "arm" ? "Connecting" : "Busy"
         }
-        if !isOnline { return "Bridge Offline" }
-        if isMockBridge { return "Preview Only" }
-        if isLiveMotionMode { return "Connected to Plotter" }
-        return "Connect to Plotter"
+        if hasBridgeApiMismatch { return "Bridge API Mismatch" }
+        if hasLifecycleBuildMismatch { return "Stale Bridge" }
+        return bridgeLifecycleTitle
     }
 
     var plotterConnectionSubtitle: String {
-        if isLiveMotionMode { return "Live" }
+        if hasBridgeApiMismatch { return "Update Bridge" }
+        if hasLifecycleBuildMismatch { return "Build Mismatch" }
         if !isOnline { return "Offline" }
-        if isMockBridge { return "Mock" }
-        if hasControllerPort { return "Dry Run" }
+        if isLiveMotionMode { return "Live Gated" }
+        if isMockBridge { return "Preview Only" }
         return "Dry Run"
     }
 
     var plotterConnectionSystemName: String {
         if isRunning || isMachineBusy { return "hourglass" }
+        if hasBridgeApiMismatch || hasLifecycleBuildMismatch { return "exclamationmark.triangle.fill" }
         if !isOnline { return "bolt.slash" }
         if isMockBridge { return "eye" }
         if isLiveMotionMode { return "checkmark.seal.fill" }
@@ -873,11 +1146,17 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     var plotterConnectionHelp: String {
+        if hasBridgeApiMismatch {
+            return "\(bridgeLifecycleHelp)\nBridge API is older than this app requires; restart the safe bridge from current code before live operation."
+        }
+        if hasLifecycleBuildMismatch {
+            return "\(bridgeLifecycleHelp)\nApp and bridge build IDs differ; treat this bridge as stale until both come from the same checkout."
+        }
         if !isOnline { return "Bridge is offline; start the Plotter bridge before connecting." }
         if isMockBridge { return "Mock preview bridge cannot connect to physical plotter hardware." }
         if isLiveMotionMode { return "Connected to plotter. Machine controls are live-gated." }
         if isRunning || isMachineBusy { return "Machine is busy; connection change is blocked." }
-        return "Connect to the physical plotter and leave dry-run mode. This probes status but does not move, home, unlock, or actuate the pen."
+        return "\(bridgeLifecycleHelp)\nConnect to the physical plotter and leave dry-run mode. This probes status but does not move, home, unlock, or actuate the pen."
     }
 
     var hasPaperLock: Bool {
@@ -886,6 +1165,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var canRunAbsoluteDrawing: Bool {
         isLiveMotionMode
+            && !hasBridgeApiMismatch
             && hasPaperLock
             && machineAxisModelTrusted
             && machineHomingTrusted
@@ -903,6 +1183,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var canRunVisualRelativeMotion: Bool {
         isLiveMotionMode
+            && !hasBridgeApiMismatch
             && hasPaperLock
             && dotTestPreviewPattern == "center"
             && !dotTestPreviewPoints.isEmpty
@@ -934,6 +1215,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var motionGateMessage: String {
         if !isOnline { return "Motion blocked: bridge offline" }
+        if hasBridgeApiMismatch { return "Motion blocked: bridge API mismatch; restart safe bridge" }
         if isMockBridge { return "Preview bridge only; start hardware standby to connect" }
         if !hasControllerPort { return "Controller not connected; connect or arm to auto-detect" }
         if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
@@ -947,6 +1229,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var drawPreflightMessage: String {
         if !isOnline { return "Bridge offline" }
+        if hasBridgeApiMismatch { return "Bridge API mismatch" }
         if isDryRun { return "Bridge-run dry-run only" }
         if !hasPaperLock { return "Paper homography missing" }
         if !machineAxisModelTrusted { return "Axis geometry not trusted" }
@@ -954,6 +1237,27 @@ final class PlotterBridgeModel: ObservableObject {
         if isMachineAlarm { return "Machine alarm" }
         if isMachineBusy || isRunning { return "Machine busy" }
         return "Bridge-run drawing armed"
+    }
+
+    private static func lifecycleTitle(for rawValue: String?) -> String? {
+        guard let rawValue = cleanBridgeMetadata(rawValue) else { return nil }
+        let normalized = rawValue
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+
+        switch normalized {
+        case "preview", "preview_bridge", "mock", "mock_preview", "dry_run_preview":
+            return "Preview Bridge"
+        case "standby", "hardware_standby", "hardware_standby_bridge", "serial_standby", "dry_run", "dry_run_serial":
+            return "Hardware Standby"
+        case "live", "live_bridge", "hardware_live", "live_hardware":
+            return "Live Bridge"
+        case "offline", "off":
+            return "Offline"
+        default:
+            return rawValue
+        }
     }
 
     func refreshHealth() async {
@@ -968,8 +1272,16 @@ final class PlotterBridgeModel: ObservableObject {
             armUnlock = health.armUnlock
             workspaceXMm = health.workspaceXMm ?? workspaceXMm
             workspaceYMm = health.workspaceYMm ?? workspaceYMm
+            bridgeApiVersion = health.bridgeApiVersion
+            lifecycleMode = health.lifecycleMode
+            lifecycleLabel = health.lifecycleLabel
+            bridgeBuildId = health.bridgeBuildId
+            bridgeSourceRoot = health.bridgeSourceRoot
+            bridgePid = health.bridgePid
+            bridgeStartedAt = health.bridgeStartedAt
+            canRestartSafely = health.canRestartSafely
             shortStatus = motionModeLabel
-            statusText = "\(health.controller) \(health.status)"
+            statusText = "\(bridgeLifecycleTitle) \(health.status)"
             await refreshPaperStatus()
         } catch {
             isOnline = false
@@ -984,6 +1296,7 @@ final class PlotterBridgeModel: ObservableObject {
             armPen = false
             armHoming = false
             armUnlock = false
+            clearBridgeLifecycleMetadata()
         }
     }
 
@@ -1030,6 +1343,17 @@ final class PlotterBridgeModel: ObservableObject {
             armHoming = false
             armUnlock = false
         }
+    }
+
+    private func clearBridgeLifecycleMetadata() {
+        bridgeApiVersion = nil
+        lifecycleMode = nil
+        lifecycleLabel = nil
+        bridgeBuildId = nil
+        bridgeSourceRoot = nil
+        bridgePid = nil
+        bridgeStartedAt = nil
+        canRestartSafely = nil
     }
 
     func reconnectMachine() async {

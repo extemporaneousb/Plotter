@@ -119,18 +119,24 @@ Then build and run the native app:
 make app
 ```
 
-For the normal edit/test loop, use one command. It restarts a dry-run hardware-standby bridge from
-the current checkout and relaunches the app:
-
-```bash
-make preview-app
-```
-
-The shortcut-friendly alias is:
+For the normal operator loop, use one command. It is status-aware: it opens against an existing live
+bridge without stopping it, restarts a dry-run bridge from the current checkout, or starts a dry-run
+hardware-standby bridge when no bridge is running:
 
 ```bash
 make launch
 ```
+
+The launcher writes its last lifecycle decision to:
+
+```text
+artifacts/launcher_status.json
+```
+
+The native app and bridge also exchange lifecycle identity through `/health`. The app displays the
+bridge as `Preview Bridge`, `Hardware Standby`, `Live Bridge`, `Offline`, `STALE`, or `API` when a
+bridge/app mismatch is detected. When launched through `make launch` or `Plotter Vision.app`, both
+the rebuilt app bundle and restarted bridge receive the same build id from the current checkout.
 
 To install Finder launchers:
 
@@ -140,27 +146,32 @@ make install-shortcuts
 
 That installs:
 
-- `~/Desktop/Plotter Vision Preview.command`
-- `~/Desktop/Plotter Vision Live.command`
-- `~/Desktop/Plotter Vision Stop Bridge.command`
-- `~/Applications/Plotter Vision Preview.app`
+- `~/Desktop/Plotter Vision.command`
+- `~/Applications/Plotter Vision.app`
 
-The preview shortcut is safe by default: it runs a dry-run bridge and relaunches the app. The bridge
-can start before the controller is connected. In the app, use the Machine panel's Connect button to
-attach a visible USB serial controller, then Arm Live to enable the runtime homing, motion, pen, and
-unlock gates. Arm Live does not home, unlock, move, or actuate the pen by itself.
+Both Finder launchers run `scripts/plotter_launcher.sh smart`. The lifecycle labels are:
 
-From Codex, use the same root targets. For preview launch, ask Codex to run:
+- `preview`: mock dry-run bridge.
+- `standby`: serial-capable dry-run bridge.
+- `live`: bridge reports `dry_run: false`.
+
+The smart launcher never replaces a live bridge. If a live bridge is already running, it leaves the
+bridge alone and only relaunches the app. The standby bridge can start before the controller is
+connected. In the app, use the Machine panel's Connect button to attach a visible USB serial
+controller, then Arm Live to enable the runtime homing, motion, pen, and unlock gates. Arm Live does
+not home, unlock, move, or actuate the pen by itself.
+
+From Codex, use the same root target:
 
 ```bash
 make launch
 ```
 
-For a hardware launch from Codex, use the same safe standby launch. Supplying a port is optional;
-without one, the app can connect later when exactly one USB serial controller is visible:
+For a port-specific hardware-standby launch, use the launcher directly. This still starts dry-run
+standby; live arming happens from the running UI:
 
 ```bash
-make launch-live PORT=/dev/cu.usbserial-XXXX
+PORT=/dev/cu.usbserial-XXXX scripts/plotter_launcher.sh live
 ```
 
 The older fully armed bridge targets still exist for deliberate diagnostics, but the normal app path
