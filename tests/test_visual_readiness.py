@@ -133,7 +133,7 @@ def test_probe_plan_uses_positive_x_bootstrap_for_low_y_cap_projection() -> None
 
 def test_probe_plan_blocks_projection_too_far_outside_bootstrap_band() -> None:
     safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-80.0)
+    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-220.0)
 
     plan = plan_adaptive_visual_probe(
         observation=observation,

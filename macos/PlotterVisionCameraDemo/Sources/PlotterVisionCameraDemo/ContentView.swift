@@ -7,8 +7,9 @@ private let visualProbeBootstrapMaxTotalXMm = 300.0
 private let visualProbeBootstrapMinStepXMm = 15.0
 private let visualProbeBootstrapTargetXMm = 200.0
 private let visualProbeBootstrapMinProgressXMm = 4.0
-private let visualProbeFieldRecoveryXMm = 75.0
-private let visualCapProjectionBottomAllowanceMm = 50.0
+private let visualProbeFieldRecoveryStepXMm = 50.0
+private let visualProbeFieldRecoveryMaxTotalXMm = 150.0
+private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
 private let visualCalibrationMarkSizeMm = 6.0
 private let visualCalibrationRetryMarkSizeMm = 10.0
@@ -103,7 +104,7 @@ struct ContentView: View {
             faceCamera.stop()
         }
         .alert("Move X into camera field?", isPresented: $showXFieldMovePrompt) {
-            Button(String(format: "Move +X %.0fmm", visualProbeFieldRecoveryXMm)) {
+            Button(String(format: "Move +X up to %.0fmm", visualProbeFieldRecoveryMaxTotalXMm)) {
                 Task {
                     await moveXIntoCameraFieldForProbe(source: "prompt")
                 }
@@ -111,7 +112,7 @@ struct ContentView: View {
             .disabled(!canMoveXIntoCameraFieldForProbe)
 
             Button("Cancel", role: .cancel) {
-                calibrationStatusText = "CAL motion probe startup canceled"
+                calibrationStatusText = "CAL visual calibration startup canceled"
             }
         } message: {
             Text("Use this only when the carriage path is clear and power-off gravity left X outside the camera view. This is a live +X jog for visibility; it does not home or trust axes.")
@@ -425,7 +426,7 @@ struct ContentView: View {
             calibrationStatusText = "CAL cap-marker probe blocked: cap not detected; move X into field"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
-                detail: "Move X into camera field, then rerun motion probe",
+                detail: "Move X into camera field, then rerun visual calibration",
                 sampleCount: 0,
                 xPixelsPerMm: 0,
                 yPixelsPerMm: 0,
@@ -985,7 +986,8 @@ struct ContentView: View {
             "x_field_recovery_prompted",
             details: [
                 "source": source,
-                "command_x_mm": visualProbeFieldRecoveryXMm,
+                "step_x_mm": visualProbeFieldRecoveryStepXMm,
+                "max_total_x_mm": visualProbeFieldRecoveryMaxTotalXMm,
                 "can_move": canMoveXIntoCameraFieldForProbe,
                 "reason": canMoveXIntoCameraFieldForProbe ? "operator_confirmation_required" : bridge.motionGateMessage
             ]
@@ -1006,12 +1008,16 @@ struct ContentView: View {
         }
 
         calibrationStatusText = String(
-            format: "CAL move-X: live +X %.0fmm for camera field",
-            visualProbeFieldRecoveryXMm
+            format: "CAL move-X: live +X up to %.0fmm for camera field",
+            visualProbeFieldRecoveryMaxTotalXMm
         )
         frameLearning = FrameLearningState(
             status: "MOVE-X",
-            detail: String(format: "Live +X %.0fmm camera-field recovery", visualProbeFieldRecoveryXMm),
+            detail: String(
+                format: "Live +X chunks %.0f/%.0fmm camera-field recovery",
+                visualProbeFieldRecoveryStepXMm,
+                visualProbeFieldRecoveryMaxTotalXMm
+            ),
             sampleCount: visualMotionSamples.count,
             xPixelsPerMm: visualMotionModel.map { hypot($0.xBasisDx, $0.xBasisDy) } ?? 0,
             yPixelsPerMm: visualMotionModel.map { hypot($0.yBasisDx, $0.yBasisDy) } ?? 0,
@@ -1021,59 +1027,82 @@ struct ContentView: View {
             "x_field_recovery_started",
             details: [
                 "source": source,
-                "command_x_mm": visualProbeFieldRecoveryXMm,
+                "step_x_mm": visualProbeFieldRecoveryStepXMm,
+                "max_total_x_mm": visualProbeFieldRecoveryMaxTotalXMm,
                 "feed_mm_min": min(240.0, bridge.manualFeedMmMin)
             ]
         )
 
-        guard let response = await bridge.learningJog(
-            axis: "X",
-            distanceMm: visualProbeFieldRecoveryXMm,
-            feedMmMin: min(240.0, bridge.manualFeedMmMin)
-        ) else {
-            calibrationStatusText = "CAL move-X stopped: move failed"
-            frameLearning.detail = "Move-X recovery failed"
-            return
-        }
+        var totalCommanded = 0.0
+        var moveIndex = 0
+        while totalCommanded < visualProbeFieldRecoveryMaxTotalXMm {
+            moveIndex += 1
+            let commandMm = min(
+                visualProbeFieldRecoveryStepXMm,
+                visualProbeFieldRecoveryMaxTotalXMm - totalCommanded
+            )
+            guard commandMm > 0 else { break }
 
-        if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
-            calibrationStatusText = "CAL move-X stopped: pin active \(pins)"
-            frameLearning.lastPins = pins
-            return
-        }
-
-        try? await Task.sleep(nanoseconds: 450_000_000)
-        if let observation = await waitForGreenCapPaperObservation(timeoutSeconds: 2.5) {
-            updateObservedPenPoint(observation)
             calibrationStatusText = String(
-                format: "CAL move-X done; cap paper x%.1f y%.1f, rerun motion probe",
-                observation.paperMm.x,
-                observation.paperMm.y
+                format: "CAL move-X: chunk %d +X %.0fmm",
+                moveIndex,
+                commandMm
             )
-            frameLearning.detail = "Cap visible; rerun motion probe"
-            bridge.recordOperatorEvent(
-                "x_field_recovery_completed",
-                details: [
-                    "source": source,
-                    "status": response.status,
-                    "cap_detected": true,
-                    "paper_x_mm": observation.paperMm.x,
-                    "paper_y_mm": observation.paperMm.y,
-                    "frame": observation.frameNumber
-                ]
-            )
-        } else {
-            calibrationStatusText = "CAL move-X done; cap still not detected"
-            frameLearning.detail = "Move-X complete; cap still not detected"
-            bridge.recordOperatorEvent(
-                "x_field_recovery_completed",
-                details: [
-                    "source": source,
-                    "status": response.status,
-                    "cap_detected": false
-                ]
-            )
+            guard let response = await bridge.learningJog(
+                axis: "X",
+                distanceMm: commandMm,
+                feedMmMin: min(240.0, bridge.manualFeedMmMin)
+            ) else {
+                calibrationStatusText = "CAL move-X stopped: move failed"
+                frameLearning.detail = "Move-X recovery failed"
+                return
+            }
+
+            totalCommanded += commandMm
+
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                calibrationStatusText = "CAL move-X stopped: pin active \(pins)"
+                frameLearning.lastPins = pins
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            if let observation = await waitForGreenCapPaperObservation(timeoutSeconds: 2.5) {
+                updateObservedPenPoint(observation)
+                calibrationStatusText = String(
+                    format: "CAL move-X done; cap paper x%.1f y%.1f, rerun visual calibration",
+                    observation.paperMm.x,
+                    observation.paperMm.y
+                )
+                frameLearning.detail = "Cap visible; rerun visual calibration"
+                bridge.recordOperatorEvent(
+                    "x_field_recovery_completed",
+                    details: [
+                        "source": source,
+                        "status": response.status,
+                        "cap_detected": true,
+                        "move_count": moveIndex,
+                        "total_commanded_x_mm": totalCommanded,
+                        "paper_x_mm": observation.paperMm.x,
+                        "paper_y_mm": observation.paperMm.y,
+                        "frame": observation.frameNumber
+                    ]
+                )
+                return
+            }
         }
+
+        calibrationStatusText = "CAL move-X done; cap still not detected"
+        frameLearning.detail = "Move-X complete; cap still not detected"
+        bridge.recordOperatorEvent(
+            "x_field_recovery_completed",
+            details: [
+                "source": source,
+                "cap_detected": false,
+                "move_count": moveIndex,
+                "total_commanded_x_mm": totalCommanded
+            ]
+        )
     }
 
     @MainActor
@@ -1491,6 +1520,17 @@ struct ContentView: View {
             && !bridge.isMachineAlarm
     }
 
+    private var canRunPenCalibrationMark: Bool {
+        bridge.isLiveMotionMode
+            && bridge.hasPaperLock
+            && frameLearning.status == "MEASURED"
+            && observedPenPoint?.paperMm != nil
+            && plotterCamera.carriageMarker != nil
+            && !bridge.isRunning
+            && !bridge.isMachineBusy
+            && !bridge.isMachineAlarm
+    }
+
     private var visualCenterDotIsActive: Bool {
         visualCenterDotTaskActive
             || bridge.activeAction == "visual-rel"
@@ -1502,7 +1542,7 @@ struct ContentView: View {
         if visualCenterDotIsActive { return bridge.visualCenterDotStatus }
         if isTerminalVisualCenterDotStatus(bridge.visualCenterDotStatus) { return bridge.visualCenterDotStatus }
         if visualSessionReadyToPlot { return "Visual-session ready; absolute drawing may still be blocked" }
-        guard let model = visualMotionModel else { return "Run motion probe first" }
+        guard let model = visualMotionModel else { return "Run visual calibration first" }
         if !model.isUsable { return "Motion basis is degenerate" }
         if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
         if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
@@ -2055,6 +2095,90 @@ struct ContentView: View {
         return final
     }
 
+    @MainActor
+    private func runPenCalibrationMarkAtCurrentPosition(source: String) async {
+        guard canRunPenCalibrationMark else {
+            calibrationStatusText = "CAL pen mark blocked: \(penCalibrationMarkBlockerText)"
+            bridge.recordOperatorEvent(
+                "pen_calibration_mark_blocked",
+                details: [
+                    "source": source,
+                    "reason": penCalibrationMarkBlockerText
+                ]
+            )
+            return
+        }
+        guard let observation = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0) else {
+            calibrationStatusText = "CAL pen mark blocked: cap not detected"
+            bridge.recordOperatorEvent(
+                "pen_calibration_mark_blocked",
+                details: [
+                    "source": source,
+                    "reason": "cap_not_detected"
+                ]
+            )
+            return
+        }
+
+        updateObservedPenPoint(observation)
+        calibrationStatusText = String(
+            format: "CAL pen mark: drawing at cap x%.1f y%.1f",
+            observation.paperMm.x,
+            observation.paperMm.y
+        )
+        bridge.recordOperatorEvent(
+            "pen_calibration_mark_started",
+            details: [
+                "source": source,
+                "cap_frame": observation.frameNumber,
+                "cap_paper_x_mm": observation.paperMm.x,
+                "cap_paper_y_mm": observation.paperMm.y,
+                "mark_size_mm": visualCalibrationMarkSizeMm
+            ]
+        )
+        let marked = await bridge.relativeMarkCurrentPosition(
+            markSizeMm: visualCalibrationMarkSizeMm,
+            drawFeedMmMin: min(120.0, bridge.shapeDrawFeedMmMin)
+        )
+        if marked {
+            calibrationStatusText = String(
+                format: "CAL pen mark drawn; inspect ink near cap x%.1f y%.1f",
+                observation.paperMm.x,
+                observation.paperMm.y
+            )
+            bridge.recordOperatorEvent(
+                "pen_calibration_mark_completed",
+                details: [
+                    "source": source,
+                    "cap_frame": observation.frameNumber,
+                    "cap_paper_x_mm": observation.paperMm.x,
+                    "cap_paper_y_mm": observation.paperMm.y,
+                    "mark_size_mm": visualCalibrationMarkSizeMm
+                ]
+            )
+        } else {
+            calibrationStatusText = "CAL pen mark failed: \(bridge.statusText)"
+            bridge.recordOperatorEvent(
+                "pen_calibration_mark_failed",
+                details: [
+                    "source": source,
+                    "reason": bridge.statusText
+                ]
+            )
+        }
+    }
+
+    private var penCalibrationMarkBlockerText: String {
+        if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
+        if !bridge.hasPaperLock { return "paper homography required" }
+        if frameLearning.status != "MEASURED" { return "visual calibration required" }
+        if observedPenPoint?.paperMm == nil { return "confirmed cap position required" }
+        if plotterCamera.carriageMarker == nil { return "cap marker not detected" }
+        if bridge.isMachineAlarm { return "machine alarm" }
+        if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
+        return "pen mark blocked"
+    }
+
     private func visualTargetResidualDetails(
         label: String,
         targetIndex: Int,
@@ -2526,7 +2650,7 @@ struct ContentView: View {
                         )
                         CalibrationWizardStepRow(
                             index: 5,
-                            title: "Motion Probe",
+                            title: "Visual Calibration",
                             detail: frameLearning.detail,
                             status: wizardMotionProbeStatus
                         )
@@ -2643,8 +2767,9 @@ struct ContentView: View {
     }
 
     private var wizardDrawPreflightStatus: CalibrationWizardStepStatus {
-        if isTerminalVisualCenterDotStatus(bridge.visualCenterDotStatus) { return .blocked }
         if visualSessionReadyToPlot || visualCenterDotMarked { return .done }
+        if canRunPenCalibrationMark { return .active }
+        if isTerminalVisualCenterDotStatus(bridge.visualCenterDotStatus) { return .blocked }
         if visualCenterDotIsActive { return .active }
         if canRunVisualCenterDot { return .active }
         return frameLearning.status == "MEASURED" ? .blocked : .pending
@@ -2692,13 +2817,16 @@ struct ContentView: View {
         }
         if frameLearning.status != "MEASURED" {
             if plotterCamera.carriageMarker == nil {
-                return "Motion probe needs a live cap marker. If power-off gravity parked X off-camera, move X into the camera field first."
+                return "Visual calibration needs a live cap marker. If power-off gravity parked X off-camera, move X into the camera field first."
             }
             if currentGreenCapBootstrapReady {
                 return "X-min bootstrap will move +X only until the cap reaches the probe zone, then sample X/Y motion."
             }
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
-            return "Cap position is in paper mm. Run the adaptive probe only when the nearby path is clear."
+            return "Cap position is in paper mm. Run visual calibration only when the nearby path is clear."
+        }
+        if canRunPenCalibrationMark && !visualCenterDotMarked {
+            return "Visual motion is measured. Calibrate the pen by drawing a mark at the current cap position."
         }
         if visualCenterDotIsActive {
             return "Visual center dot is running watched relative motion. Do not start another move."
@@ -2723,7 +2851,8 @@ struct ContentView: View {
         if observedPenPoint?.paperMm == nil {
             return currentGreenCapPaperObservation() == nil ? "Click Cap Position" : "Confirm Cap"
         }
-        if frameLearning.status != "MEASURED" { return "Run Motion Probe" }
+        if frameLearning.status != "MEASURED" { return "Run Visual Calibration" }
+        if canRunPenCalibrationMark && !visualCenterDotMarked { return "Calibrate Pen Mark" }
         if visualSessionReadyToPlot || visualCenterDotMarked { return "Ready to Plot" }
         if bridge.dotTestPreviewPlanHash.isEmpty { return "Preview Center Dot" }
         if canRunVisualCenterDot { return "Run Visual Center Dot" }
@@ -2740,6 +2869,9 @@ struct ContentView: View {
         }
         if frameLearning.status != "MEASURED" {
             return canRunWizardMotionProbe
+        }
+        if !visualCenterDotMarked {
+            return canRunPenCalibrationMark
         }
         if bridge.dotTestPreviewPlanHash.isEmpty {
             return bridge.isOnline && bridge.hasPaperLock && !bridge.isCalibrating
@@ -2763,7 +2895,10 @@ struct ContentView: View {
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
             if plotterCamera.carriageMarker == nil { return "cap marker not detected; move X into field if parked off-camera" }
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
-            return "motion probe blocked"
+            return "visual calibration blocked"
+        }
+        if !visualCenterDotMarked {
+            return penCalibrationMarkBlockerText
         }
         if bridge.dotTestPreviewPlanHash.isEmpty {
             if !bridge.isOnline { return "bridge offline" }
@@ -2808,15 +2943,23 @@ struct ContentView: View {
 
         if frameLearning.status != "MEASURED" {
             guard canRunWizardMotionProbe else {
-                calibrationStatusText = "WIZ motion probe blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
+                calibrationStatusText = "WIZ visual calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
                 if plotterCamera.carriageMarker == nil, canMoveXIntoCameraFieldForProbe {
                     requestXFieldMovePrompt(source: "wizard_probe_blocked_no_cap")
                 }
                 return
             }
-            calibrationStatusText = "WIZ motion probe requested"
+            calibrationStatusText = "WIZ visual calibration requested"
             Task {
                 await runFrameLearning()
+            }
+            return
+        }
+
+        if canRunPenCalibrationMark && !visualCenterDotMarked {
+            calibrationStatusText = "WIZ pen calibration mark"
+            Task {
+                await runPenCalibrationMarkAtCurrentPosition(source: "wizard_primary")
             }
             return
         }
@@ -3296,15 +3439,15 @@ struct ContentView: View {
                 .disabled(observedPenPoint == nil)
             }
 
-            Section("Motion Probe") {
+            Section("Visual Calibration") {
                 Button("Move X Into Camera Field") {
                     requestXFieldMovePrompt(source: "calibration_menu")
                 }
                 .disabled(!canMoveXIntoCameraFieldForProbe)
                 .help("Live +X recovery jog for startup cases where the cap is outside the camera field")
 
-                Button("Run Motion Probe") {
-                    calibrationStatusText = "CAL motion probe requested"
+                Button("Run Visual Calibration") {
+                    calibrationStatusText = "CAL visual calibration requested"
                     Task {
                         await runFrameLearning()
                     }
@@ -3314,6 +3457,14 @@ struct ContentView: View {
             }
 
             Section("Calibration Marks") {
+                Button("Calibrate Pen: Mark Current Cap") {
+                    calibrationStatusText = "CAL pen calibration mark"
+                    Task {
+                        await runPenCalibrationMarkAtCurrentPosition(source: "calibration_menu")
+                    }
+                }
+                .disabled(!canRunPenCalibrationMark)
+                .help("Draws a small relative mark at the current cap position after visual calibration")
                 Button("Preview Center Dot Overlay") {
                     calibrationStatusText = "CAL center dot preview"
                     Task {
