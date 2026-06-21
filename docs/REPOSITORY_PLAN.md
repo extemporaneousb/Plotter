@@ -72,11 +72,17 @@ The fixed-camera workflow is:
 1. Start the app.
 2. Open the calibration wizard.
 3. Click paper fiducials, solve the paper homography, and confirm or localize the cap marker.
-4. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat
+4. If the cap is not visible because the unpowered X axis fell back to the left edge, use the
+   live-gated "move X into camera field" recovery before probing. This is a non-homing +X visibility
+   jog and does not create axis trust.
+5. Run or rerun the motion probe from the current cap location. BOOT-X is the positive-X-only
+   bootstrap path for near-X-min starts; normal adaptive probing follows once the cap is in the probe
+   zone.
+6. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat
    until residuals are acceptable.
-5. Persist learned parameters as future initialization values for coordinate-system setup and
+7. Persist learned parameters as future initialization values for coordinate-system setup and
    shape-language parametrization.
-6. Draw either capabilities tests or portrait/image-derived programs.
+8. Draw either capabilities tests or portrait/image-derived programs.
 
 Both post-calibration drawing lanes use the same pipeline:
 
@@ -87,6 +93,8 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 - Capabilities tests are first-class drawing programs. They should start with simple shapes and move
   toward more complex shape sets, including coordinate markup when useful for residual inspection.
+  The canonical order is `center_crosshair`, `line_length`, `square_closure`, `triangle`, then
+  `multi_shape_coordinate_sheet`.
 - Portrait drawing is camera capture plus contour or polygon extraction, then translation into the
   same `DrawingProgram` contract.
 - The simulator is the source for expected pen motion. The video projector maps that expected motion
@@ -116,6 +124,12 @@ in the registered paper plane; cap-only motion is not enough to set durable `axi
 unlock absolute drawing. Drawing unlocks should use a persisted visual position binding backed by
 paper homography, cap localization, ink or pen-tip observations, residuals, camera identity, and
 freshness.
+
+Motion-probe evidence should not remain only in Swift state. The durable target is a Python-owned
+probe-sample artifact or route that stores each commanded move, before/after cap observation, observed
+delta, residual, camera identity, paper registration id, transcript pointer, and timestamp. Until
+that artifact exists, app diagnostics must record enough per-sample and per-residual evidence to
+reconstruct failed attempts.
 
 Only Python may promote persisted bindings or trust flags. Swift can collect and display evidence,
 but it does not decide that `axis_model_trusted`, `homing_trusted`, or

@@ -39,11 +39,16 @@ The normal development target is the fixed-camera drawing loop:
 2. Open the calibration wizard.
 3. Click the paper fiducials, solve the paper homography, and confirm or localize the visible cap
    marker.
-4. Calibrate by drawing small marks, measuring the result in the plotter camera video, adjusting the
+4. If power-off gravity has parked X outside the camera field, use the motion-probe startup recovery
+   action to move +X into view. This is a live-gated visibility jog only; it is not homing and does
+   not promote axis trust.
+5. Run or rerun the motion probe from the current cap location. When the cap is visible near the
+   X-min side, the probe may run a +X-only BOOT-X bootstrap before sampling X/Y motion.
+6. Calibrate by drawing small marks, measuring the result in the plotter camera video, adjusting the
    model, and drawing again.
-5. Persist the learned parameters as future initialization values for the coordinate system and
+7. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
-6. Draw through one of two lanes:
+8. Draw through one of two lanes:
    - capabilities tests: simple-to-more-complex shape programs that can include coordinate markup;
    - portrait drawing: camera capture, contour or polygon extraction, and translation into the
      drawing program.
@@ -58,6 +63,27 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 Simulation is not a decorative UI preview. It is the expected pen motion projected onto the plotter
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
+
+## Calibration And Drawing Tests
+
+The operator sequence should stay explicit:
+
+| Step | Action | Evidence recorded | Does not prove |
+| --- | --- | --- | --- |
+| 1 | Paper homography | Fiducial corners, paper registration id, reprojection error | Machine axes or pen position. |
+| 2 | Cap localization | Camera-space cap point mapped into paper/logical mm | Drawing authority. |
+| 3 | Move X into camera field when needed | App event with commanded +X recovery and post-move cap observation if visible | Homing, absolute X zero, or axis trust. |
+| 4 | Motion probe / BOOT-X | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
+| 5 | Center mark | Projected center target, watched relative moves, residual checks, ink visibility | Full-field geometry. |
+| 6 | Five-point marks | Multiple projected targets and residual/ink observations across the paper | Arbitrary shape correctness. |
+| 7 | Capabilities suite | `center_crosshair`, `line_length`, `square_closure`, `triangle`, then `multi_shape_coordinate_sheet` through the shared drawing pipeline | Portrait or image ingestion quality. |
+| 8 | Shape or portrait drawing | `DrawingProgram` preview, simulation, projected overlay, execution transcript, residual observations | A future run if camera/paper/controller state is stale. |
+
+Swift may collect and display probe samples, center-mark residuals, and operator events, but Python
+must own durable readiness, `VisualPositionBinding`, trust promotion, planning, persistence, and
+execution routing. The remaining persistence hardening is to add a Python-owned probe-sample artifact
+or route that stores raw before/after cap observations and commanded moves instead of relying only on
+Swift-local motion samples plus summary readiness fields.
 
 The original passive probe remains the safest first hardware contact:
 
