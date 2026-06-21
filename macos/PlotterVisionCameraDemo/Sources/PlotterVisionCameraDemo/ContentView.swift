@@ -63,6 +63,7 @@ struct ContentView: View {
             guard !didLoadSavedFrameState else { return }
             didLoadSavedFrameState = true
             loadSavedFrameState()
+            bridge.recordOperatorEvent("content_view_appeared")
         }
         .task {
             await bridge.refreshHealth()
@@ -95,6 +96,7 @@ struct ContentView: View {
             saveFrameState()
         }
         .onDisappear {
+            bridge.recordOperatorEvent("content_view_disappeared")
             plotterCamera.stop()
             faceCamera.stop()
         }
@@ -255,6 +257,7 @@ struct ContentView: View {
 
     @MainActor
     private func drawFaceFromCurrentFrame() async {
+        bridge.recordOperatorEvent("face_draw_capture_started")
         do {
             let raster = try await faceCamera.captureFaceRaster(columns: 14, rows: 18)
             let rect = drawingFrame.rect(
@@ -277,11 +280,16 @@ struct ContentView: View {
             faceCamera.statusText = error.localizedDescription
             bridge.statusText = error.localizedDescription
             bridge.previewStatus = "SIM ERR"
+            bridge.recordOperatorEvent(
+                "face_draw_capture_failed",
+                details: ["error": error.localizedDescription]
+            )
         }
     }
 
     @MainActor
     private func previewImageFromCurrentFrame() async {
+        bridge.recordOperatorEvent("image_preview_capture_started")
         do {
             faceCamera.segmentationEnabled = true
             let raster = try await faceCamera.captureFaceRaster(columns: 16, rows: 20)
@@ -306,6 +314,10 @@ struct ContentView: View {
             bridge.imagePreviewStatus = "IMG ERR"
             bridge.imagePreviewDetail = "VISUAL ONLY"
             bridge.previewStatus = "SIM ERR"
+            bridge.recordOperatorEvent(
+                "image_preview_capture_failed",
+                details: ["error": error.localizedDescription]
+            )
         }
     }
 
@@ -340,6 +352,15 @@ struct ContentView: View {
 
         if status != "WAIT" {
             awaitingAssessment = false
+            bridge.recordOperatorEvent(
+                "shape_assessment_completed",
+                details: [
+                    "status": status,
+                    "changed_objects": report.objectCount,
+                    "changed_cells": report.changedCells,
+                    "strength": report.strongestTrackStrength
+                ]
+            )
         }
     }
 
@@ -869,6 +890,7 @@ struct ContentView: View {
         status: String,
         detail: String
     ) {
+        let previousStatus = frameLearning.status
         let xSamples = samples.filter { $0.axis == "X" && abs($0.distanceMm) > 0 }
         let ySamples = samples.filter { $0.axis == "Y" && abs($0.distanceMm) > 0 }
         let xScale = averageObservedMmPerCommandMm(samples: xSamples)
@@ -881,6 +903,19 @@ struct ContentView: View {
             yPixelsPerMm: yScale,
             lastPins: bridge.machinePins
         )
+        if status != previousStatus || status != "LEARN" {
+            bridge.recordOperatorEvent(
+                "frame_learning_status",
+                details: [
+                    "status": status,
+                    "detail": detail,
+                    "sample_count": samples.count,
+                    "x_observed_mm_per_command_mm": xScale,
+                    "y_observed_mm_per_command_mm": yScale,
+                    "last_pins": bridge.machinePins
+                ]
+            )
+        }
     }
 
     private func averageObservedMmPerCommandMm(samples: [FrameLearningSample]) -> Double {

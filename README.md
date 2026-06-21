@@ -177,6 +177,66 @@ PORT=/dev/cu.usbserial-XXXX scripts/plotter_launcher.sh live
 The older fully armed bridge targets still exist for deliberate diagnostics, but the normal app path
 is to start dry-run and arm hardware from the running UI.
 
+## Codex Observability
+
+Codex observability is a read-only diagnostics contract. Codex may inspect exported bridge and app
+state, event logs, and controller transcripts, but it must not become an in-app command path. Machine
+actions still flow through typed bridge routes and the Python safety gates.
+
+The bridge surfaces that exist today are:
+
+- `GET /health`: bridge lifecycle, build id, source root, dry-run/live state, arming flags, event log
+  path, and workspace dimensions.
+- `GET /machine/status`: controller connection, alarm/busy state, pins, mode, arming state, and
+  latest known machine position.
+- `GET /paper/status`: paper registration and homography state.
+- `GET /events`: recent in-memory bridge events.
+- `artifacts/bridge_events.jsonl`: append-only bridge event history.
+- `artifacts/bridge_transcripts/*.jsonl`: controller command transcripts for status and action
+  requests.
+
+The app-side diagnostics surfaces are:
+
+- `artifacts/app_state.json`: latest app-observed state, including app/bridge identity, lifecycle
+  label, machine summary, paper lock status, preview state, and safety gate labels.
+- `artifacts/app_events.jsonl`: bounded append-only app lifecycle, UI action, bridge polling,
+  preview/draw, visual-probe, and visible error events.
+- `POST /codex/app/state` and `POST /codex/app/events`: append-only bridge ingestion routes for app
+  diagnostics. They are not command routes.
+- `GET /codex/app/state`, `GET /codex/app/events`, and `GET /codex/snapshot`: read-only diagnostics
+  routes. The merged snapshot combines `/health`, cached machine status, `/paper/status`, recent
+  `/events`, and latest app diagnostics when present.
+
+Use the live endpoints to understand state before acting:
+
+```bash
+curl -fsS http://127.0.0.1:8765/health | jq '{status, lifecycle_label, dry_run, bridge_build_id, arm_motion, arm_pen, event_log}'
+curl -fsS http://127.0.0.1:8765/machine/status | jq '{status, state, is_alarm, is_busy, pins, dry_run, arm_motion, arm_pen, homing_trusted, axis_model_trusted}'
+curl -fsS http://127.0.0.1:8765/paper/status | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
+curl -fsS http://127.0.0.1:8765/events | jq '.events[-10:]'
+tail -n 20 artifacts/bridge_events.jsonl | jq -c .
+```
+
+Include the app artifacts and merged snapshot in the same check:
+
+```bash
+jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
+tail -n 20 artifacts/app_events.jsonl | jq -c .
+curl -fsS http://127.0.0.1:8765/codex/snapshot | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+```
+
+Interpretation rules:
+
+- `dry_run: false` only means the bridge can send real commands; it does not imply drawing readiness.
+  Check arming flags, alarm state, `homing_trusted`, `axis_model_trusted`, paper registration, and
+  preview simulation before any live operation.
+- A stale or mismatched app/bridge build id means relaunch the dry-run bridge/app from the current
+  checkout before debugging UI behavior.
+- `/events` is recent memory; `bridge_events.jsonl` and transcript files are the durable evidence.
+- Preview routes and diagnostics must remain transcript-free and non-moving. If a diagnostic action
+  emits controller commands, it belongs behind an existing typed bridge action with explicit safety
+  gates.
+
 In the app, use the plotter alignment panel to line up the translucent virtual bed with the physical
 plotter in the camera frame. The virtual bed uses the machine workspace dimensions from the bridge,
 then applies local opacity, scale, offset, and rotation controls in the app. The `Draw` shape action

@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import json
+from contextlib import contextmanager
+from pathlib import Path
+from threading import Thread
+from typing import Any, Iterator
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from plotter_vision.bridge.server import (
+    BridgeRuntimeConfig,
+    LocalThreadingHTTPServer,
+    PlotterBridge,
+    _make_handler,
+)
+from plotter_vision.config import MachineConfig
+
+
+def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=True)
+
+    with _running_bridge(bridge) as client:
+        status_code, state_response = client.post(
+            "/codex/app/state",
+            {
+                "source": "PlotterVisionCameraDemo",
+                "app_build_id": "app/test",
+                "bridge_url": "http://127.0.0.1:8765",
+                "status": "ready",
+                "payload": {
+                    "selected_panel": "machine",
+                    "paper_locked": True,
+                    "last_bridge_label": "Preview Bridge",
+                },
+            },
+        )
+        assert status_code == 200
+        assert state_response["command_control"] is False
+        assert state_response["event_log_appended"] is True
+
+        status_code, event_response = client.post(
+            "/codex/app/events",
+            {
+                "source": "PlotterVisionCameraDemo",
+                "event_type": "ui.selection_changed",
+                "status": "observed",
+                "payload": {"selected_panel": "diagnostics"},
+            },
+        )
+        assert status_code == 200
+        assert event_response["record"]["kind"] == "event"
+
+        bridge_event_count = _jsonl_count(tmp_path / "bridge_events.jsonl")
+        app_event_count = _jsonl_count(tmp_path / "app_events.jsonl")
+
+        status_code, snapshot = client.get("/codex/snapshot")
+
+    assert status_code == 200
+    assert snapshot["schema"] == 1
+    assert snapshot["read_only"] is True
+    assert snapshot["health"]["status"] == "ready"
+    assert snapshot["health"]["controller"] == "mock"
+    assert snapshot["machine"]["controller"] == "mock"
+    assert snapshot["machine"]["status"] == "dry_run"
+    assert snapshot["paper"]["status"] == "missing"
+    assert [event["type"] for event in snapshot["recent_events"]] == [
+        "app.diagnostics_ingested",
+        "app.diagnostics_ingested",
+    ]
+
+    app_diagnostics = snapshot["app_diagnostics"]
+    assert app_diagnostics["latest_state"]["payload"]["paper_locked"] is True
+    assert app_diagnostics["latest_event"]["event_type"] == "ui.selection_changed"
+    assert [record["sequence"] for record in app_diagnostics["recent_events"]] == [1, 2]
+    assert _jsonl_count(tmp_path / "bridge_events.jsonl") == bridge_event_count
+    assert _jsonl_count(tmp_path / "app_events.jsonl") == app_event_count
+
+
+def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=False)
+
+    with _running_bridge(bridge) as client:
+        assert _jsonl_count(tmp_path / "app_events.jsonl") == 0
+
+        status_code, first = client.post(
+            "/codex/app/events",
+            {
+                "event_type": "bridge.poll_completed",
+                "payload": {"health_status": "ready"},
+            },
+        )
+        assert status_code == 200
+        assert first["record"]["sequence"] == 1
+        assert _jsonl_count(tmp_path / "app_events.jsonl") == 1
+
+        status_code, state = client.post(
+            "/codex/app/state",
+            {
+                "status": "ready",
+                "payload": {"bridge_label": "Hardware Standby"},
+            },
+        )
+        assert status_code == 200
+        assert state["record"]["sequence"] == 2
+        assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
+
+        status_code, diagnostics = client.get("/codex/app/events")
+        assert status_code == 200
+        assert diagnostics["latest_state"]["payload"]["bridge_label"] == "Hardware Standby"
+        assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
+
+        status_code, diagnostics = client.get("/codex/app/state")
+        assert status_code == 200
+        assert diagnostics["latest_event"]["event_type"] == "bridge.poll_completed"
+        assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
+
+        status_code, response = client.post("/codex/snapshot", {"payload": {"action": "move"}})
+
+    assert status_code == 404
+    assert response == {"error": "not found"}
+    assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
+
+
+class _BridgeClient:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    def get(self, path: str) -> tuple[int, dict[str, Any]]:
+        return self._request("GET", path)
+
+    def post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        return self._request("POST", path, payload=payload)
+
+    def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> tuple[int, dict[str, Any]]:
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = Request(
+            f"{self.base_url}{path}",
+            data=body,
+            method=method,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=5.0) as response:
+                return (response.status, json.loads(response.read().decode("utf-8")))
+        except HTTPError as error:
+            return (error.code, json.loads(error.read().decode("utf-8")))
+
+
+@contextmanager
+def _running_bridge(bridge: PlotterBridge) -> Iterator[_BridgeClient]:
+    server = LocalThreadingHTTPServer(("127.0.0.1", 0), _make_handler(bridge))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield _BridgeClient(f"http://{host}:{port}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
+def _bridge(*, tmp_path: Path, dry_run: bool, mock: bool) -> PlotterBridge:
+    config_path = tmp_path / "machine_config.json"
+    machine = MachineConfig()
+    machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
+    machine.save_json(config_path)
+    return PlotterBridge(
+        BridgeRuntimeConfig(
+            dry_run=dry_run,
+            mock=mock,
+            config_path=config_path,
+            event_log_path=tmp_path / "bridge_events.jsonl",
+            app_state_path=tmp_path / "app_state.json",
+            app_event_log_path=tmp_path / "app_events.jsonl",
+            transcript_dir=tmp_path / "transcripts",
+            calibration_dir=tmp_path / "calibration",
+            workspace_x_max=533.4,
+            workspace_y_max=215.9,
+        )
+    )
+
+
+def _jsonl_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())

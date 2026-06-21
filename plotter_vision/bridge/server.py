@@ -118,6 +118,25 @@ def _bridge_build_id() -> str:
 BRIDGE_BUILD_ID = _bridge_build_id()
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _clean_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 class BridgeRuntimeConfig(BaseModel):
     host: str = "127.0.0.1"
     http_port: int = 8765
@@ -131,6 +150,8 @@ class BridgeRuntimeConfig(BaseModel):
     arm_unlock: bool = False
     config_path: Path = Path("artifacts/machine_config.json")
     event_log_path: Path = Path("artifacts/bridge_events.jsonl")
+    app_state_path: Path = Path("artifacts/app_state.json")
+    app_event_log_path: Path = Path("artifacts/app_events.jsonl")
     transcript_dir: Path = Path("artifacts/bridge_transcripts")
     calibration_dir: Path = Path("artifacts/calibration_sessions")
     workspace_x_max: float | None = None
@@ -167,6 +188,57 @@ class BridgeHealthResponse(BaseModel):
     event_log: str
     workspace_x_mm: float | None = None
     workspace_y_mm: float | None = None
+
+
+class AppDiagnosticStateRequest(BaseModel):
+    source: str = "macos_app"
+    observed_at: str | None = None
+    app_build_id: str | None = None
+    bridge_url: str | None = None
+    status: str = "reported"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppDiagnosticEventRequest(BaseModel):
+    source: str = "macos_app"
+    event_type: str
+    observed_at: str | None = None
+    app_build_id: str | None = None
+    bridge_url: str | None = None
+    status: str = "reported"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppDiagnosticRecord(BaseModel):
+    schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    sequence: int
+    kind: Literal["state", "event"]
+    event_type: str
+    source: str
+    received_at: str
+    observed_at: str | None = None
+    app_build_id: str | None = None
+    bridge_url: str | None = None
+    status: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppDiagnosticIngestResponse(BaseModel):
+    status: str = "accepted"
+    command_control: bool = False
+    event_log_appended: bool = True
+    read_only_snapshot: bool = True
+    state_file: str
+    event_log: str
+    record: AppDiagnosticRecord
+
+
+class AppDiagnosticsSnapshot(BaseModel):
+    state_file: str
+    event_log: str
+    latest_state: AppDiagnosticRecord | None = None
+    latest_event: AppDiagnosticRecord | None = None
+    recent_events: list[AppDiagnosticRecord] = Field(default_factory=list)
 
 
 class DemoRunResponse(BaseModel):
@@ -390,6 +462,17 @@ class MachineStatusResponse(BaseModel):
     error: str | None = None
 
 
+class CodexSnapshotResponse(BaseModel):
+    schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    generated_at: str
+    read_only: bool = True
+    health: BridgeHealthResponse
+    machine: MachineStatusResponse
+    paper: PaperRegistrationResponse
+    recent_events: list[BridgeEvent] = Field(default_factory=list)
+    app_diagnostics: AppDiagnosticsSnapshot
+
+
 class PolygonDrawResponse(BaseModel):
     command_id: str
     status: str
@@ -601,6 +684,11 @@ class PlotterBridge:
         self._active_action: str | None = None
         self._active_controller: GrblHalController | None = None
         self._last_machine_status: MachineStatusResponse | None = None
+        self._app_diagnostics_lock = Lock()
+        self._app_event_sequence = 0
+        self._recent_app_events: deque[AppDiagnosticRecord] = deque(maxlen=100)
+        self._latest_app_state: AppDiagnosticRecord | None = None
+        self._load_app_diagnostics_from_disk()
 
     def health(self) -> BridgeHealthResponse:
         machine = self._load_machine_config()
@@ -623,6 +711,96 @@ class PlotterBridge:
             event_log=str(self.config.event_log_path),
             workspace_x_mm=machine.axes.x.travel_mm,
             workspace_y_mm=machine.axes.y.travel_mm,
+        )
+
+    def record_app_state(
+        self, request: AppDiagnosticStateRequest
+    ) -> AppDiagnosticIngestResponse:
+        record = self._record_app_diagnostic(
+            kind="state",
+            event_type="app.state",
+            source=request.source,
+            observed_at=request.observed_at,
+            app_build_id=request.app_build_id,
+            bridge_url=request.bridge_url,
+            status=request.status,
+            payload=request.payload,
+        )
+        self.event_log.emit(
+            "app.diagnostics_ingested",
+            status="accepted",
+            payload={
+                "kind": record.kind,
+                "event_type": record.event_type,
+                "source": record.source,
+                "app_sequence": record.sequence,
+            },
+        )
+        return AppDiagnosticIngestResponse(
+            state_file=str(self.config.app_state_path),
+            event_log=str(self.config.app_event_log_path),
+            record=record,
+        )
+
+    def record_app_event(
+        self, request: AppDiagnosticEventRequest
+    ) -> AppDiagnosticIngestResponse:
+        record = self._record_app_diagnostic(
+            kind="event",
+            event_type=request.event_type,
+            source=request.source,
+            observed_at=request.observed_at,
+            app_build_id=request.app_build_id,
+            bridge_url=request.bridge_url,
+            status=request.status,
+            payload=request.payload,
+        )
+        self.event_log.emit(
+            "app.diagnostics_ingested",
+            status="accepted",
+            payload={
+                "kind": record.kind,
+                "event_type": record.event_type,
+                "source": record.source,
+                "app_sequence": record.sequence,
+            },
+        )
+        return AppDiagnosticIngestResponse(
+            state_file=str(self.config.app_state_path),
+            event_log=str(self.config.app_event_log_path),
+            record=record,
+        )
+
+    def app_diagnostics_snapshot(self) -> AppDiagnosticsSnapshot:
+        disk_state, disk_events = self._read_app_diagnostics_from_disk()
+        with self._app_diagnostics_lock:
+            memory_events = list(self._recent_app_events)
+            memory_state = self._latest_app_state
+
+        recent = self._merge_app_diagnostic_events(disk_events, memory_events)
+        latest_state = disk_state or memory_state
+        if latest_state is None:
+            latest_state = next(
+                (record for record in reversed(recent) if record.kind == "state"),
+                None,
+            )
+        latest_event = next((record for record in reversed(recent) if record.kind == "event"), None)
+        return AppDiagnosticsSnapshot(
+            state_file=str(self.config.app_state_path),
+            event_log=str(self.config.app_event_log_path),
+            latest_state=latest_state,
+            latest_event=latest_event,
+            recent_events=recent,
+        )
+
+    def codex_snapshot(self) -> CodexSnapshotResponse:
+        return CodexSnapshotResponse(
+            generated_at=_utc_now_iso(),
+            health=self.health(),
+            machine=self._machine_status_snapshot(),
+            paper=self.paper_registration_status(),
+            recent_events=self.recent_events(),
+            app_diagnostics=self.app_diagnostics_snapshot(),
         )
 
     def machine_status(self) -> MachineStatusResponse:
@@ -2615,6 +2793,215 @@ class PlotterBridge:
     def recent_events(self) -> list[BridgeEvent]:
         return self.event_log.recent()
 
+    def _machine_status_snapshot(self) -> MachineStatusResponse:
+        active_status = self._active_machine_status()
+        if active_status is not None:
+            return active_status
+
+        with self._state_lock:
+            last_status = self._last_machine_status
+        if last_status is not None:
+            return last_status
+
+        return self._offline_machine_status(
+            status="dry_run" if self.config.dry_run else "offline",
+            state="DryRun" if self.config.dry_run else "Unknown",
+            error=None if self.config.dry_run else "No cached machine status.",
+        )
+
+    def _record_app_diagnostic(
+        self,
+        *,
+        kind: Literal["state", "event"],
+        event_type: str,
+        source: str,
+        observed_at: str | None,
+        app_build_id: str | None,
+        bridge_url: str | None,
+        status: str,
+        payload: dict[str, Any],
+    ) -> AppDiagnosticRecord:
+        with self._app_diagnostics_lock:
+            self._app_event_sequence += 1
+            record = AppDiagnosticRecord(
+                sequence=self._app_event_sequence,
+                kind=kind,
+                event_type=event_type,
+                source=source,
+                received_at=_utc_now_iso(),
+                observed_at=observed_at,
+                app_build_id=app_build_id,
+                bridge_url=bridge_url,
+                status=status,
+                payload=payload,
+            )
+            self.config.app_event_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.config.app_event_log_path.open("a", encoding="utf-8") as file:
+                file.write(record.model_dump_json(by_alias=True) + "\n")
+            self._recent_app_events.append(record)
+
+            if kind == "state":
+                self._latest_app_state = record
+                self.config.app_state_path.parent.mkdir(parents=True, exist_ok=True)
+                self.config.app_state_path.write_text(
+                    record.model_dump_json(by_alias=True) + "\n",
+                    encoding="utf-8",
+                )
+            return record
+
+    def _load_app_diagnostics_from_disk(self) -> None:
+        latest_state, recent_events = self._read_app_diagnostics_from_disk()
+        with self._app_diagnostics_lock:
+            for record in recent_events:
+                self._recent_app_events.append(record)
+                self._app_event_sequence = max(self._app_event_sequence, record.sequence)
+                if record.kind == "state":
+                    self._latest_app_state = record
+            if latest_state is not None:
+                self._latest_app_state = latest_state
+                self._app_event_sequence = max(self._app_event_sequence, latest_state.sequence)
+
+    def _read_app_diagnostics_from_disk(
+        self,
+    ) -> tuple[AppDiagnosticRecord | None, list[AppDiagnosticRecord]]:
+        latest_state = self._read_app_diagnostic_file(
+            self.config.app_state_path,
+            fallback_kind="state",
+            fallback_event_type="app.state",
+            fallback_sequence=0,
+        )
+        recent_events: list[AppDiagnosticRecord] = []
+        if self.config.app_event_log_path.exists():
+            try:
+                lines = self.config.app_event_log_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                lines = []
+            for index, line in enumerate(lines[-100:], start=1):
+                record = self._app_diagnostic_record_from_json(
+                    line,
+                    fallback_kind="event",
+                    fallback_event_type="app.event",
+                    fallback_sequence=index,
+                )
+                if record is None:
+                    continue
+                recent_events.append(record)
+                if record.kind == "state":
+                    latest_state = record
+        return latest_state, recent_events
+
+    def _read_app_diagnostic_file(
+        self,
+        path: Path,
+        *,
+        fallback_kind: Literal["state", "event"],
+        fallback_event_type: str,
+        fallback_sequence: int,
+    ) -> AppDiagnosticRecord | None:
+        if not path.exists():
+            return None
+        try:
+            return self._app_diagnostic_record_from_json(
+                path.read_text(encoding="utf-8"),
+                fallback_kind=fallback_kind,
+                fallback_event_type=fallback_event_type,
+                fallback_sequence=fallback_sequence,
+            )
+        except OSError:
+            return None
+
+    def _app_diagnostic_record_from_json(
+        self,
+        content: str,
+        *,
+        fallback_kind: Literal["state", "event"],
+        fallback_event_type: str,
+        fallback_sequence: int,
+    ) -> AppDiagnosticRecord | None:
+        if not content.strip():
+            return None
+        try:
+            return AppDiagnosticRecord.model_validate_json(content)
+        except ValidationError:
+            try:
+                payload = json.loads(content)
+            except json.JSONDecodeError:
+                return None
+            return self._coerce_app_diagnostic_record(
+                payload,
+                fallback_kind=fallback_kind,
+                fallback_event_type=fallback_event_type,
+                fallback_sequence=fallback_sequence,
+            )
+
+    def _coerce_app_diagnostic_record(
+        self,
+        payload: Any,
+        *,
+        fallback_kind: Literal["state", "event"],
+        fallback_event_type: str,
+        fallback_sequence: int,
+    ) -> AppDiagnosticRecord | None:
+        if not isinstance(payload, dict):
+            return None
+
+        kind = payload.get("kind")
+        if kind not in {"state", "event"}:
+            kind = fallback_kind
+
+        observed_at = _clean_optional_string(
+            payload.get("observed_at")
+            or payload.get("updated_at")
+            or payload.get("timestamp")
+            or payload.get("created_at")
+        )
+        received_at = _clean_optional_string(payload.get("received_at")) or observed_at or _utc_now_iso()
+        event_type = _clean_optional_string(
+            payload.get("event_type")
+            or payload.get("event")
+            or payload.get("artifact_type")
+            or fallback_event_type
+        ) or fallback_event_type
+        status = _clean_optional_string(payload.get("status")) or "reported"
+        source = _clean_optional_string(payload.get("source")) or "macos_app"
+        app_build_id = _clean_optional_string(
+            payload.get("app_build_id") or payload.get("appBuildId")
+        )
+        bridge_url = _clean_optional_string(payload.get("bridge_url") or payload.get("bridgeUrl"))
+        sequence = _coerce_positive_int(payload.get("sequence")) or fallback_sequence
+
+        record_payload = payload.get("payload")
+        if not isinstance(record_payload, dict):
+            record_payload = payload
+
+        return AppDiagnosticRecord(
+            sequence=sequence,
+            kind=kind,
+            event_type=event_type,
+            source=source,
+            received_at=received_at,
+            observed_at=observed_at,
+            app_build_id=app_build_id,
+            bridge_url=bridge_url,
+            status=status,
+            payload=record_payload,
+        )
+
+    def _merge_app_diagnostic_events(
+        self,
+        disk_events: list[AppDiagnosticRecord],
+        memory_events: list[AppDiagnosticRecord],
+    ) -> list[AppDiagnosticRecord]:
+        merged: list[AppDiagnosticRecord] = []
+        seen: set[tuple[int, str, str, str]] = set()
+        for record in [*disk_events, *memory_events]:
+            key = (record.sequence, record.kind, record.event_type, record.received_at)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+        return merged[-100:]
+
     def _build_calibration_mark_plan(
         self,
         *,
@@ -4221,6 +4608,16 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.arm_machine,
             lambda response: getattr(response, "status", "") == "completed",
         ),
+        "/codex/app/state": PostRoute(
+            AppDiagnosticStateRequest,
+            bridge.record_app_state,
+            lambda response: getattr(response, "status", "") == "accepted",
+        ),
+        "/codex/app/events": PostRoute(
+            AppDiagnosticEventRequest,
+            bridge.record_app_event,
+            lambda response: getattr(response, "status", "") == "accepted",
+        ),
         "/machine/jog": PostRoute(
             MachineJogRequest,
             bridge.jog_machine,
@@ -4354,6 +4751,15 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                         ]
                     },
                 )
+                return
+            if parsed_url.path == "/codex/snapshot":
+                self._write_model(HTTPStatus.OK, bridge.codex_snapshot())
+                return
+            if parsed_url.path == "/codex/app/state":
+                self._write_model(HTTPStatus.OK, bridge.app_diagnostics_snapshot())
+                return
+            if parsed_url.path == "/codex/app/events":
+                self._write_model(HTTPStatus.OK, bridge.app_diagnostics_snapshot())
                 return
             if parsed_url.path == "/machine/status":
                 self._write_model(HTTPStatus.OK, bridge.machine_status())

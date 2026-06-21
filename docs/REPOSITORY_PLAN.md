@@ -61,6 +61,9 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
 - `plotter_vision.calibration` and `plotter_vision.drawing` own geometry artifacts and paper-space
   drawing contracts. Camera-space overlays should be treated as views over these artifacts, not as
   independent motion authority.
+- Codex and other agents observe the running system through read-only diagnostics: bridge endpoints,
+  append-only JSONL logs, controller transcripts, app state artifacts, and the merged
+  `/codex/snapshot`. Agents must not get a hidden command channel inside the app.
 
 Current doubts to keep explicit:
 
@@ -122,6 +125,43 @@ Status: implemented as a local HTTP bridge plus native macOS camera/control prev
 - Keep the local HTTP server thin until core services are stable enough to justify a heavier API
   framework.
 - Route all UI/API calls through core safety validators and controller abstractions.
+- Preserve the existing observability spine: `/health`, `/machine/status`, `/paper/status`,
+  `/events`, `artifacts/bridge_events.jsonl`, and `artifacts/bridge_transcripts/*.jsonl`.
+
+### Phase 4.5 — Agent-Readable Observability
+
+Status: implemented as bridge diagnostics routes plus native app JSON/OSLog diagnostics.
+
+- Keep `artifacts/app_state.json` as the latest app-observed state. It includes app build identity,
+  bridge lifecycle, machine summary, paper registration state, preview state, visible errors, and
+  safety gate labels.
+- Keep `artifacts/app_events.jsonl` as bounded append-only app evidence for app lifecycle, bridge
+  polling, lifecycle mismatches, UI commands, preview/draw requests, visual-probe paths, visible
+  errors, and camera-derived state changes. Do not store raw frames.
+- Keep `GET /codex/snapshot` read-only. It merges `/health`, cached machine status, `/paper/status`,
+  recent `/events`, and latest app diagnostics when present. `POST /codex/app/state` and
+  `POST /codex/app/events` are append-only diagnostics ingestion routes, not command routes.
+- Do not route machine commands through `/codex/snapshot` or app artifacts. Any action remains an
+  explicit typed bridge route with existing safety gates.
+- Keep preview and diagnostic reads non-moving. `/codex/snapshot` must not create controller
+  transcripts or poll hardware status.
+
+Validation after integration:
+
+```bash
+make check
+make bridge-preview-bg
+curl -fsS http://127.0.0.1:8765/health | jq '{status, lifecycle_label, dry_run, bridge_build_id, event_log}'
+curl -fsS http://127.0.0.1:8765/machine/status | jq '{status, state, is_alarm, is_busy, dry_run}'
+curl -fsS http://127.0.0.1:8765/paper/status | jq '{status, dry_run, has_registration: (.registration != null)}'
+curl -fsS http://127.0.0.1:8765/events | jq '.events | length'
+test -s artifacts/bridge_events.jsonl
+test -s artifacts/app_state.json
+jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
+test -s artifacts/app_events.jsonl
+curl -fsS http://127.0.0.1:8765/codex/snapshot | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+make bridge-stop
+```
 
 ### Phase 5 — Camera Observation
 

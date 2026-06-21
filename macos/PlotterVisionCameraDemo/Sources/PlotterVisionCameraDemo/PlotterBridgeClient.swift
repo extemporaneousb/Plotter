@@ -1005,10 +1005,18 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var manualFeedMmMin = 500.0
 
     private let client = PlotterBridgeClient()
+    private let diagnostics = AppDiagnostics.shared
     private let appBuildId = currentAppBuildId()
     private let requiredBridgeApiVersion = currentRequiredBridgeApiVersion()
     private var animationTask: Task<Void, Never>?
     private var isRefreshingMachineStatus = false
+    private var lastDiagnosticsHealthSummary = ""
+    private var lastDiagnosticsMachineSummary = ""
+    private var lastDiagnosticsPaperSummary = ""
+
+    init() {
+        diagnosticsEvent("app_model_initialized", snapshot: true)
+    }
 
     var isLiveMotionMode: Bool {
         isOnline && !isDryRun
@@ -1272,6 +1280,227 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func recordOperatorEvent(_ name: String, details: [String: Any] = [:]) {
+        diagnosticsEvent("operator.\(name)", details, snapshot: true)
+    }
+
+    private func diagnosticsEvent(
+        _ name: String,
+        _ details: [String: Any] = [:],
+        snapshot: Bool = false
+    ) {
+        var payload = diagnosticsContext()
+        for (key, value) in details {
+            payload[key] = value
+        }
+        diagnostics.recordEvent(name, payload: payload)
+        if snapshot {
+            writeDiagnosticsState(reason: name)
+        }
+    }
+
+    private func writeDiagnosticsState(reason: String) {
+        diagnostics.writeState(diagnosticsState(reason: reason))
+    }
+
+    private func diagnosticsContext() -> [String: Any] {
+        [
+            "reason": activeAction.isEmpty ? "idle" : activeAction,
+            "short_status": shortStatus,
+            "status_text": statusText,
+            "bridge_online": isOnline,
+            "dry_run": isDryRun,
+            "controller_kind": sanitizedControllerKind,
+            "machine_state": machineState,
+            "machine_busy": isMachineBusy || isRunning,
+            "machine_alarm": isMachineAlarm,
+            "motion_mode": motionModeLabel,
+            "arm": armStatusLabel,
+            "motion_gate": motionGateMessage,
+            "draw_preflight": drawPreflightMessage
+        ]
+    }
+
+    private func diagnosticsState(reason: String) -> [String: Any] {
+        [
+            "reason": reason,
+            "app": [
+                "build_id": appBuildId ?? "",
+                "required_bridge_api_version": requiredBridgeApiVersion
+            ],
+            "bridge": [
+                "online": isOnline,
+                "status_text": statusText,
+                "short_status": shortStatus,
+                "dry_run": isDryRun,
+                "controller_kind": sanitizedControllerKind,
+                "api_version": bridgeApiVersion ?? "",
+                "lifecycle_mode": lifecycleMode ?? "",
+                "lifecycle_label": lifecycleLabel ?? "",
+                "lifecycle_title": bridgeLifecycleTitle,
+                "lifecycle_lamp": bridgeLifecycleLampValue,
+                "build_id": bridgeBuildId ?? "",
+                "pid": bridgePid ?? 0,
+                "can_restart_safely": canRestartSafely ?? false,
+                "api_mismatch": hasBridgeApiMismatch,
+                "build_mismatch": hasLifecycleBuildMismatch
+            ],
+            "machine": [
+                "state": machineState,
+                "pins": machinePins,
+                "mpos": machineMPos,
+                "wpos": machineWPos,
+                "feed_spindle": machineFeedSpindle,
+                "status": machineStatus,
+                "busy": isMachineBusy || isRunning,
+                "alarm": isMachineAlarm,
+                "active_action": activeAction,
+                "homing_trusted": machineHomingTrusted,
+                "axis_model_trusted": machineAxisModelTrusted
+            ],
+            "paper": [
+                "status": paperTransformStatus,
+                "locked": hasPaperLock,
+                "registration_id": paperRegistrationSnapshot?.registrationId ?? "",
+                "workspace_x_mm": workspaceXMm,
+                "workspace_y_mm": workspaceYMm
+            ],
+            "previews": [
+                "shape": previewStatus,
+                "image": imagePreviewStatus,
+                "image_detail": imagePreviewDetail,
+                "image_contours": imagePreviewContourCount,
+                "image_bridge_preview_eligible": imagePreviewEligibleForBridgePreview,
+                "expected_path_segments": expectedPathSegments.count,
+                "dot": dotTestPreviewStatus,
+                "dot_pattern": dotTestPreviewPattern,
+                "dot_points": dotTestPreviewPoints.count,
+                "dot_segments": dotTestPreviewSegments.count,
+                "adaptive_probe": adaptiveProbeStatus,
+                "visual_center_dot": visualCenterDotStatus,
+                "path_animation": pathAnimationStatus,
+                "path_reveal_progress": pathRevealProgress
+            ],
+            "gates": [
+                "connection_title": plotterConnectionTitle,
+                "connection_subtitle": plotterConnectionSubtitle,
+                "connection_help": plotterConnectionHelp,
+                "motion_mode": motionModeLabel,
+                "arm": armStatusLabel,
+                "motion_gate": motionGateMessage,
+                "draw_preflight": drawPreflightMessage,
+                "can_connect_hardware": canConnectHardware,
+                "can_arm_hardware": canArmHardware,
+                "can_disarm_hardware": canDisarmHardware,
+                "can_run_absolute_drawing": canRunAbsoluteDrawing,
+                "can_run_center_dot_motion": canRunCenterDotMotion,
+                "can_run_visual_relative_motion": canRunVisualRelativeMotion
+            ]
+        ]
+    }
+
+    private var sanitizedControllerKind: String {
+        if bridgeController == "mock" { return "mock" }
+        if bridgeController == "offline" { return "offline" }
+        if bridgeController.hasPrefix("serial:") { return "serial" }
+        if bridgeController.isEmpty { return "unknown" }
+        return bridgeController
+    }
+
+    private func recordHealthIfChanged() {
+        let summary = [
+            bridgeLifecycleTitle,
+            bridgeLifecycleLampValue,
+            sanitizedControllerKind,
+            isDryRun ? "dry" : "live",
+            armStatusLabel,
+            bridgeApiVersion ?? "",
+            bridgeBuildId ?? ""
+        ].joined(separator: "|")
+        guard summary != lastDiagnosticsHealthSummary else { return }
+        lastDiagnosticsHealthSummary = summary
+        diagnosticsEvent(
+            "bridge_health_changed",
+            [
+                "lifecycle_title": bridgeLifecycleTitle,
+                "lifecycle_lamp": bridgeLifecycleLampValue,
+                "controller_kind": sanitizedControllerKind,
+                "api_version": bridgeApiVersion ?? "",
+                "bridge_build_id": bridgeBuildId ?? "",
+                "arm": armStatusLabel
+            ],
+            snapshot: true
+        )
+    }
+
+    private func recordMachineIfChanged() {
+        let summary = [
+            sanitizedControllerKind,
+            isDryRun ? "dry" : "live",
+            machineState,
+            machinePins,
+            machineMPos,
+            machineWPos,
+            isMachineBusy ? "busy" : "idle",
+            isMachineAlarm ? "alarm" : "ok",
+            machineHomingTrusted ? "home_trusted" : "home_untrusted",
+            machineAxisModelTrusted ? "axis_trusted" : "axis_untrusted",
+            activeAction
+        ].joined(separator: "|")
+        guard summary != lastDiagnosticsMachineSummary else { return }
+        lastDiagnosticsMachineSummary = summary
+        diagnosticsEvent(
+            "machine_status_changed",
+            [
+                "state": machineState,
+                "pins": machinePins,
+                "mpos": machineMPos,
+                "wpos": machineWPos,
+                "busy": isMachineBusy,
+                "alarm": isMachineAlarm,
+                "active_action": activeAction,
+                "homing_trusted": machineHomingTrusted,
+                "axis_model_trusted": machineAxisModelTrusted
+            ],
+            snapshot: true
+        )
+    }
+
+    private func recordPaperIfChanged() {
+        let summary = [
+            paperTransformStatus,
+            paperRegistrationSnapshot?.registrationId ?? "",
+            hasPaperLock ? "locked" : "unlocked"
+        ].joined(separator: "|")
+        guard summary != lastDiagnosticsPaperSummary else { return }
+        lastDiagnosticsPaperSummary = summary
+        diagnosticsEvent(
+            "paper_status_changed",
+            [
+                "paper_status": paperTransformStatus,
+                "paper_locked": hasPaperLock,
+                "registration_id": paperRegistrationSnapshot?.registrationId ?? ""
+            ],
+            snapshot: true
+        )
+    }
+
+    private func commandPayload(_ response: MachineCommandResponse) -> [String: Any] {
+        [
+            "command_id": response.commandId,
+            "action": response.action,
+            "status": response.status,
+            "dry_run": response.dryRun,
+            "planned_command_count": response.plannedCommands.count,
+            "has_machine_status": response.machineStatus != nil,
+            "error": response.error ?? ""
+        ]
+    }
+
+    private func errorPayload(_ error: Error) -> [String: Any] {
+        ["error": error.localizedDescription]
+    }
+
     func refreshHealth() async {
         do {
             let health = try await client.health()
@@ -1294,6 +1523,7 @@ final class PlotterBridgeModel: ObservableObject {
             canRestartSafely = health.canRestartSafely
             shortStatus = motionModeLabel
             statusText = "\(bridgeLifecycleTitle) \(health.status)"
+            recordHealthIfChanged()
             await refreshPaperStatus()
         } catch {
             isOnline = false
@@ -1309,6 +1539,7 @@ final class PlotterBridgeModel: ObservableObject {
             armHoming = false
             armUnlock = false
             clearBridgeLifecycleMetadata()
+            diagnosticsEvent("bridge_health_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -1317,8 +1548,10 @@ final class PlotterBridgeModel: ObservableObject {
         do {
             let response = try await client.paperStatus()
             applyPaperRegistrationStatus(response)
+            recordPaperIfChanged()
         } catch {
             paperTransformStatus = "PAPER ?"
+            diagnosticsEvent("paper_status_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -1335,6 +1568,7 @@ final class PlotterBridgeModel: ObservableObject {
             if !isRunning {
                 shortStatus = response.isAlarm ? "ALM" : motionModeLabel
             }
+            recordMachineIfChanged()
         } catch {
             isOnline = false
             shortStatus = "OFF"
@@ -1354,6 +1588,7 @@ final class PlotterBridgeModel: ObservableObject {
             armPen = false
             armHoming = false
             armUnlock = false
+            diagnosticsEvent("machine_status_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -1375,6 +1610,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "reconnect"
         shortStatus = "CONN"
         statusText = "Reconnecting controller"
+        diagnosticsEvent("machine_reconnect_started", snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -1391,6 +1627,7 @@ final class PlotterBridgeModel: ObservableObject {
             isDryRun = response.dryRun
             shortStatus = response.dryRun ? (hasControllerPort ? "DRY" : "STBY") : (isMachineAlarm ? "ALM" : "LIVE")
             statusText = "\(response.action) \(response.status)"
+            diagnosticsEvent("machine_reconnect_completed", commandPayload(response), snapshot: true)
         } catch {
             isOnline = false
             shortStatus = "OFF"
@@ -1407,6 +1644,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = "Reconnect failed"
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("machine_reconnect_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -1417,6 +1655,7 @@ final class PlotterBridgeModel: ObservableObject {
     func connectPlotter() async {
         guard !isLiveMotionMode else {
             statusText = "Plotter already connected"
+            diagnosticsEvent("plotter_connect_skipped", ["reason": "already_live"], snapshot: true)
             return
         }
         await armHardware()
@@ -1444,6 +1683,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = live ? "arm" : "disarm"
         shortStatus = live ? "ARM" : "SAFE"
         statusText = live ? "Arming hardware" : "Disarming hardware"
+        diagnosticsEvent(live ? "hardware_arm_started" : "hardware_disarm_started", snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -1469,6 +1709,11 @@ final class PlotterBridgeModel: ObservableObject {
             isDryRun = response.dryRun
             shortStatus = response.dryRun ? (hasControllerPort ? "DRY" : "STBY") : (isMachineAlarm ? "ALM" : "LIVE")
             statusText = live ? "Hardware armed" : "Hardware disarmed"
+            diagnosticsEvent(
+                live ? "hardware_arm_completed" : "hardware_disarm_completed",
+                commandPayload(response),
+                snapshot: true
+            )
         } catch {
             shortStatus = "ERR"
             statusText = error.localizedDescription
@@ -1477,6 +1722,11 @@ final class PlotterBridgeModel: ObservableObject {
             if live {
                 isMachineAlarm = true
             }
+            diagnosticsEvent(
+                live ? "hardware_arm_failed" : "hardware_disarm_failed",
+                errorPayload(error),
+                snapshot: true
+            )
         }
     }
 
@@ -1485,6 +1735,7 @@ final class PlotterBridgeModel: ObservableObject {
         guard isOnline else {
             previewStatus = "SIM OFF"
             statusText = "Bridge offline"
+            diagnosticsEvent("shape_preview_blocked", ["pattern": pattern, "reason": "bridge_offline"], snapshot: true)
             return false
         }
 
@@ -1492,6 +1743,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "shape-preview"
         previewStatus = "SIM PREVIEW"
         statusText = "Previewing \(pattern) overlay"
+        diagnosticsEvent("shape_preview_started", ["pattern": pattern], snapshot: true)
         defer {
             isCalibrating = false
             activeAction = ""
@@ -1515,11 +1767,25 @@ final class PlotterBridgeModel: ObservableObject {
             let drawnLength = response.simulation?.drawnLengthMm ?? 0.0
             animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
             statusText = "\(response.commandId) \(Int(shapeSideMm))mm \(pattern) preview"
+            diagnosticsEvent(
+                "shape_preview_completed",
+                [
+                    "pattern": pattern,
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "evaluation": response.evaluation?.status ?? "",
+                    "preview_segments": expectedPathSegments.count,
+                    "drawn_length_mm": drawnLength
+                ],
+                snapshot: true
+            )
             return response.status == "ready" || response.status == "completed"
         } catch {
             expectedPathSegments = []
             previewStatus = "SIM ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("shape_preview_failed", ["pattern": pattern, "error": error.localizedDescription], snapshot: true)
             return false
         }
     }
@@ -1531,6 +1797,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "draw"
         shortStatus = "RUN"
         statusText = "Planning triangle"
+        diagnosticsEvent("shape_draw_started", ["pattern": "triangle"], snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -1557,6 +1824,19 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = "\(response.commandId) \(Int(shapeSideMm))mm triangle \(previewStatus)"
             isOnline = true
             await refreshMachineStatus()
+            diagnosticsEvent(
+                "shape_draw_completed",
+                [
+                    "pattern": "triangle",
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "evaluation": response.evaluation?.status ?? "",
+                    "preview_segments": expectedPathSegments.count,
+                    "drawn_length_mm": drawnLength
+                ],
+                snapshot: true
+            )
             return response.status == "completed"
         } catch {
             shortStatus = "ERR"
@@ -1564,6 +1844,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("shape_draw_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -1578,6 +1859,16 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "face"
         shortStatus = "RUN"
         statusText = "Planning face raster"
+        diagnosticsEvent(
+            "face_raster_draw_started",
+            [
+                "raster_rows": raster.samples.count,
+                "raster_columns": raster.samples.first?.count ?? 0,
+                "frame_width_mm": frame.widthMm,
+                "frame_height_mm": frame.heightMm
+            ],
+            snapshot: true
+        )
         defer {
             isRunning = false
             activeAction = ""
@@ -1620,6 +1911,19 @@ final class PlotterBridgeModel: ObservableObject {
                 await refreshMachineStatus()
             }
             isOnline = true
+            diagnosticsEvent(
+                "face_raster_draw_completed",
+                [
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "polygons": polygons,
+                    "segments": segments,
+                    "preview_segments": expectedPathSegments.count,
+                    "drawn_length_mm": drawnLength
+                ],
+                snapshot: true
+            )
             return response.status == "completed"
         } catch {
             shortStatus = "ERR"
@@ -1627,6 +1931,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("face_raster_draw_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -1640,6 +1945,7 @@ final class PlotterBridgeModel: ObservableObject {
             imagePreviewStatus = "IMG OFF"
             imagePreviewDetail = "BRIDGE OFFLINE"
             statusText = "Bridge offline"
+            diagnosticsEvent("image_preview_blocked", ["reason": "bridge_offline"], snapshot: true)
             return false
         }
 
@@ -1648,6 +1954,16 @@ final class PlotterBridgeModel: ObservableObject {
         imagePreviewStatus = "IMG PREVIEW"
         imagePreviewDetail = "BRIDGE PREVIEW"
         statusText = "Previewing image contours"
+        diagnosticsEvent(
+            "image_preview_started",
+            [
+                "raster_rows": raster.samples.count,
+                "raster_columns": raster.samples.first?.count ?? 0,
+                "frame_width_mm": frame.widthMm,
+                "frame_height_mm": frame.heightMm
+            ],
+            snapshot: true
+        )
         defer {
             isCalibrating = false
             activeAction = ""
@@ -1679,6 +1995,20 @@ final class PlotterBridgeModel: ObservableObject {
             let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
             animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
             statusText = "\(response.commandId) image contour preview"
+            diagnosticsEvent(
+                "image_preview_completed",
+                [
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "preview_only": response.previewOnly,
+                    "eligible_for_bridge_preview": response.eligibleForBridgePreview,
+                    "contours": contours,
+                    "segments": segments,
+                    "preview_segments": expectedPathSegments.count,
+                    "drawn_length_mm": drawnLength
+                ],
+                snapshot: true
+            )
             return response.status == "ready"
         } catch {
             expectedPathSegments = []
@@ -1688,6 +2018,7 @@ final class PlotterBridgeModel: ObservableObject {
             imagePreviewDetail = "VISUAL ONLY"
             previewStatus = "SIM ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("image_preview_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -1697,6 +2028,7 @@ final class PlotterBridgeModel: ObservableObject {
             partial + segment.lengthMm
         }
         animateExpectedPath(drawnLengthMm: length, feedMmMin: shapeDrawFeedMmMin)
+        diagnosticsEvent("expected_path_replayed", ["length_mm": length, "segments": expectedPathSegments.count], snapshot: true)
     }
 
     func jog(axis: String, distanceMm: Double) async {
@@ -1716,6 +2048,11 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent(
+                "learning_jog_blocked",
+                ["axis": axis, "distance_mm": distanceMm, "reason": motionGateMessage],
+                snapshot: true
+            )
             return nil
         }
 
@@ -1733,6 +2070,11 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "learn"
         shortStatus = "RUN"
         statusText = String(format: "Learn %@ %.1fmm", axis, distanceMm)
+        diagnosticsEvent(
+            "learning_jog_started",
+            ["axis": axis, "distance_mm": distanceMm, "feed_mm_min": feedMmMin],
+            snapshot: true
+        )
         defer {
             isRunning = false
             activeAction = ""
@@ -1756,6 +2098,11 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = response.dryRun ? "DRY" : "DONE"
             statusText = "\(response.action) \(response.status)"
             await refreshMachineStatus()
+            diagnosticsEvent(
+                "learning_jog_completed",
+                commandPayload(response).merging(["axis": axis, "distance_mm": distanceMm]) { current, _ in current },
+                snapshot: true
+            )
             return response
         } catch {
             shortStatus = "ERR"
@@ -1763,6 +2110,11 @@ final class PlotterBridgeModel: ObservableObject {
             machineStatus = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent(
+                "learning_jog_failed",
+                errorPayload(error).merging(["axis": axis, "distance_mm": distanceMm]) { current, _ in current },
+                snapshot: true
+            )
             return nil
         }
     }
@@ -1797,11 +2149,23 @@ final class PlotterBridgeModel: ObservableObject {
             isOnline = true
             adaptiveProbeStatus = response.status == "ready" ? "PROBE CAP SAFE" : "PROBE CAP OBS"
             statusText = response.readiness?.blockers.joined(separator: ", ") ?? adaptiveProbeStatus
+            diagnosticsEvent(
+                "visual_cap_observed",
+                [
+                    "status": response.status,
+                    "confidence": confidence,
+                    "paper_x_mm": paperMm.x,
+                    "paper_y_mm": paperMm.y,
+                    "blockers": response.readiness?.blockers ?? []
+                ],
+                snapshot: true
+            )
             return response.status != "failed"
         } catch {
             shortStatus = "ERR"
             adaptiveProbeStatus = "PROBE OBS ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("visual_cap_observe_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -1839,11 +2203,23 @@ final class PlotterBridgeModel: ObservableObject {
             latestAdaptiveProbePlan = response.plan
             adaptiveProbeStatus = response.status == "ready" ? "PROBE BOOT PREVIEW" : "PROBE BOOT BLOCK"
             statusText = response.error ?? adaptiveProbeStatus
+            diagnosticsEvent(
+                "adaptive_probe_preview_completed",
+                [
+                    "request_id": requestId,
+                    "status": response.status,
+                    "plan_id": response.plan?.planId ?? "",
+                    "move_count": response.plan?.moves.count ?? 0,
+                    "blockers": response.plan?.blockers ?? []
+                ],
+                snapshot: true
+            )
             return response
         } catch {
             shortStatus = "ERR"
             adaptiveProbeStatus = "PROBE PREVIEW ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("adaptive_probe_preview_failed", ["request_id": requestId, "error": error.localizedDescription], snapshot: true)
             return nil
         }
     }
@@ -1865,6 +2241,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             adaptiveProbeStatus = "PROBE LIVE BLOCK"
             statusText = motionGateMessage
+            diagnosticsEvent("adaptive_probe_run_blocked", ["request_id": requestId, "reason": motionGateMessage], snapshot: true)
             return nil
         }
         guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
@@ -1883,6 +2260,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "probe-bootstrap"
         shortStatus = "RUN"
         adaptiveProbeStatus = "PROBE BOOT RUN"
+        diagnosticsEvent("adaptive_probe_run_started", ["request_id": requestId, "expected_plan_id": expectedPlanId], snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -1916,6 +2294,18 @@ final class PlotterBridgeModel: ObservableObject {
             adaptiveProbeStatus = response.status == "completed" ? "PROBE BOOT DONE" : "PROBE BOOT FAIL"
             shortStatus = response.dryRun ? "DRY" : (response.status == "completed" ? "DONE" : "ERR")
             statusText = response.error ?? adaptiveProbeStatus
+            diagnosticsEvent(
+                "adaptive_probe_run_completed",
+                [
+                    "request_id": requestId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "command_id": response.commandId,
+                    "plan_id": response.plan?.planId ?? "",
+                    "move_count": response.plan?.moves.count ?? 0
+                ],
+                snapshot: true
+            )
             return response
         } catch {
             shortStatus = "ERR"
@@ -1923,6 +2313,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("adaptive_probe_run_failed", ["request_id": requestId, "error": error.localizedDescription], snapshot: true)
             return nil
         }
     }
@@ -1932,6 +2323,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("visual_relative_move_blocked", ["x_mm": xMm, "y_mm": yMm, "reason": motionGateMessage], snapshot: true)
             return nil
         }
 
@@ -1950,6 +2342,7 @@ final class PlotterBridgeModel: ObservableObject {
         shortStatus = "RUN"
         visualCenterDotStatus = String(format: "VIS MOVE X%.1f Y%.1f", xMm, yMm)
         statusText = String(format: "Visual relative move X%.2f Y%.2f", xMm, yMm)
+        diagnosticsEvent("visual_relative_move_started", ["x_mm": xMm, "y_mm": yMm, "feed_mm_min": feedMmMin], snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -1974,6 +2367,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = response.dryRun ? "DRY" : "DONE"
             statusText = "\(response.action) \(response.status)"
             await refreshMachineStatus()
+            diagnosticsEvent("visual_relative_move_completed", commandPayload(response), snapshot: true)
             return response
         } catch {
             shortStatus = "ERR"
@@ -1982,6 +2376,7 @@ final class PlotterBridgeModel: ObservableObject {
             machineStatus = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("visual_relative_move_failed", errorPayload(error), snapshot: true)
             return nil
         }
     }
@@ -1991,6 +2386,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("dot_mark_blocked", ["reason": motionGateMessage], snapshot: true)
             return false
         }
 
@@ -2009,6 +2405,7 @@ final class PlotterBridgeModel: ObservableObject {
         shortStatus = "RUN"
         visualCenterDotStatus = "VIS MARK"
         statusText = "Marking current visual dot position"
+        diagnosticsEvent("dot_mark_started", snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -2027,6 +2424,7 @@ final class PlotterBridgeModel: ObservableObject {
             visualCenterDotStatus = response.status == "completed" ? "VIS MARKED" : "VIS MARK FAIL"
             statusText = "\(response.action) \(response.status)"
             await refreshMachineStatus()
+            diagnosticsEvent("dot_mark_completed", commandPayload(response), snapshot: true)
             return response.status == "completed"
         } catch {
             shortStatus = "ERR"
@@ -2035,6 +2433,7 @@ final class PlotterBridgeModel: ObservableObject {
             machineStatus = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("dot_mark_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -2044,6 +2443,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("relative_mark_blocked", ["reason": motionGateMessage], snapshot: true)
             return false
         }
 
@@ -2062,6 +2462,11 @@ final class PlotterBridgeModel: ObservableObject {
         shortStatus = "RUN"
         visualCenterDotStatus = String(format: "VIS MARK %.1f", markSizeMm)
         statusText = String(format: "Drawing relative visual mark %.1fmm", markSizeMm)
+        diagnosticsEvent(
+            "relative_mark_started",
+            ["mark_size_mm": markSizeMm, "draw_feed_mm_min": drawFeedMmMin],
+            snapshot: true
+        )
         defer {
             isRunning = false
             activeAction = ""
@@ -2086,6 +2491,7 @@ final class PlotterBridgeModel: ObservableObject {
             visualCenterDotStatus = response.status == "completed" ? "VIS MARKED" : "VIS MARK FAIL"
             statusText = "\(response.action) \(response.status)"
             await refreshMachineStatus()
+            diagnosticsEvent("relative_mark_completed", commandPayload(response), snapshot: true)
             return response.status == "completed"
         } catch {
             shortStatus = "ERR"
@@ -2094,6 +2500,7 @@ final class PlotterBridgeModel: ObservableObject {
             machineStatus = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("relative_mark_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -2151,12 +2558,14 @@ final class PlotterBridgeModel: ObservableObject {
         guard isLiveMotionMode else {
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("machine_stop_blocked", ["reason": motionGateMessage], snapshot: true)
             return
         }
 
         activeAction = "stop"
         shortStatus = "STOP"
         statusText = "Sending stop"
+        diagnosticsEvent("machine_stop_started", snapshot: true)
 
         do {
             let response = try await client.stop(MachineStopRequest())
@@ -2169,11 +2578,13 @@ final class PlotterBridgeModel: ObservableObject {
             isDryRun = response.dryRun
             shortStatus = response.dryRun ? "DRY" : "STOP"
             statusText = "\(response.action) \(response.status)"
+            diagnosticsEvent("machine_stop_completed", commandPayload(response), snapshot: true)
         } catch {
             shortStatus = "ERR"
             statusText = error.localizedDescription
             machineStatus = error.localizedDescription
             isMachineAlarm = true
+            diagnosticsEvent("machine_stop_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -2181,6 +2592,7 @@ final class PlotterBridgeModel: ObservableObject {
         guard isLiveMotionMode else {
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("machine_resume_blocked", ["reason": motionGateMessage], snapshot: true)
             return
         }
         guard !isRunning, machineState.hasPrefix("Hold") else { return }
@@ -2188,6 +2600,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "resume"
         shortStatus = "RUN"
         statusText = "Sending resume"
+        diagnosticsEvent("machine_resume_started", snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -2204,11 +2617,13 @@ final class PlotterBridgeModel: ObservableObject {
             isDryRun = response.dryRun
             shortStatus = response.dryRun ? "DRY" : "DONE"
             statusText = "\(response.action) \(response.status)"
+            diagnosticsEvent("machine_resume_completed", commandPayload(response), snapshot: true)
         } catch {
             shortStatus = "ERR"
             statusText = error.localizedDescription
             machineStatus = error.localizedDescription
             isMachineAlarm = true
+            diagnosticsEvent("machine_resume_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -2277,6 +2692,7 @@ final class PlotterBridgeModel: ObservableObject {
         isMachineBusy = true
         activeAction = "model"
         modelStatus = "MODEL RUN"
+        diagnosticsEvent("machine_model_calibration_started", snapshot: true)
         defer {
             isCalibrating = false
             activeAction = ""
@@ -2301,11 +2717,24 @@ final class PlotterBridgeModel: ObservableObject {
             }
             statusText = "\(response.sessionId) \(response.status)"
             await refreshMachineStatus()
+            diagnosticsEvent(
+                "machine_model_calibration_completed",
+                [
+                    "session_id": response.sessionId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "observed_count": response.observedCount,
+                    "rms_error_norm": response.model.rmsErrorNorm ?? 0.0,
+                    "max_error_norm": response.model.maxErrorNorm ?? 0.0
+                ],
+                snapshot: true
+            )
         } catch {
             modelStatus = "MODEL ERR"
             statusText = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent("machine_model_calibration_failed", errorPayload(error), snapshot: true)
         }
     }
 
@@ -2332,6 +2761,15 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "paper"
         paperTransformStatus = "PAPER SOLVE"
         statusText = "Solving paper homography"
+        diagnosticsEvent(
+            "paper_registration_started",
+            [
+                "fiducial_count": fiducials.count,
+                "paper_width_mm": paperWidthMm,
+                "paper_height_mm": paperHeightMm
+            ],
+            snapshot: true
+        )
         defer {
             isCalibrating = false
             activeAction = ""
@@ -2358,10 +2796,22 @@ final class PlotterBridgeModel: ObservableObject {
                 statusText = response.error ?? response.status
             }
             applyPaperRegistrationStatus(response)
+            diagnosticsEvent(
+                "paper_registration_completed",
+                [
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "registration_id": response.registration?.registrationId ?? "",
+                    "rms_error_norm": response.registration?.rmsErrorNorm ?? 0.0,
+                    "max_error_norm": response.registration?.maxErrorNorm ?? 0.0
+                ],
+                snapshot: true
+            )
             return response
         } catch {
             paperTransformStatus = "PAPER ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("paper_registration_failed", errorPayload(error), snapshot: true)
             return nil
         }
     }
@@ -2371,6 +2821,7 @@ final class PlotterBridgeModel: ObservableObject {
         guard isOnline else {
             dotTestPreviewStatus = "DOT OFF"
             statusText = "Bridge offline"
+            diagnosticsEvent("dot_preview_blocked", ["pattern": pattern, "reason": "bridge_offline"], snapshot: true)
             return nil
         }
         if !hasPaperLock {
@@ -2378,6 +2829,7 @@ final class PlotterBridgeModel: ObservableObject {
             if !hasPaperLock {
                 dotTestPreviewStatus = "DOT NEED PAPER"
                 statusText = "Paper homography required"
+                diagnosticsEvent("dot_preview_blocked", ["pattern": pattern, "reason": "paper_homography_required"], snapshot: true)
                 return nil
             }
         }
@@ -2386,6 +2838,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "dot-preview"
         dotTestPreviewStatus = "DOT PREVIEW"
         statusText = "Previewing dot-test overlay"
+        diagnosticsEvent("dot_preview_started", ["pattern": pattern], snapshot: true)
         defer {
             isCalibrating = false
             activeAction = ""
@@ -2416,6 +2869,19 @@ final class PlotterBridgeModel: ObservableObject {
                 String(response.planHash.prefix(6))
             )
             statusText = "\(response.commandId) preview \(response.pattern)"
+            diagnosticsEvent(
+                "dot_preview_completed",
+                [
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "pattern": response.pattern,
+                    "point_count": response.pointCount,
+                    "segment_count": response.cameraSegments.count,
+                    "plan_hash_prefix": String(response.planHash.prefix(8))
+                ],
+                snapshot: true
+            )
             return response
         } catch {
             dotTestPreviewPoints = []
@@ -2424,6 +2890,7 @@ final class PlotterBridgeModel: ObservableObject {
             dotTestPreviewPattern = ""
             dotTestPreviewStatus = "DOT ERR"
             statusText = error.localizedDescription
+            diagnosticsEvent("dot_preview_failed", ["pattern": pattern, "error": error.localizedDescription], snapshot: true)
             return nil
         }
     }
@@ -2434,6 +2901,7 @@ final class PlotterBridgeModel: ObservableObject {
         dotTestPreviewPlanHash = ""
         dotTestPreviewPattern = ""
         dotTestPreviewStatus = "DOT --"
+        diagnosticsEvent("dot_preview_cleared", snapshot: true)
     }
 
     func paperPointMm(cameraPoint: CGPoint) -> PaperPointMmSnapshot? {
@@ -2458,34 +2926,40 @@ final class PlotterBridgeModel: ObservableObject {
         guard dotTestPreviewPattern == "center", !dotTestPreviewPlanHash.isEmpty else {
             dotTestPreviewStatus = "DOT PREVIEW FIRST"
             statusText = "Preview center dot before motion"
+            diagnosticsEvent("dot_run_blocked", ["reason": "preview_required"], snapshot: true)
             return false
         }
         guard hasPaperLock else {
             dotTestPreviewStatus = "DOT NEED PAPER"
             statusText = "Paper homography required"
+            diagnosticsEvent("dot_run_blocked", ["reason": "paper_homography_required"], snapshot: true)
             return false
         }
         guard isLiveMotionMode else {
             dotTestPreviewStatus = isOnline ? "DOT DRY" : "DOT OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("dot_run_blocked", ["reason": motionGateMessage], snapshot: true)
             return false
         }
         guard machineAxisModelTrusted else {
             dotTestPreviewStatus = "DOT AXIS BLOCK"
             statusText = "Axis geometry is not trusted"
             machineStatus = drawPreflightMessage
+            diagnosticsEvent("dot_run_blocked", ["reason": "axis_geometry_not_trusted"], snapshot: true)
             return false
         }
         guard machineHomingTrusted else {
             dotTestPreviewStatus = "DOT POSITION BLOCK"
             statusText = "Absolute position is not trusted"
             machineStatus = drawPreflightMessage
+            diagnosticsEvent("dot_run_blocked", ["reason": "absolute_position_not_trusted"], snapshot: true)
             return false
         }
         guard !isRunning && !isMachineBusy && !isMachineAlarm else {
             dotTestPreviewStatus = "DOT BUSY"
             statusText = motionGateMessage
+            diagnosticsEvent("dot_run_blocked", ["reason": "machine_busy_or_alarm"], snapshot: true)
             return false
         }
 
@@ -2496,6 +2970,7 @@ final class PlotterBridgeModel: ObservableObject {
         shortStatus = "RUN"
         dotTestPreviewStatus = "DOT RUN"
         statusText = "Running center dot motion"
+        diagnosticsEvent("dot_run_started", ["plan_hash_prefix": String(expectedHash.prefix(8))], snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -2524,6 +2999,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = response.dryRun ? "DRY" : "DONE"
             dotTestPreviewStatus = String(format: "DOT RUN %@", String(expectedHash.prefix(6)))
             statusText = "\(response.action) \(response.status)"
+            diagnosticsEvent("dot_run_completed", commandPayload(response), snapshot: true)
             return response.status == "completed"
         } catch {
             shortStatus = "ERR"
@@ -2532,6 +3008,7 @@ final class PlotterBridgeModel: ObservableObject {
             machineStatus = error.localizedDescription
             isMachineBusy = false
             await refreshMachineStatus()
+            diagnosticsEvent("dot_run_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -2564,6 +3041,7 @@ final class PlotterBridgeModel: ObservableObject {
             shortStatus = isOnline ? "DRY" : "OFF"
             statusText = motionGateMessage
             machineStatus = motionGateMessage
+            diagnosticsEvent("machine_command_blocked", ["action": action, "reason": motionGateMessage], snapshot: true)
             return
         }
 
@@ -2573,6 +3051,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = action
         shortStatus = "RUN"
         statusText = "Machine \(action) running"
+        diagnosticsEvent("machine_command_started", ["action": action], snapshot: true)
         defer {
             isRunning = false
             activeAction = ""
@@ -2589,12 +3068,18 @@ final class PlotterBridgeModel: ObservableObject {
             isDryRun = response.dryRun
             shortStatus = response.dryRun ? "DRY" : "DONE"
             statusText = "\(response.action) \(response.status)"
+            diagnosticsEvent("machine_command_completed", commandPayload(response), snapshot: true)
         } catch {
             shortStatus = "ERR"
             statusText = error.localizedDescription
             machineStatus = error.localizedDescription
             isMachineBusy = false
             isMachineAlarm = true
+            diagnosticsEvent(
+                "machine_command_failed",
+                errorPayload(error).merging(["action": action]) { current, _ in current },
+                snapshot: true
+            )
         }
     }
 
