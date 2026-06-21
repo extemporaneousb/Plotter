@@ -7,6 +7,21 @@ CURL_BIN="${PLOTTER_LAUNCHER_CURL:-curl}"
 LSOF_BIN="${PLOTTER_LAUNCHER_LSOF:-lsof}"
 STATUS_PATH="${PLOTTER_LAUNCHER_STATUS_PATH:-${ARTIFACTS:-$ROOT_DIR/artifacts}/launcher_status.json}"
 
+PLOTTER_LAUNCH_STARTED_AT="${PLOTTER_LAUNCH_STARTED_AT:-$(date +%s)}"
+PLOTTER_LAUNCH_LOG_PREFIX="${PLOTTER_LAUNCH_LOG_PREFIX:-plotter-launch}"
+export PLOTTER_LAUNCH_STARTED_AT
+export PLOTTER_LAUNCH_LOG_PREFIX
+
+elapsed_s() {
+  local now
+  now="$(date +%s)"
+  printf '%s' "$((now - PLOTTER_LAUNCH_STARTED_AT))"
+}
+
+log_phase() {
+  printf '[%s +%ss] %s\n' "$PLOTTER_LAUNCH_LOG_PREFIX" "$(elapsed_s)" "$*" >&2
+}
+
 current_build_id() {
   git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || printf 'unknown'
 }
@@ -37,7 +52,14 @@ EOF
 }
 
 run_make() {
+  local status
+  log_phase "make -C $ROOT_DIR $*: starting"
+  set +e
   "$MAKE_BIN" -C "$ROOT_DIR" "$@"
+  status=$?
+  set -e
+  log_phase "make -C $ROOT_DIR $*: finished status=$status"
+  return "$status"
 }
 
 health_url() {
@@ -47,7 +69,21 @@ health_url() {
 
 bridge_health() {
   local http_port="$1"
-  "$CURL_BIN" --max-time 1 -fsS "$(health_url "$http_port")" 2>/dev/null || true
+  local response
+  local status
+
+  log_phase "bridge health: GET $(health_url "$http_port")"
+  set +e
+  response="$("$CURL_BIN" --max-time 1 -fsS "$(health_url "$http_port")" 2>/dev/null)"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 && -n "$response" ]]; then
+    log_phase "bridge health: response received"
+    printf '%s' "$response"
+  else
+    log_phase "bridge health: no Plotter bridge response (curl status=$status)"
+  fi
 }
 
 json_escape() {
@@ -93,6 +129,7 @@ write_launcher_status() {
 }
 EOF
   mv "$tmp_path" "$STATUS_PATH"
+  log_phase "launcher status: wrote $STATUS_PATH action=$action target=$target"
 }
 
 health_is_live() {
@@ -127,10 +164,13 @@ smart_launch() {
   local http_port="${HTTP_PORT:-8765}"
   local health
   local detected
+
+  log_phase "smart launch: build_id=$PLOTTER_BUILD_ID http_port=$http_port"
   health="$(bridge_health "$http_port")"
 
   if [[ -n "$health" ]]; then
     detected="$(bridge_label_from_health "$health")"
+    log_phase "bridge health: classified as $detected"
     if [[ "$detected" == "live" ]]; then
       write_launcher_status \
         smart \
@@ -142,6 +182,7 @@ smart_launch() {
         "LIVE bridge detected; smart launch will not restart or stop it."
       echo "LIVE bridge is already running at $(health_url "$http_port"); leaving it alone."
       echo "$health"
+      log_phase "smart launch: reusing live bridge and opening rebuilt app"
       run_make app "$@"
     elif [[ "$detected" == "preview" || "$detected" == "standby" ]]; then
       write_launcher_status \
@@ -153,6 +194,7 @@ smart_launch() {
         true \
         "Dry-run ${detected} bridge detected; safe restart targets STANDBY."
       echo "$(printf '%s' "$detected" | tr '[:lower:]' '[:upper:]') dry-run bridge is running at $(health_url "$http_port"); restarting as STANDBY from current code."
+      log_phase "smart launch: restarting dry-run bridge as standby before opening app"
       run_make standby-app HTTP_PORT="$http_port" "$@"
     else
       write_launcher_status \
@@ -171,6 +213,7 @@ smart_launch() {
     return
   fi
 
+  log_phase "smart launch: checking for unknown listener on port $http_port"
   if "$LSOF_BIN" -tiTCP:"$http_port" -sTCP:LISTEN >/dev/null 2>&1; then
     write_launcher_status \
       smart \
@@ -194,6 +237,7 @@ smart_launch() {
     false \
     "No bridge detected; starting STANDBY dry-run bridge."
   echo "No bridge is running at $(health_url "$http_port"); starting safe hardware standby."
+  log_phase "smart launch: starting standby bridge before opening app"
   run_make standby-app HTTP_PORT="$http_port" "$@"
 }
 
@@ -204,10 +248,12 @@ fi
 
 case "$mode" in
   smart|open|latest)
+    log_phase "launcher mode: smart"
     smart_launch "$@"
     ;;
   standby)
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: standby http_port=$http_port"
     write_launcher_status \
       standby \
       unknown \
@@ -220,6 +266,7 @@ case "$mode" in
     ;;
   preview)
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: preview http_port=$http_port"
     write_launcher_status \
       preview \
       unknown \
@@ -232,6 +279,7 @@ case "$mode" in
     ;;
   app)
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: app-only"
     write_launcher_status \
       app \
       unknown \
@@ -244,6 +292,7 @@ case "$mode" in
     ;;
   stop)
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: stop http_port=$http_port"
     write_launcher_status \
       stop \
       unknown \
@@ -256,6 +305,7 @@ case "$mode" in
     ;;
   status-smoke)
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: status-smoke http_port=$http_port"
     write_launcher_status \
       status-smoke \
       none \
@@ -269,6 +319,7 @@ case "$mode" in
     port="${PORT:-${PLOTTER_CONTROLLER_PORT:-}}"
     baud="${BAUD:-115200}"
     http_port="${HTTP_PORT:-8765}"
+    log_phase "launcher mode: live-standby http_port=$http_port port=${port:-auto}"
 
     if [[ -z "$port" ]]; then
       echo "Starting hardware standby without a fixed controller port."

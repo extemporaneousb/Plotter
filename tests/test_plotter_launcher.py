@@ -181,6 +181,9 @@ def test_launcher_status_smoke_writes_build_identity(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert "[plotter-launch +" in result.stderr
+    assert "launcher mode: status-smoke http_port=9876" in result.stderr
+    assert "launcher status: wrote" in result.stderr
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["schema_version"] == 1
     assert status["mode"] == "status-smoke"
