@@ -59,10 +59,14 @@ Current implementation:
 
 - the macOS app detects the largest face in the latest camera frame,
 - crops and downsamples it to a small top-to-bottom luminance raster,
-- submits that raster to `POST /draw/face`,
-- the bridge converts darker cells into shaded triangular polygons,
-- the existing polygon planner expands shade into hatch strokes and runs the same simulation and
-  machine safety gates as `/draw/polygon`.
+- submits contour previews to `POST /draw/image/preview`,
+- the bridge converts selected dark regions into contour polylines and returns projected preview
+  overlay primitives,
+- the optional shaded face route remains available through `POST /draw/face`, but hatch expansion is
+  not the baseline portrait representation,
+- capabilities tests, image contours, calibration marks, and shape execution all run through the
+  same drawing program, planner, simulator, video projector, binding, residual, and execution
+  infrastructure.
 
 For the geometry transform, the camera-paper registration is a homography. The machine-paper model
 can start as affine and should move to homography only if residuals show real perspective or
@@ -82,6 +86,7 @@ It must not send raw G-code. Bridge endpoints own:
 - controller transcripts and event logs,
 - residual solving and persisted visual position binding.
 
-Preview routes must force dry-run behavior, return simulated geometry only, avoid controller
-transcripts, and never move hardware. Preview success is not execution readiness; execution readiness
-comes from the bridge's safety gates plus current persisted binding evidence.
+Preview routes must force dry-run behavior, return simulated/projected geometry only, avoid
+controller transcripts, and never move hardware. Preview success is not execution readiness;
+execution readiness comes from `axis_model_trusted=true` or a current validated
+`VisualPositionBinding` plus the bridge's safety gates.

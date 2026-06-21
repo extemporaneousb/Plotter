@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from plotter_vision.calibration.vision_model import LogicalPointMM
 from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.drawing import (
+    DrawingProgram,
     DrawingFrameMM,
-    PaperDrawingProgram,
     PlannedPolyline,
     build_polygon_polylines,
     validate_polylines_in_workspace,
@@ -18,24 +18,24 @@ from plotter_vision.machine.homing import HomingSafetyError
 from plotter_vision.machine.pen import validate_pen_trial_command
 from plotter_vision.machine.safety import (
     MotionSafetyError,
-    validate_demo_shape_request,
+    validate_shape_execution_request,
     validate_polygon_draw_request,
     validate_workspace_point,
 )
 from plotter_vision.motion.gcode import format_mm
 from plotter_vision.motion.simulator import (
-    DemoShapeEvaluation,
+    ShapeGeometryEvaluation,
     SimulatedPath,
-    evaluate_demo_shape,
+    evaluate_shape_geometry,
     simulate_plotter_commands,
 )
 
-DemoPattern = Literal["triangle", "square"]
+ShapePattern = Literal["triangle", "square"]
 PlannedCommandKind = Literal["homing", "motion", "pen"]
 
 
 class PolygonDrawRequest(BaseModel):
-    program: PaperDrawingProgram = Field(default_factory=PaperDrawingProgram)
+    program: DrawingProgram = Field(default_factory=DrawingProgram)
     frame: DrawingFrameMM | None = None
     polylines: list[PlannedPolyline] = Field(default_factory=list)
     include_homing: bool = False
@@ -47,8 +47,8 @@ class PolygonDrawRequest(BaseModel):
     request_id: str | None = None
 
 
-class DemoRunRequest(BaseModel):
-    pattern: DemoPattern = "triangle"
+class ShapeExecutionRequest(BaseModel):
+    pattern: ShapePattern = "triangle"
     include_homing: bool = True
     include_centering: bool = True
     side_mm: float = 20.0
@@ -66,13 +66,13 @@ class PlannedCommand(BaseModel):
     description: str
 
 
-class DemoPlan(BaseModel):
+class ShapeExecutionPlan(BaseModel):
     command_id: str
-    pattern: DemoPattern
+    pattern: ShapePattern
     dry_run: bool
     planned_commands: list[PlannedCommand] = Field(default_factory=list)
     simulation: SimulatedPath
-    evaluation: DemoShapeEvaluation
+    evaluation: ShapeGeometryEvaluation
 
     @property
     def command_strings(self) -> list[str]:
@@ -121,11 +121,11 @@ def build_polygon_draw_plan(
     )
     if request.include_homing and not safety.dry_run and not safety.allow_homing:
         raise HomingSafetyError("Real polygon drawing homing requires allow_homing=true.")
-    has_trusted_absolute_position = machine.homing_trusted or request.visual_position_trusted
-    if not safety.dry_run and not request.include_homing and not has_trusted_absolute_position:
+    has_trusted_absolute_position = machine.axis_model_trusted or request.visual_position_trusted
+    if not safety.dry_run and not has_trusted_absolute_position:
         raise MotionSafetyError(
-            "Real absolute polygon drawing requires include_homing=true or "
-            "homing_trusted=true or visual_position_trusted=true."
+            "Real absolute polygon drawing requires axis_model_trusted=true or "
+            "visual_position_trusted=true."
         )
 
     pen_down = _validated_pen_command(machine.pen.down_command, safety)
@@ -207,15 +207,15 @@ def build_polygon_draw_plan(
     )
 
 
-def build_demo_plan(
+def build_shape_execution_plan(
     *,
-    request: DemoRunRequest,
+    request: ShapeExecutionRequest,
     machine: MachineConfig,
     safety: SafetyState,
     command_id: str,
-) -> DemoPlan:
-    """Build the first camera-driven machine demo without contacting hardware."""
-    validate_demo_shape_request(
+) -> ShapeExecutionPlan:
+    """Build the first camera-driven machine shape execution without contacting hardware."""
+    validate_shape_execution_request(
         side_mm=request.side_mm,
         draw_feed_mm_min=request.draw_feed_mm_min,
         travel_feed_mm_min=request.travel_feed_mm_min,
@@ -223,7 +223,7 @@ def build_demo_plan(
         safety=safety,
     )
     if request.include_homing and not safety.dry_run and not safety.allow_homing:
-        raise HomingSafetyError("Real demo homing requires allow_homing=true.")
+        raise HomingSafetyError("Real shape execution homing requires allow_homing=true.")
     if request.park_offset_mm < 0 or request.park_offset_mm > 100:
         raise MotionSafetyError("park_offset_mm must be between 0 and 100 mm.")
 
@@ -354,13 +354,13 @@ def build_demo_plan(
         pen_up_command=pen_up,
         pen_down_command=pen_down,
     )
-    evaluation = evaluate_demo_shape(
+    evaluation = evaluate_shape_geometry(
         pattern=request.pattern,
         side_mm=request.side_mm,
         simulation=simulation,
     )
 
-    return DemoPlan(
+    return ShapeExecutionPlan(
         command_id=command_id,
         pattern=request.pattern,
         dry_run=safety.dry_run,
@@ -532,7 +532,7 @@ def _zero_near(value: float) -> float:
 
 def _shape_vertices(
     *,
-    pattern: DemoPattern,
+    pattern: ShapePattern,
     side_mm: float,
     center_x: float,
     center_y: float,
@@ -555,7 +555,7 @@ def _shape_vertices(
 
 
 def _relative_shape_commands(
-    pattern: DemoPattern,
+    pattern: ShapePattern,
     vertices: list[tuple[float, float]],
 ) -> list[PlannedCommand]:
     commands: list[PlannedCommand] = []

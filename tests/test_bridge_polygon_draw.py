@@ -170,10 +170,10 @@ def test_real_polygon_draw_requires_motion_arm() -> None:
         )
 
 
-def test_real_polygon_draw_requires_homing_or_position_trust() -> None:
+def test_real_polygon_draw_requires_axis_model_or_visual_binding() -> None:
     machine = _machine_with_pen()
 
-    with pytest.raises(MotionSafetyError, match="homing_trusted"):
+    with pytest.raises(MotionSafetyError, match="axis_model_trusted"):
         build_polygon_draw_plan(
             request=_line_request(),
             machine=machine,
@@ -182,21 +182,22 @@ def test_real_polygon_draw_requires_homing_or_position_trust() -> None:
         )
 
 
-def test_real_polygon_draw_rejects_axis_model_without_visual_position() -> None:
+def test_real_polygon_draw_allows_axis_model_without_visual_binding() -> None:
     machine = _machine_with_pen()
     machine.axis_model_trusted = True
 
-    with pytest.raises(MotionSafetyError, match="visual_position_trusted"):
-        build_polygon_draw_plan(
-            request=_line_request(),
-            machine=machine,
-            safety=SafetyState(
-                dry_run=False,
-                armed_motion=True,
-                allow_pen_actuation=True,
-            ),
-            command_id="axis-only",
-        )
+    plan = build_polygon_draw_plan(
+        request=_line_request(),
+        machine=machine,
+        safety=SafetyState(
+            dry_run=False,
+            armed_motion=True,
+            allow_pen_actuation=True,
+        ),
+        command_id="axis-only",
+    )
+
+    assert plan.command_id == "axis-only"
 
 
 def test_real_polygon_draw_allows_visual_position_without_homing() -> None:
@@ -215,23 +216,21 @@ def test_real_polygon_draw_allows_visual_position_without_homing() -> None:
     assert not any(command.kind == "homing" for command in plan.planned_commands)
 
 
-def test_real_polygon_draw_allows_homed_absolute_position_without_include_homing() -> None:
+def test_real_polygon_draw_rejects_homing_without_axis_model_or_binding() -> None:
     machine = _machine_with_pen()
     machine.homing_trusted = True
 
-    plan = build_polygon_draw_plan(
-        request=_line_request(),
-        machine=machine,
-        safety=SafetyState(
-            dry_run=False,
-            armed_motion=True,
-            allow_pen_actuation=True,
-        ),
-        command_id="homing-trusted",
-    )
-
-    assert plan.command_id == "homing-trusted"
-    assert not any(command.kind == "homing" for command in plan.planned_commands)
+    with pytest.raises(MotionSafetyError, match="axis_model_trusted"):
+        build_polygon_draw_plan(
+            request=_line_request(),
+            machine=machine,
+            safety=SafetyState(
+                dry_run=False,
+                armed_motion=True,
+                allow_pen_actuation=True,
+            ),
+            command_id="homing-only",
+        )
 
 
 def test_bridge_dry_run_polygon_draw_returns_preview_and_planned_commands(tmp_path: Path) -> None:

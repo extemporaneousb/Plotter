@@ -274,7 +274,7 @@ def test_visual_probe_run_aborts_when_projection_outside_bootstrap_band(tmp_path
         assert not (tmp_path / "transcripts" / "probe-outside.jsonl").exists()
 
 
-def test_visual_ready_allows_controlled_calibration_drawing_without_homing(
+def test_cap_only_visual_readiness_does_not_unlock_absolute_drawing(
     tmp_path: Path,
 ) -> None:
     config_path = _write_machine_config(tmp_path)
@@ -314,10 +314,81 @@ def test_visual_ready_allows_controlled_calibration_drawing_without_homing(
         assert status["status"] == "ready"
         assert status["readiness"]["visual_ready_to_plot"] is True
 
+        status_code, binding_status = client.get("/calibration/binding/status")
+        assert status_code == 200
+        assert binding_status["status"] == "missing"
+
         status_code, drawing = client.post(
             "/calibration/run",
             {
                 "request_id": "visual-draw",
+                "include_homing": False,
+                "mark_size_mm": 4.0,
+            },
+        )
+
+        assert status_code == 400
+        assert drawing["status"] == "failed"
+        assert drawing["controller_transcript"] is None
+        assert "VisualPositionBinding" in drawing["error"]
+        machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
+        assert machine.homing_trusted is False
+        assert machine.axis_model_trusted is False
+
+
+def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(
+        tmp_path=tmp_path,
+        config_path=config_path,
+        dry_run=False,
+        arm_motion=True,
+        arm_pen=True,
+        arm_homing=False,
+    )
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        status_code, preview = client.post(
+            "/calibration/preview",
+            {
+                "request_id": "binding-preview",
+                "include_homing": False,
+                "mark_size_mm": 4.0,
+            },
+        )
+        assert status_code == 200
+        assert preview["preview_overlay"]["projected"] is True
+        samples = _binding_observation_samples(preview["preview_overlay"]["primitives"])
+        assert len(samples) >= 5
+
+        for sample in samples:
+            status_code, observed = client.post(
+                "/calibration/binding/observe",
+                {
+                    "command_id": "binding-preview",
+                    "point_id": sample["point_id"],
+                    "kind": "ink",
+                    "observed_paper_mm": sample["observed_paper_mm"],
+                },
+            )
+            assert status_code == 200
+            assert observed["status"] in {"collecting", "blocked", "ready"}
+
+        status_code, binding_status = client.get("/calibration/binding/status")
+        assert status_code == 200
+        assert binding_status["status"] == "ready"
+        binding = binding_status["binding"]
+        assert binding["validation_status"] == "validated"
+        assert binding["residuals"]["observation_count"] >= 5
+        assert binding["residuals"]["rms_residual_mm"] <= 3.0
+
+        status_code, drawing = client.post(
+            "/calibration/run",
+            {
+                "request_id": "visual-binding-draw",
                 "include_homing": False,
                 "mark_size_mm": 4.0,
             },
@@ -331,7 +402,6 @@ def test_visual_ready_allows_controlled_calibration_drawing_without_homing(
         assert '"payload":"$H"' not in text
         assert '"payload":"M3 S720"' in text
         machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
-        assert machine.homing_trusted is False
         assert machine.axis_model_trusted is False
 
 
@@ -462,6 +532,28 @@ def _trust_sample(
         "observed_dy_mm": observed_dy_mm,
         "observed_distance_mm": observed_distance_mm,
     }
+
+
+def _binding_observation_samples(primitives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    raw = []
+    for primitive in primitives:
+        raw.append(
+            {
+                "point_id": f"seg-{primitive['segment_index']:04d}-start",
+                "observed_paper_mm": primitive["start_paper_mm"],
+            }
+        )
+        raw.append(
+            {
+                "point_id": f"seg-{primitive['segment_index']:04d}-end",
+                "observed_paper_mm": primitive["end_paper_mm"],
+            }
+        )
+    unique: dict[tuple[float, float], dict[str, Any]] = {}
+    for sample in raw:
+        point = sample["observed_paper_mm"]
+        unique[(round(point["x"], 6), round(point["y"], 6))] = sample
+    return list(unique.values())[:5]
 
 
 def _write_machine_config(tmp_path: Path) -> Path:

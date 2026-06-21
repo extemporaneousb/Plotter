@@ -31,7 +31,7 @@ final class VisionAnalyzer {
                 for (index, contour) in contours.enumerated() {
                     let simplified = (try? contour.polygonApproximation(epsilon: 0.006)) ?? contour
                     let path = simplified.normalizedPath
-                    let points = path.plotterDemoPoints(maxPoints: 180)
+                    let points = path.plotterPreviewPoints(maxPoints: 180)
                     let bounds = points.normalizedBounds ?? path.boundingBoxOfPath
 
                     guard bounds.isUsable else { continue }
@@ -496,7 +496,7 @@ private extension Array where Element == CGPoint {
 }
 
 private extension CGPath {
-    func plotterDemoPoints(maxPoints: Int) -> [CGPoint] {
+    func plotterPreviewPoints(maxPoints: Int) -> [CGPoint] {
         var points: [CGPoint] = []
 
         applyWithBlock { elementPointer in

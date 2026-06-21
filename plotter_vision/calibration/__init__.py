@@ -1,3 +1,8 @@
+from plotter_vision.calibration.binding import (
+    ObservedGeometrySample,
+    VisualPositionBinding,
+    solve_visual_position_binding,
+)
 from plotter_vision.calibration.paper import (
     PaperFiducialDetection,
     PaperFrameRegistration,
@@ -20,12 +25,14 @@ from plotter_vision.calibration.scale import ScaleObservation, build_scale_obser
 __all__ = [
     "AdaptiveVisualProbePlan",
     "DrawingSafeZone",
+    "ObservedGeometrySample",
     "PaperFiducialDetection",
     "PaperFrameRegistration",
     "SafeZoneEvaluation",
     "SafeZoneMarginsMM",
     "ScaleObservation",
     "VisualCapObservation",
+    "VisualPositionBinding",
     "VisualReadinessState",
     "build_paper_registration_from_red_fiducials",
     "build_scale_observation",
@@ -33,4 +40,5 @@ __all__ = [
     "evaluate_cap_inside_safe_zone",
     "paper_corner_norm",
     "plan_adaptive_visual_probe",
+    "solve_visual_position_binding",
 ]

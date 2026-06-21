@@ -6,7 +6,7 @@ from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.machine.safety import (
     MotionSafetyError,
     validate_calibration_line_request,
-    validate_demo_shape_request,
+    validate_shape_execution_request,
     validate_jog_request,
     validate_polygon_draw_request,
     validate_workspace_point,
@@ -138,8 +138,8 @@ def test_real_calibration_line_requires_motion_arm() -> None:
         )
 
 
-def test_demo_shape_preview_is_allowed_without_arming() -> None:
-    validate_demo_shape_request(
+def test_shape_shape_preview_is_allowed_without_arming() -> None:
+    validate_shape_execution_request(
         side_mm=20.0,
         draw_feed_mm_min=180,
         travel_feed_mm_min=500,
@@ -148,9 +148,9 @@ def test_demo_shape_preview_is_allowed_without_arming() -> None:
     )
 
 
-def test_real_demo_shape_requires_motion_arm() -> None:
+def test_real_shape_shape_requires_motion_arm() -> None:
     with pytest.raises(MotionSafetyError, match="armed_motion"):
-        validate_demo_shape_request(
+        validate_shape_execution_request(
             side_mm=20.0,
             draw_feed_mm_min=180,
             travel_feed_mm_min=500,
@@ -159,9 +159,9 @@ def test_real_demo_shape_requires_motion_arm() -> None:
         )
 
 
-def test_demo_shape_rejects_too_large_side() -> None:
+def test_shape_shape_rejects_too_large_side() -> None:
     with pytest.raises(MotionSafetyError, match="max_calibration_line"):
-        validate_demo_shape_request(
+        validate_shape_execution_request(
             side_mm=60.0,
             draw_feed_mm_min=180,
             travel_feed_mm_min=500,

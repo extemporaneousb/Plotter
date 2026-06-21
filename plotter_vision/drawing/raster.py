@@ -5,7 +5,7 @@ import math
 from pydantic import BaseModel, field_validator, model_validator
 
 from plotter_vision.drawing.polygons import (
-    PaperDrawingProgram,
+    DrawingProgram,
     PaperPointNorm,
     PolylinePrimitive,
     PolygonPrimitive,
@@ -116,7 +116,7 @@ def build_paper_program_from_luminance_raster(
     *,
     raster: LuminanceRaster,
     options: RasterPolygonOptions | None = None,
-) -> tuple[PaperDrawingProgram, RasterPolygonSummary]:
+) -> tuple[DrawingProgram, RasterPolygonSummary]:
     opts = options or RasterPolygonOptions()
     darkness_values = _darkness_values(raster.samples, auto_contrast=opts.auto_contrast)
 
@@ -167,7 +167,7 @@ def build_paper_program_from_luminance_raster(
         max_shade=max(selected_shades) if selected_shades else None,
     )
     return (
-        PaperDrawingProgram(
+        DrawingProgram(
             polygons=polygons,
             min_hatch_spacing_mm=opts.min_hatch_spacing_mm,
             max_hatch_spacing_mm=opts.max_hatch_spacing_mm,
@@ -181,7 +181,7 @@ def build_paper_contour_program_from_luminance_raster(
     *,
     raster: LuminanceRaster,
     options: RasterContourOptions | None = None,
-) -> tuple[PaperDrawingProgram, RasterContourSummary]:
+) -> tuple[DrawingProgram, RasterContourSummary]:
     opts = options or RasterContourOptions()
     darkness_values = _darkness_values(raster.samples, auto_contrast=opts.auto_contrast)
 
@@ -226,7 +226,7 @@ def build_paper_contour_program_from_luminance_raster(
         max_luminance=max(luminance_values),
     )
     return (
-        PaperDrawingProgram(
+        DrawingProgram(
             polylines=polylines,
             max_primitive_count=max(opts.max_contours, 1),
         ),

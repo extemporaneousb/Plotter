@@ -94,7 +94,7 @@ def validate_calibration_line_request(
     return normalized_axis
 
 
-def validate_demo_shape_request(
+def validate_shape_execution_request(
     *,
     side_mm: float,
     draw_feed_mm_min: float,
@@ -103,10 +103,10 @@ def validate_demo_shape_request(
     safety: SafetyState,
 ) -> None:
     if side_mm <= 0:
-        raise MotionSafetyError("Demo shape side_mm must be positive.")
+        raise MotionSafetyError("Shape execution side_mm must be positive.")
     if side_mm > machine.max_calibration_line_mm:
         raise MotionSafetyError(
-            f"Demo shape side_mm {side_mm} mm exceeds "
+            f"Shape execution side_mm {side_mm} mm exceeds "
             f"max_calibration_line_mm {machine.max_calibration_line_mm}."
         )
     for label, feed_mm_min in [
@@ -121,7 +121,7 @@ def validate_demo_shape_request(
                 f"max_feed_mm_min {machine.max_feed_mm_min}."
             )
     if not safety.dry_run and not safety.armed_motion:
-        raise MotionSafetyError("Real demo motion requires armed_motion=true.")
+        raise MotionSafetyError("Real shape execution motion requires armed_motion=true.")
 
 
 def validate_polygon_draw_request(

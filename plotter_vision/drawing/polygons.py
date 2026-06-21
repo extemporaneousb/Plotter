@@ -143,7 +143,7 @@ class SimpleShapePrimitive(BaseModel):
         return value
 
 
-class PaperDrawingProgram(BaseModel):
+class DrawingProgram(BaseModel):
     polygons: list[PolygonPrimitive] = Field(default_factory=list)
     point_marks: list[PointMarkPrimitive] = Field(default_factory=list)
     polylines: list[PolylinePrimitive] = Field(default_factory=list)
@@ -155,7 +155,7 @@ class PaperDrawingProgram(BaseModel):
     max_primitive_count: int = 1600
 
     @model_validator(mode="after")
-    def _validate_program(self) -> PaperDrawingProgram:
+    def _validate_program(self) -> DrawingProgram:
         if self.min_hatch_spacing_mm <= 0 or self.max_hatch_spacing_mm <= 0:
             raise ValueError("hatch spacing values must be positive.")
         if self.min_hatch_spacing_mm > self.max_hatch_spacing_mm:
@@ -179,6 +179,10 @@ class PaperDrawingProgram(BaseModel):
         return self
 
 
+class PaperDrawingProgram(DrawingProgram):
+    """Backward-compatible persisted paper-space spelling of DrawingProgram."""
+
+
 class PlannedPolyline(BaseModel):
     role: PolylineRole
     points: list[LogicalPointMM]
@@ -192,7 +196,7 @@ class PlannedPolyline(BaseModel):
 
 def build_polygon_polylines(
     *,
-    program: PaperDrawingProgram,
+    program: DrawingProgram,
     frame: DrawingFrameMM,
 ) -> list[PlannedPolyline]:
     polylines: list[PlannedPolyline] = []

@@ -50,8 +50,14 @@ including:
 - `GET /machine/status`
 - `POST /draw/shape/preview`
 - `POST /draw/shape`
+- `POST /capabilities/tests/preview`
+- `POST /capabilities/tests/run`
+- `POST /draw/image/preview`
 - `POST /draw/face`
 - `POST /paper/register`
+- `GET /calibration/binding/status`
+- `POST /calibration/binding/observe`
+- `POST /calibration/binding/solve`
 - `POST /dot-test/preview`
 - `POST /dot-test/run`
 - `POST /machine/...` actions for arm, reconnect, jog, home, center, pen, stop, resume, and unlock

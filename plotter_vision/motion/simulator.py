@@ -54,7 +54,7 @@ class ShapeEvaluationCheck(BaseModel):
     tolerance: float
 
 
-class DemoShapeEvaluation(BaseModel):
+class ShapeGeometryEvaluation(BaseModel):
     status: EvaluationStatus
     message: str
     checks: list[ShapeEvaluationCheck] = Field(default_factory=list)
@@ -86,7 +86,7 @@ def simulate_plotter_commands(
     return interpreter.result()
 
 
-def evaluate_demo_shape(
+def evaluate_shape_geometry(
     *,
     pattern: str,
     side_mm: float,
@@ -94,9 +94,9 @@ def evaluate_demo_shape(
     length_tolerance_mm: float = 0.05,
     closure_tolerance_mm: float = 0.05,
     angle_tolerance_deg: float = 1.0,
-) -> DemoShapeEvaluation:
+) -> ShapeGeometryEvaluation:
     if simulation.status != "ok":
-        return DemoShapeEvaluation(
+        return ShapeGeometryEvaluation(
             status="failed",
             message="Simulation failed before geometry checks.",
         )
@@ -115,7 +115,7 @@ def evaluate_demo_shape(
         )
     )
     if segment_count != expected_edges:
-        return DemoShapeEvaluation(
+        return ShapeGeometryEvaluation(
             status="failed",
             message=f"Expected {expected_edges} drawn edges, got {segment_count}.",
             checks=checks,
@@ -175,7 +175,7 @@ def evaluate_demo_shape(
         if all(check.status == "passed" for check in checks)
         else "failed"
     )
-    return DemoShapeEvaluation(
+    return ShapeGeometryEvaluation(
         status=status,
         message=(
             f"{pattern} command stream matches expected geometry."

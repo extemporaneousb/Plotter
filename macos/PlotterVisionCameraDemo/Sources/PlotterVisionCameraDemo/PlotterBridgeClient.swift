@@ -184,7 +184,7 @@ private func shortBuildId(_ value: String?) -> String? {
     return String(value.prefix(10))
 }
 
-struct BridgeDemoRequest: Encodable {
+struct BridgeShapeExecutionRequest: Encodable {
     let pattern: String
     let includeHoming: Bool
     let includeCentering: Bool
@@ -195,33 +195,34 @@ struct BridgeDemoRequest: Encodable {
     let travelFeedMmMin: Double
 }
 
-struct BridgeDemoResponse: Decodable {
+struct BridgeShapeExecutionResponse: Decodable {
     let commandId: String
     let status: String
     let dryRun: Bool
     let pattern: String
     let plannedCommands: [String]
-    let simulation: BridgeDemoSimulation?
-    let evaluation: BridgeDemoEvaluation?
+    let simulation: BridgeShapeSimulation?
+    let evaluation: BridgeShapeEvaluation?
+    let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
     let error: String?
 }
 
-struct BridgeDemoSimulation: Decodable {
+struct BridgeShapeSimulation: Decodable {
     let status: String
     let previewSegments: [ExpectedPathSegment]
     let drawnLengthMm: Double
     let errors: [String]
 }
 
-struct BridgeDemoEvaluation: Decodable {
+struct BridgeShapeEvaluation: Decodable {
     let status: String
     let message: String
-    let checks: [BridgeDemoEvaluationCheck]
+    let checks: [BridgeShapeEvaluationCheck]
 }
 
-struct BridgeDemoEvaluationCheck: Decodable {
+struct BridgeShapeEvaluationCheck: Decodable {
     let name: String
     let status: String
     let actual: Double
@@ -234,6 +235,27 @@ struct ExpectedPathSegment: Decodable, Equatable {
     let endNorm: [Double]
     let startMachineMm: [Double]
     let endMachineMm: [Double]
+    let lengthMm: Double
+}
+
+struct BridgePreviewOverlay: Decodable, Equatable {
+    let overlayId: String
+    let commandId: String
+    let coordinateSpace: String
+    let projected: Bool
+    let paperRegistrationId: String?
+    let visualPositionBindingId: String?
+    let primitives: [BridgePreviewOverlayPrimitive]
+}
+
+struct BridgePreviewOverlayPrimitive: Decodable, Equatable {
+    let primitiveId: String
+    let commandId: String
+    let segmentIndex: Int
+    let startPaperMm: PaperPointMmSnapshot
+    let endPaperMm: PaperPointMmSnapshot
+    let startCameraNorm: NormPoint?
+    let endCameraNorm: NormPoint?
     let lengthMm: Double
 }
 
@@ -325,9 +347,10 @@ struct BridgeFaceRasterDrawResponse: Decodable {
     let status: String
     let dryRun: Bool
     let plannedCommands: [String]
-    let simulation: BridgeDemoSimulation?
+    let simulation: BridgeShapeSimulation?
     let summary: BridgePolygonDrawSummary?
     let rasterSummary: BridgeRasterPolygonSummary?
+    let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
     let machineStatus: MachineStatusResponse?
@@ -341,11 +364,42 @@ struct BridgeImageShapePreviewResponse: Decodable {
     let previewOnly: Bool
     let eligibleForBridgePreview: Bool
     let plannedCommands: [String]
-    let simulation: BridgeDemoSimulation?
+    let simulation: BridgeShapeSimulation?
     let summary: BridgePolygonDrawSummary?
     let rasterSummary: BridgeRasterContourSummary?
+    let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
+    let error: String?
+}
+
+struct BridgeCapabilityTestRequest: Encodable {
+    let requestId: String?
+    let kind: String
+    let frame: BridgeDrawingFrameRequest?
+    let includeHoming: Bool
+    let drawFeedMmMin: Double
+    let travelFeedMmMin: Double
+    let maxSegmentMm: Double
+    let expectedPlanHash: String?
+}
+
+struct BridgeCapabilityTestResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let previewOnly: Bool
+    let kind: String
+    let label: String
+    let residualRoles: [String]
+    let planHash: String
+    let plannedCommands: [String]
+    let simulation: BridgeShapeSimulation?
+    let summary: BridgePolygonDrawSummary?
+    let previewOverlay: BridgePreviewOverlay?
+    let eventLog: String
+    let controllerTranscript: String?
+    let machineStatus: MachineStatusResponse?
     let error: String?
 }
 
@@ -446,7 +500,7 @@ struct DotTestPreviewResponse: Decodable {
     let markSizeMm: Double
     let planHash: String
     let plannedCommands: [String]
-    let simulation: BridgeDemoSimulation?
+    let simulation: BridgeShapeSimulation?
     let points: [DotTestPreviewPoint]
     let cameraSegments: [DotTestPreviewSegment]
     let eventLog: String
@@ -620,6 +674,79 @@ struct BridgeVisualReadinessResponse: Decodable {
     let error: String?
 }
 
+struct BridgeVisualBindingObservationRequest: Encodable {
+    let commandId: String
+    let pointId: String?
+    let kind: String
+    let observedNorm: NormPoint?
+    let observedPaperMm: PaperPointMmSnapshot?
+    let expectedPaperMm: PaperPointMmSnapshot?
+    let cameraId: String?
+    let cameraName: String?
+    let confidence: Double
+}
+
+struct BridgeVisualBindingSolveRequest: Encodable {
+    let requestId: String?
+}
+
+struct BridgeVisualPositionBindingResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let binding: BridgeVisualPositionBinding?
+    let bindingFile: String
+    let observationId: String?
+    let error: String?
+}
+
+struct BridgeVisualPositionBinding: Decodable {
+    let bindingId: String
+    let paperRegistrationId: String
+    let camera: BridgeBindingCameraIdentity
+    let commandIds: [String]
+    let expectedSimulatedGeometry: [BridgeExpectedGeometrySample]
+    let observedGeometry: [BridgeObservedGeometrySample]
+    let residuals: BridgeBindingResidualSummary
+    let validationStatus: String
+    let blockers: [String]
+}
+
+struct BridgeBindingCameraIdentity: Decodable {
+    let cameraId: String?
+    let cameraName: String?
+}
+
+struct BridgeExpectedGeometrySample: Decodable {
+    let sampleId: String
+    let commandId: String
+    let pointId: String
+    let segmentIndex: Int
+    let role: String
+    let expectedPaperMm: PaperPointMmSnapshot
+    let expectedCameraNorm: NormPoint?
+}
+
+struct BridgeObservedGeometrySample: Decodable {
+    let observationId: String
+    let commandId: String
+    let pointId: String
+    let kind: String
+    let expectedPaperMm: PaperPointMmSnapshot
+    let observedPaperMm: PaperPointMmSnapshot
+    let observedCameraNorm: NormPoint?
+    let cameraId: String?
+    let cameraName: String?
+    let paperRegistrationId: String
+}
+
+struct BridgeBindingResidualSummary: Decodable {
+    let observationCount: Int
+    let rmsResidualMm: Double?
+    let maxResidualMm: Double?
+    let axesRepresented: [String]
+    let nonCollinear: Bool
+}
+
 struct BridgeAdaptiveProbeResponse: Decodable {
     let commandId: String
     let status: String
@@ -738,11 +865,11 @@ final class PlotterBridgeClient {
         try await get(path: "health")
     }
 
-    func drawShape(_ request: BridgeDemoRequest) async throws -> BridgeDemoResponse {
+    func drawShape(_ request: BridgeShapeExecutionRequest) async throws -> BridgeShapeExecutionResponse {
         try await post(path: "draw/shape", request: request)
     }
 
-    func previewShape(_ request: BridgeDemoRequest) async throws -> BridgeDemoResponse {
+    func previewShape(_ request: BridgeShapeExecutionRequest) async throws -> BridgeShapeExecutionResponse {
         try await post(path: "draw/shape/preview", request: request)
     }
 
@@ -760,6 +887,14 @@ final class PlotterBridgeClient {
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         try validate(response: response, data: data)
         return try decoder.decode(BridgeImageShapePreviewResponse.self, from: data)
+    }
+
+    func previewCapabilityTest(_ request: BridgeCapabilityTestRequest) async throws -> BridgeCapabilityTestResponse {
+        try await post(path: "capabilities/tests/preview", request: request)
+    }
+
+    func runCapabilityTest(_ request: BridgeCapabilityTestRequest) async throws -> BridgeCapabilityTestResponse {
+        try await post(path: "capabilities/tests/run", request: request)
     }
 
     func startCalibration(_ request: CalibrationStartRequest) async throws -> CalibrationSessionResponse {
@@ -855,8 +990,20 @@ final class PlotterBridgeClient {
         try await get(path: "calibration/workflow/status")
     }
 
+    func visualPositionBindingStatus() async throws -> BridgeVisualPositionBindingResponse {
+        try await get(path: "calibration/binding/status")
+    }
+
     func observeVisualCap(_ request: BridgeVisualCapObservationRequest) async throws -> BridgeVisualReadinessResponse {
         try await post(path: "calibration/pen/observe", request: request)
+    }
+
+    func observeVisualBinding(_ request: BridgeVisualBindingObservationRequest) async throws -> BridgeVisualPositionBindingResponse {
+        try await post(path: "calibration/binding/observe", request: request)
+    }
+
+    func solveVisualBinding(_ request: BridgeVisualBindingSolveRequest) async throws -> BridgeVisualPositionBindingResponse {
+        try await post(path: "calibration/binding/solve", request: request)
     }
 
     func previewAdaptiveProbe(_ request: BridgeAdaptiveProbePreviewRequest) async throws -> BridgeAdaptiveProbeResponse {
@@ -899,7 +1046,7 @@ final class PlotterBridgeClient {
     private func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            if let failure = try? decoder.decode(BridgeDemoResponse.self, from: data),
+            if let failure = try? decoder.decode(BridgeShapeExecutionResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
@@ -908,6 +1055,10 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(BridgeImageShapePreviewResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgeCapabilityTestResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
@@ -932,6 +1083,10 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(BridgeVisualReadinessResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgeVisualPositionBindingResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
@@ -1751,7 +1906,7 @@ final class PlotterBridgeModel: ObservableObject {
 
         do {
             let response = try await client.previewShape(
-                BridgeDemoRequest(
+                BridgeShapeExecutionRequest(
                     pattern: pattern,
                     includeHoming: false,
                     includeCentering: true,
@@ -1805,7 +1960,7 @@ final class PlotterBridgeModel: ObservableObject {
 
         do {
             let response = try await client.drawShape(
-                BridgeDemoRequest(
+                BridgeShapeExecutionRequest(
                     pattern: "triangle",
                     includeHoming: false,
                     includeCentering: true,

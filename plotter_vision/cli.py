@@ -55,7 +55,7 @@ def bridge_server(
     mock: Annotated[bool, typer.Option(help="Use the mock controller for live bridge runs")] = False,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run/--no-dry-run", help="Preview demo plans without sending motion"),
+        typer.Option("--dry-run/--no-dry-run", help="Preview bridge plans without sending motion"),
     ] = True,
     arm_motion: Annotated[
         bool,
@@ -83,7 +83,7 @@ def bridge_server(
     ] = Path("artifacts/bridge_events.jsonl"),
     transcript_dir: Annotated[
         Path,
-        typer.Option(help="Directory for per-demo controller transcripts"),
+        typer.Option(help="Directory for per-command controller transcripts"),
     ] = Path("artifacts/bridge_transcripts"),
     calibration_dir: Annotated[
         Path,
@@ -98,7 +98,7 @@ def bridge_server(
         typer.Option(help="Override configured workspace Y max in mm"),
     ] = None,
 ) -> None:
-    """Run the local controller bridge for the native camera demo."""
+    """Run the local controller bridge for the native camera app."""
     if http_port < 1 or http_port > 65535:
         raise typer.BadParameter("http_port must be between 1 and 65535.")
     if not dry_run and not mock and controller_port is None:

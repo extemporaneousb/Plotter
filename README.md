@@ -249,6 +249,8 @@ curl -fsS http://127.0.0.1:8765/machine/status \
   | jq '{status, state, is_alarm, is_busy, pins, dry_run, arm_motion, arm_pen, homing_trusted, axis_model_trusted}'
 curl -fsS http://127.0.0.1:8765/paper/status \
   | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
+curl -fsS http://127.0.0.1:8765/calibration/binding/status \
+  | jq '{status, binding_file, validation: .binding.validation_status, blockers: .binding.blockers}'
 curl -fsS http://127.0.0.1:8765/events | jq '.events[-10:]'
 tail -n 20 artifacts/bridge_events.jsonl | jq -c .
 ```
@@ -265,8 +267,8 @@ curl -fsS http://127.0.0.1:8765/codex/snapshot \
 Interpretation rules:
 
 - `dry_run: false` only means the bridge can send real commands; it does not imply drawing readiness.
-  Check arming flags, alarm state, `homing_trusted`, `axis_model_trusted`, paper registration, and
-  preview simulation before any live operation.
+  Check arming flags, alarm state, `axis_model_trusted`, paper registration, visual binding status,
+  and preview simulation before any live operation.
 - A stale or mismatched app/bridge build id means relaunch the dry-run bridge/app from the current
   checkout before debugging UI behavior.
 - `/events` is recent memory; `bridge_events.jsonl` and transcript files are the durable evidence.
@@ -290,8 +292,9 @@ corner opposite the homing switches, while the controller's `G53` machine coordi
 because this machine homes X/Y at the max-switch corner. The fixed-camera workflow adds a
 session-local visual position binding on top of that model. A cap-only visual probe is relative
 motion evidence; it does not make `axis_model_trusted=true` by itself. Absolute drawing in the paper
-plane requires ink or pen-tip observations with residuals. Restart the bridge after model changes so
-the running process picks up the current transform.
+plane requires durable `axis_model_trusted=true` or a current validated visual position binding from
+ink or pen-tip observations with residuals. Restart the bridge after model changes so the running
+process picks up the current transform.
 
 Real motion is still gated:
 

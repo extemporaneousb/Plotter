@@ -25,6 +25,10 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 - Aligned homing safety with bridge guard semantics by treating `Pn=-` as clear.
 - Updated README and repository plan docs to describe the current bridge, app, calibration, paper,
   drawing, and preview-safe execution surfaces.
+- Removed the active `/demo/run` route and renamed demo-era bridge, Swift DTO, event, and test
+  names into shape execution and capabilities-test concepts.
+- Added canonical drawing pipeline, preview overlay, visual position binding, residual observation,
+  and first capabilities-test surfaces.
 
 ## Low-Risk Next
 
@@ -49,16 +53,13 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 - Centralize camera/viewport coordinate mapping so click layers and overlays use one transform.
 - Consolidate duplicate paper point models across calibration, drawing, and bridge code with
   compatibility aliases for persisted schemas.
-- Remove or rename stale `Demo*` bridge types, `/demo/run`, Swift DTOs, event names, and UI actions
-  into shape execution or capabilities-test concepts. Keep compatibility decoding only for persisted
-  artifacts that actually exist.
+- Continue splitting typed bridge DTOs and operation methods into smaller Swift files once behavior
+  stabilizes.
 
 ## Higher-Risk Refactors
 
-- Introduce a typed overlay/projection model that treats camera image, paper plane, drawing/logical
-  millimeters, machine coordinates, and display transform as explicit spaces. Expected paths,
-  dot-test previews, and observed ink marks should be overlay primitives projected through these
-  transforms, not independent geometry sources.
+- Extend the typed overlay/projection model with richer operator selection tools for observed ink
+  marks and pen-tip marks.
 - Move visual relative motion and center-dot learning out of `ContentView` into a dedicated state
   machine or actor.
 - Generate or share bridge DTO contracts from Python/Pydantic instead of manually maintaining Swift

@@ -107,9 +107,9 @@ and transforms:
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation and overlay rendering only; it is not motion authority. |
 
-Demo compatibility is not an architecture requirement. When no external caller exists, stale
-`DemoRunRequest`, `/demo/run`, and "demo" UI/API names should be removed or renamed into the
-capabilities-test and shape-execution flow rather than preserved as aliases.
+Demo compatibility is not an architecture requirement. The active bridge surface uses
+`ShapeExecutionRequest`, `/draw/shape`, `/draw/shape/preview`, and
+`/capabilities/tests/...`; `/demo/run` is not an active route.
 
 Cap-marker evidence is session evidence. A green-cap visual probe measures relative carriage motion
 in the registered paper plane; cap-only motion is not enough to set durable `axis_model_trusted` or
@@ -118,8 +118,8 @@ paper homography, cap localization, ink or pen-tip observations, residuals, came
 freshness.
 
 Only Python may promote persisted bindings or trust flags. Swift can collect and display evidence,
-but it does not decide that `axis_model_trusted`, `homing_trusted`, or visual drawing readiness is
-valid.
+but it does not decide that `axis_model_trusted`, `homing_trusted`, or
+`VisualPositionBinding.validation_status` is valid.
 
 ## Staged Task List
 
@@ -222,23 +222,23 @@ separate from motion authority.
 
 ### Phase 5.5 — Command Simulation and Preview Gate
 
-Status: implemented for emitted shape command streams; the next cleanup is to generalize the same
-path for capabilities tests and image-derived `DrawingProgram` previews.
+Status: implemented for shape execution, polygon drawing, capabilities-test programs, calibration
+mark programs, and image-derived contour previews.
 
 - Interpret the same G-code/pen command stream that the bridge would send to hardware.
 - Track modal G90/G91, G20/G21, G53 absolute machine moves, feed-only moves, and configured pen
   up/down commands.
 - Emit drawn line segments only when the simulated pen is down.
-- Verify capabilities-test command streams by edge count, side length, continuity, closure, corner
-  angle, or other program-specific checks.
+- Verify capabilities-test command streams by simulation, projected overlay geometry, execution
+  gates, and residual observations.
 - Include normalized expected path segments in bridge JSON so the macOS video overlay can draw the
   preview path in the registered paper plane.
 - Block shape execution when the simulated geometry fails the gate.
 
 ### Phase 6 — Drawing/Vector Ingestion
 
-Status: started for image/contour previews and face raster drawing; broad vector import remains
-deferred.
+Status: started for image/contour previews, capabilities tests, and face raster drawing; broad
+vector import remains deferred.
 
 - Capabilities tests and portrait/image-to-shape should use `DrawingProgram` before any broad SVG or
   CAM import.

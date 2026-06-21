@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from plotter_vision.bridge.planner import DemoRunRequest, build_demo_plan
+from plotter_vision.bridge.planner import ShapeExecutionRequest, build_shape_execution_plan
 from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.motion.simulator import simulate_plotter_commands
 
 
-def test_demo_square_command_stream_simulates_closed_shape() -> None:
+def test_shape_square_command_stream_simulates_closed_shape() -> None:
     machine = _machine_with_pen()
-    plan = build_demo_plan(
-        request=DemoRunRequest(pattern="square", side_mm=20.0, request_id="sim-square"),
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(pattern="square", side_mm=20.0, request_id="sim-square"),
         machine=machine,
         safety=SafetyState(dry_run=True),
         command_id="sim-square",
@@ -21,10 +21,10 @@ def test_demo_square_command_stream_simulates_closed_shape() -> None:
     assert plan.evaluation.status == "passed"
 
 
-def test_demo_triangle_command_stream_simulates_expected_angles() -> None:
+def test_shape_triangle_command_stream_simulates_expected_angles() -> None:
     machine = _machine_with_pen()
-    plan = build_demo_plan(
-        request=DemoRunRequest(pattern="triangle", side_mm=30.0, request_id="sim-triangle"),
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(pattern="triangle", side_mm=30.0, request_id="sim-triangle"),
         machine=machine,
         safety=SafetyState(dry_run=True),
         command_id="sim-triangle",
@@ -41,10 +41,10 @@ def test_demo_triangle_command_stream_simulates_expected_angles() -> None:
     assert angle_check.actual < 0.001
 
 
-def test_demo_triangle_can_be_positioned_away_from_workspace_center() -> None:
+def test_shape_triangle_can_be_positioned_away_from_workspace_center() -> None:
     machine = _machine_with_pen()
-    plan = build_demo_plan(
-        request=DemoRunRequest(
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(
             pattern="triangle",
             side_mm=30.0,
             center_x_mm=320.0,
@@ -63,11 +63,11 @@ def test_demo_triangle_can_be_positioned_away_from_workspace_center() -> None:
     assert first_segment.start_norm[1] > 0.5
 
 
-def test_demo_without_pen_commands_fails_geometry_gate() -> None:
+def test_shape_without_pen_commands_fails_geometry_gate() -> None:
     machine = MachineConfig()
     machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
-    plan = build_demo_plan(
-        request=DemoRunRequest(pattern="square", side_mm=20.0, request_id="sim-no-pen"),
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(pattern="square", side_mm=20.0, request_id="sim-no-pen"),
         machine=machine,
         safety=SafetyState(dry_run=True),
         command_id="sim-no-pen",

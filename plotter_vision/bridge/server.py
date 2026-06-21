@@ -30,6 +30,15 @@ from plotter_vision.calibration.paper import (
     build_paper_frame_registration,
     build_paper_registration_from_red_fiducials,
 )
+from plotter_vision.calibration.binding import (
+    ObservedGeometrySample,
+    VisualPositionBinding,
+    create_visual_position_binding,
+    expected_geometry_from_overlay,
+    find_expected_sample,
+    solve_visual_position_binding,
+    upsert_expected_geometry,
+)
 from plotter_vision.calibration.readiness import (
     AdaptiveVisualProbePlan,
     DrawingSafeZone,
@@ -50,13 +59,13 @@ from plotter_vision.calibration.vision_model import (
     VisionCalibrationObservation,
 )
 from plotter_vision.bridge.planner import (
-    DemoPlan,
-    DemoRunRequest,
+    ShapeExecutionPlan,
+    ShapeExecutionRequest,
     PlannedCommand,
     PolygonDrawPlan,
     PolygonDrawPlanSummary,
     PolygonDrawRequest,
-    build_demo_plan,
+    build_shape_execution_plan,
     build_polygon_draw_plan,
 )
 from plotter_vision.config import MachineConfig, SafetyState
@@ -65,9 +74,10 @@ from plotter_vision.controller.mock import MockTransport
 from plotter_vision.controller.parser import StatusReport
 from plotter_vision.controller.serial_transport import DEFAULT_BAUD, SerialTransport, list_serial_ports
 from plotter_vision.drawing import (
+    CapabilityTestKind,
+    DrawingProgram,
     DrawingFrameMM,
     LuminanceRaster,
-    PaperDrawingProgram,
     PaperPointNorm as DrawingPaperPointNorm,
     PlannedPolyline,
     PointMarkPrimitive,
@@ -77,6 +87,11 @@ from plotter_vision.drawing import (
     RasterPolygonSummary,
     build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
+    build_capability_test_definition,
+)
+from plotter_vision.drawing.pipeline import (
+    PreviewOverlay,
+    PreviewOverlayPrimitive,
 )
 from plotter_vision.machine.homing import validate_homing_request
 from plotter_vision.machine.pen import validate_pen_trial_command
@@ -92,7 +107,7 @@ from plotter_vision.motion.gcode import (
     format_mm,
 )
 from plotter_vision.motion.simulator import (
-    DemoShapeEvaluation,
+    ShapeGeometryEvaluation,
     DrawnSegment,
     SimulatedPath,
     simulate_plotter_commands,
@@ -241,14 +256,15 @@ class AppDiagnosticsSnapshot(BaseModel):
     recent_events: list[AppDiagnosticRecord] = Field(default_factory=list)
 
 
-class DemoRunResponse(BaseModel):
+class ShapeExecutionResponse(BaseModel):
     command_id: str
     status: str
     dry_run: bool
     pattern: str
     planned_commands: list[str]
     simulation: SimulatedPath | None = None
-    evaluation: DemoShapeEvaluation | None = None
+    evaluation: ShapeGeometryEvaluation | None = None
+    preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
     error: str | None = None
@@ -339,6 +355,31 @@ class VisualReadinessResponse(BaseModel):
     dry_run: bool
     readiness: dict[str, Any] | None = None
     readiness_file: str = ""
+    error: str | None = None
+
+
+class VisualBindingObservationRequest(BaseModel):
+    command_id: str
+    point_id: str | None = None
+    kind: Literal["ink", "pen_tip"] = "ink"
+    observed_norm: CameraPointNorm | None = None
+    observed_paper_mm: PaperPointMM | None = None
+    expected_paper_mm: PaperPointMM | None = None
+    camera_id: str | None = None
+    camera_name: str | None = None
+    confidence: float = 1.0
+
+
+class VisualBindingSolveRequest(BaseModel):
+    request_id: str | None = None
+
+
+class VisualPositionBindingResponse(BaseModel):
+    status: str
+    dry_run: bool
+    binding: VisualPositionBinding | None = None
+    binding_file: str = ""
+    observation_id: str | None = None
     error: str | None = None
 
 
@@ -480,6 +521,7 @@ class PolygonDrawResponse(BaseModel):
     planned_commands: list[str]
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
+    preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
     machine_status: MachineStatusResponse | None = None
@@ -521,9 +563,29 @@ class ImageShapePreviewResponse(BaseModel):
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
     raster_summary: RasterContourSummary | None = None
+    preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
     error: str | None = None
+
+
+class CapabilityTestRequest(BaseModel):
+    kind: CapabilityTestKind = "center_crosshair"
+    frame: DrawingFrameMM | None = None
+    include_homing: bool = False
+    draw_feed_mm_min: float = 180.0
+    travel_feed_mm_min: float = 500.0
+    max_segment_mm: float = 25.0
+    expected_plan_hash: str | None = None
+    request_id: str | None = None
+
+
+class CapabilityTestResponse(PolygonDrawResponse):
+    preview_only: bool = False
+    kind: CapabilityTestKind = "center_crosshair"
+    label: str = ""
+    residual_roles: list[str] = Field(default_factory=list)
+    plan_hash: str = ""
 
 
 class CalibrationMarkPlanResponse(BaseModel):
@@ -535,6 +597,7 @@ class CalibrationMarkPlanResponse(BaseModel):
     planned_commands: list[str]
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
+    preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
     machine_status: MachineStatusResponse | None = None
@@ -1058,7 +1121,7 @@ class PlotterBridge:
             self._set_active_command(command_id=None, action=None)
             self._machine_lock.release()
 
-    def run_demo(self, request: DemoRunRequest) -> DemoRunResponse:
+    def draw_shape(self, request: ShapeExecutionRequest) -> ShapeExecutionResponse:
         command_id = request.request_id or f"cmd-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
 
@@ -1071,18 +1134,23 @@ class PlotterBridge:
                 allow_pen_actuation=self.config.arm_pen,
                 allow_homing=self.config.arm_homing,
             )
-            plan = build_demo_plan(
+            plan = build_shape_execution_plan(
                 request=request,
                 machine=machine,
                 safety=safety,
                 command_id=command_id,
             )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
             if plan.evaluation.status != "passed":
                 raise MotionSafetyError(
-                    f"Demo preview failed geometry gate: {plan.evaluation.message}"
+                    f"Shape preview failed geometry gate: {plan.evaluation.message}"
                 )
             self.event_log.emit(
-                "demo.started",
+                "draw.shape_started",
                 command_id=command_id,
                 status="running",
                 payload={
@@ -1102,29 +1170,39 @@ class PlotterBridge:
                         payload=planned.model_dump(),
                     )
                 self.event_log.emit(
-                    "demo.completed",
+                    "draw.shape_completed",
                     command_id=command_id,
                     status="completed",
                     payload={"dry_run": True},
                 )
-                return self._response(plan=plan, status="completed", transcript_path=None)
+                return self._response(
+                    plan=plan,
+                    status="completed",
+                    transcript_path=None,
+                    preview_overlay=preview_overlay,
+                )
 
             self._run_plan(plan=plan, transcript_path=transcript_path)
             self.event_log.emit(
-                "demo.completed",
+                "draw.shape_completed",
                 command_id=command_id,
                 status="completed",
                 payload={"dry_run": False, "transcript": str(transcript_path)},
             )
-            return self._response(plan=plan, status="completed", transcript_path=transcript_path)
+            return self._response(
+                plan=plan,
+                status="completed",
+                transcript_path=transcript_path,
+                preview_overlay=preview_overlay,
+            )
         except Exception as exc:
             self.event_log.emit(
-                "demo.failed",
+                "draw.shape_failed",
                 command_id=command_id,
                 status="failed",
                 payload={"error": str(exc)},
             )
-            return DemoRunResponse(
+            return ShapeExecutionResponse(
                 command_id=command_id,
                 status="failed",
                 dry_run=self.config.dry_run,
@@ -1132,28 +1210,34 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 evaluation=locals().get("plan").evaluation if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=str(transcript_path) if transcript_path.exists() else None,
                 error=str(exc),
             )
 
-    def preview_demo(self, request: DemoRunRequest) -> DemoRunResponse:
+    def preview_shape(self, request: ShapeExecutionRequest) -> ShapeExecutionResponse:
         command_id = request.request_id or f"preview-{uuid.uuid4().hex[:12]}"
 
         try:
             machine = self._load_machine_config()
-            plan = build_demo_plan(
+            plan = build_shape_execution_plan(
                 request=request,
                 machine=machine,
                 safety=SafetyState(dry_run=True),
                 command_id=command_id,
             )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
             if plan.evaluation.status != "passed":
                 raise MotionSafetyError(
-                    f"Demo preview failed geometry gate: {plan.evaluation.message}"
+                    f"Shape preview failed geometry gate: {plan.evaluation.message}"
                 )
             self.event_log.emit(
-                "demo.preview_ready",
+                "draw.shape_preview_ready",
                 command_id=command_id,
                 status="ready",
                 payload={
@@ -1162,15 +1246,20 @@ class PlotterBridge:
                     "preview_status": plan.evaluation.status,
                 },
             )
-            return self._response(plan=plan, status="ready", transcript_path=None)
+            return self._response(
+                plan=plan,
+                status="ready",
+                transcript_path=None,
+                preview_overlay=preview_overlay,
+            )
         except Exception as exc:
             self.event_log.emit(
-                "demo.preview_failed",
+                "draw.shape_preview_failed",
                 command_id=command_id,
                 status="failed",
                 payload={"error": str(exc)},
             )
-            return DemoRunResponse(
+            return ShapeExecutionResponse(
                 command_id=command_id,
                 status="failed",
                 dry_run=True,
@@ -1178,6 +1267,7 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 evaluation=locals().get("plan").evaluation if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
                 error=str(exc),
@@ -1193,6 +1283,11 @@ class PlotterBridge:
                 machine=machine,
                 safety=SafetyState(dry_run=True),
                 command_id=command_id,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
             )
             self.event_log.emit(
                 "draw.polygon_preview_ready",
@@ -1213,6 +1308,7 @@ class PlotterBridge:
                 planned_commands=plan.command_strings,
                 simulation=plan.simulation,
                 summary=plan.summary,
+                preview_overlay=preview_overlay,
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
             )
@@ -1230,6 +1326,7 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
                 error=str(exc),
@@ -1260,6 +1357,11 @@ class PlotterBridge:
                 safety=SafetyState(dry_run=True),
                 command_id=command_id,
             )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
             self.event_log.emit(
                 "draw.image_preview_ready",
                 command_id=command_id,
@@ -1281,6 +1383,7 @@ class PlotterBridge:
                 simulation=plan.simulation,
                 summary=plan.summary,
                 raster_summary=raster_summary,
+                preview_overlay=preview_overlay,
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
             )
@@ -1301,6 +1404,7 @@ class PlotterBridge:
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
                 raster_summary=locals().get("raster_summary"),
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
                 error=str(exc),
@@ -1321,6 +1425,11 @@ class PlotterBridge:
                 machine=machine,
                 safety=self._safety_state(),
                 command_id=command_id,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
             )
             self.event_log.emit(
                 "draw.polygon_started",
@@ -1360,6 +1469,7 @@ class PlotterBridge:
             return self._polygon_draw_response(
                 plan=plan,
                 machine_response=machine_response,
+                preview_overlay=preview_overlay,
             )
         except Exception as exc:
             self.event_log.emit(
@@ -1375,6 +1485,7 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=str(transcript_path) if transcript_path.exists() else None,
                 error=str(exc),
@@ -1461,6 +1572,170 @@ class PlotterBridge:
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
                 machine_status=self._machine_error_status(error=str(exc)),
+                error=str(exc),
+            )
+
+    def preview_capability_test(
+        self,
+        request: CapabilityTestRequest,
+    ) -> CapabilityTestResponse:
+        command_id = request.request_id or f"cap-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            definition = build_capability_test_definition(request.kind)
+            machine = self._load_machine_config()
+            plan = build_polygon_draw_plan(
+                request=PolygonDrawRequest(
+                    program=definition.program,
+                    frame=request.frame,
+                    include_homing=request.include_homing,
+                    draw_feed_mm_min=request.draw_feed_mm_min,
+                    travel_feed_mm_min=request.travel_feed_mm_min,
+                    max_segment_mm=request.max_segment_mm,
+                    request_id=command_id,
+                ),
+                machine=machine,
+                safety=SafetyState(dry_run=True),
+                command_id=command_id,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
+            plan_hash = _planned_command_hash(plan.command_strings)
+            self.event_log.emit(
+                "capabilities.test_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "kind": request.kind,
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "plan_hash": plan_hash,
+                    "preview_only": True,
+                },
+            )
+            return CapabilityTestResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                preview_only=True,
+                kind=request.kind,
+                label=definition.label,
+                residual_roles=definition.residual_roles,
+                plan_hash=plan_hash,
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                preview_overlay=preview_overlay,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "capabilities.test_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"kind": request.kind, "error": str(exc), "preview_only": True},
+            )
+            return CapabilityTestResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                preview_only=True,
+                kind=request.kind,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+            )
+
+    def run_capability_test(self, request: CapabilityTestRequest) -> CapabilityTestResponse:
+        command_id = request.request_id or f"cap-run-{uuid.uuid4().hex[:12]}"
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        try:
+            definition = build_capability_test_definition(request.kind)
+            machine = self._load_machine_config()
+            self._require_axis_model_trusted(machine)
+            plan = build_polygon_draw_plan(
+                request=PolygonDrawRequest(
+                    program=definition.program,
+                    frame=request.frame,
+                    include_homing=request.include_homing,
+                    visual_position_trusted=self._visual_ready_to_plot(),
+                    draw_feed_mm_min=request.draw_feed_mm_min,
+                    travel_feed_mm_min=request.travel_feed_mm_min,
+                    max_segment_mm=request.max_segment_mm,
+                    request_id=command_id,
+                ),
+                machine=machine,
+                safety=self._safety_state(),
+                command_id=command_id,
+            )
+            plan_hash = _planned_command_hash(plan.command_strings)
+            if request.expected_plan_hash and request.expected_plan_hash != plan_hash:
+                raise MotionSafetyError(
+                    "Capabilities test plan changed after preview; preview the test again."
+                )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
+            machine_response = self._run_machine_action(
+                action="capability_test",
+                command_id=command_id,
+                planned_commands=plan.planned_commands,
+                transcript_path=transcript_path,
+            )
+            self.event_log.emit(
+                (
+                    "capabilities.test_completed"
+                    if machine_response.status == "completed"
+                    else "capabilities.test_failed"
+                ),
+                command_id=command_id,
+                status=machine_response.status,
+                payload={
+                    "kind": request.kind,
+                    "plan_hash": plan_hash,
+                    "dry_run": machine_response.dry_run,
+                    "error": machine_response.error,
+                },
+            )
+            return CapabilityTestResponse(
+                **self._polygon_draw_response(
+                    plan=plan,
+                    machine_response=machine_response,
+                    preview_overlay=preview_overlay,
+                ).model_dump(mode="json"),
+                preview_only=False,
+                kind=request.kind,
+                label=definition.label,
+                residual_roles=definition.residual_roles,
+                plan_hash=plan_hash,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "capabilities.test_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"kind": request.kind, "error": str(exc)},
+            )
+            return CapabilityTestResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=self.config.dry_run,
+                preview_only=False,
+                kind=request.kind,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
                 error=str(exc),
             )
 
@@ -1576,6 +1851,11 @@ class PlotterBridge:
                 command_id=command_id,
                 safety=SafetyState(dry_run=True),
             )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=self._load_machine_config(),
+            )
             self.event_log.emit(
                 "calibration.mark_preview_ready",
                 command_id=command_id,
@@ -1596,6 +1876,7 @@ class PlotterBridge:
                 planned_commands=plan.command_strings,
                 simulation=plan.simulation,
                 summary=plan.summary,
+                preview_overlay=preview_overlay,
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
             )
@@ -1615,6 +1896,7 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
                 error=str(exc),
@@ -1633,6 +1915,11 @@ class PlotterBridge:
                 request=request,
                 command_id=command_id,
                 safety=self._safety_state(),
+                machine=machine,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
                 machine=machine,
             )
             machine_response = self._run_machine_action(
@@ -1666,6 +1953,7 @@ class PlotterBridge:
                 planned_commands=plan.command_strings,
                 simulation=plan.simulation,
                 summary=plan.summary,
+                preview_overlay=preview_overlay,
                 event_log=str(self.config.event_log_path),
                 controller_transcript=machine_response.controller_transcript,
                 machine_status=machine_response.machine_status,
@@ -1681,6 +1969,7 @@ class PlotterBridge:
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=str(transcript_path) if transcript_path.exists() else None,
                 error=str(exc),
@@ -1828,6 +2117,155 @@ class PlotterBridge:
                 status="failed",
                 dry_run=self.config.dry_run,
                 readiness_file=str(self._latest_visual_readiness_path()),
+                error=str(exc),
+            )
+
+    def visual_position_binding_status(self) -> VisualPositionBindingResponse:
+        try:
+            binding = self._load_latest_visual_position_binding()
+            registration = self._load_latest_paper_registration()
+            binding = solve_visual_position_binding(
+                binding,
+                current_paper_registration_id=registration.registration_id,
+                current_camera_id=registration.camera_id,
+            )
+            self._save_visual_position_binding(binding)
+            return self._visual_position_binding_response(binding)
+        except Exception as exc:
+            return VisualPositionBindingResponse(
+                status="missing",
+                dry_run=self.config.dry_run,
+                binding_file=str(self._latest_visual_position_binding_path()),
+                error=str(exc),
+            )
+
+    def add_visual_binding_observation(
+        self,
+        request: VisualBindingObservationRequest,
+    ) -> VisualPositionBindingResponse:
+        try:
+            registration = self._load_latest_paper_registration()
+            binding = self._load_or_create_visual_position_binding(registration=registration)
+            expected_sample = None
+            if request.expected_paper_mm is None:
+                expected_sample = find_expected_sample(
+                    binding,
+                    command_id=request.command_id,
+                    point_id=request.point_id,
+                )
+                if expected_sample is None:
+                    raise ValueError(
+                        "No expected simulated geometry found for the observation; "
+                        "preview the drawing first or provide expected_paper_mm."
+                    )
+                expected_paper_mm = expected_sample.expected_paper_mm
+                point_id = expected_sample.point_id
+            else:
+                expected_paper_mm = request.expected_paper_mm
+                point_id = request.point_id or f"manual-{len(binding.observed_geometry) + 1:04d}"
+
+            if request.observed_paper_mm is not None:
+                observed_paper_mm = request.observed_paper_mm
+            elif request.observed_norm is not None:
+                observed_paper_mm = registration.camera_norm_to_paper_mm(request.observed_norm)
+            else:
+                raise ValueError("Provide observed_norm or observed_paper_mm.")
+
+            camera_id = request.camera_id or registration.camera_id
+            camera_name = request.camera_name or registration.camera_name
+            if binding.camera.camera_id is None and camera_id is not None:
+                binding.camera.camera_id = camera_id
+            if binding.camera.camera_name is None and camera_name is not None:
+                binding.camera.camera_name = camera_name
+
+            observation = ObservedGeometrySample(
+                command_id=request.command_id,
+                point_id=point_id,
+                kind=request.kind,
+                expected_paper_mm=expected_paper_mm,
+                observed_paper_mm=observed_paper_mm,
+                observed_camera_norm=request.observed_norm,
+                camera_id=camera_id,
+                camera_name=camera_name,
+                paper_registration_id=registration.registration_id,
+                confidence=request.confidence,
+            )
+            binding.observed_geometry.append(observation)
+            binding = solve_visual_position_binding(
+                binding,
+                current_paper_registration_id=registration.registration_id,
+                current_camera_id=registration.camera_id,
+            )
+            self._save_visual_position_binding(binding)
+            self.event_log.emit(
+                "calibration.binding_observation_added",
+                command_id=request.command_id,
+                status=binding.validation_status,
+                payload={
+                    "binding_id": binding.binding_id,
+                    "observation_id": observation.observation_id,
+                    "point_id": observation.point_id,
+                    "kind": observation.kind,
+                    "validation_status": binding.validation_status,
+                    "blockers": binding.blockers,
+                },
+            )
+            return self._visual_position_binding_response(
+                binding,
+                observation_id=observation.observation_id,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.binding_observation_failed",
+                command_id=request.command_id,
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return VisualPositionBindingResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                binding_file=str(self._latest_visual_position_binding_path()),
+                error=str(exc),
+            )
+
+    def solve_visual_binding(
+        self,
+        request: VisualBindingSolveRequest,
+    ) -> VisualPositionBindingResponse:
+        command_id = request.request_id or f"binding-solve-{uuid.uuid4().hex[:12]}"
+        try:
+            registration = self._load_latest_paper_registration()
+            binding = self._load_latest_visual_position_binding()
+            binding = solve_visual_position_binding(
+                binding,
+                current_paper_registration_id=registration.registration_id,
+                current_camera_id=registration.camera_id,
+            )
+            self._save_visual_position_binding(binding)
+            self.event_log.emit(
+                "calibration.binding_solved",
+                command_id=command_id,
+                status=binding.validation_status,
+                payload={
+                    "binding_id": binding.binding_id,
+                    "validation_status": binding.validation_status,
+                    "rms_residual_mm": binding.residuals.rms_residual_mm,
+                    "max_residual_mm": binding.residuals.max_residual_mm,
+                    "blockers": binding.blockers,
+                },
+            )
+            return self._visual_position_binding_response(binding)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.binding_solve_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return VisualPositionBindingResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                binding_file=str(self._latest_visual_position_binding_path()),
                 error=str(exc),
             )
 
@@ -3033,7 +3471,7 @@ class PlotterBridge:
 
         plan = build_polygon_draw_plan(
             request=PolygonDrawRequest(
-                program=PaperDrawingProgram(point_marks=point_marks),
+                program=DrawingProgram(point_marks=point_marks),
                 include_homing=request.include_homing,
                 visual_position_trusted=self._visual_ready_to_plot(),
                 draw_feed_mm_min=request.draw_feed_mm_min,
@@ -3047,10 +3485,33 @@ class PlotterBridge:
         )
         return plan, list(session.waypoints)
 
-    def _run_plan(self, *, plan: DemoPlan, transcript_path: Path) -> None:
+    def _preview_overlay_for_simulation(
+        self,
+        *,
+        command_id: str,
+        simulation: SimulatedPath,
+        machine: MachineConfig,
+    ) -> PreviewOverlay:
+        registration = self._load_latest_paper_registration_or_none()
+        binding: VisualPositionBinding | None = None
+        if registration is not None:
+            binding = self._load_or_create_visual_position_binding(registration=registration)
+        overlay = _preview_overlay_from_simulation(
+            command_id=command_id,
+            simulation=simulation,
+            machine=machine,
+            registration=registration,
+            visual_position_binding_id=binding.binding_id if binding is not None else None,
+        )
+        if binding is not None and overlay.primitives:
+            binding = upsert_expected_geometry(binding, expected_geometry_from_overlay(overlay))
+            self._save_visual_position_binding(binding)
+        return overlay
+
+    def _run_plan(self, *, plan: ShapeExecutionPlan, transcript_path: Path) -> None:
         self._run_planned_commands(
             command_id=plan.command_id,
-            action="demo",
+            action="draw_shape",
             planned_commands=plan.planned_commands,
             transcript_path=transcript_path,
         )
@@ -3547,9 +4008,9 @@ class PlotterBridge:
         if self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot():
             return
         raise MotionSafetyError(
-            "Real drawing requires axis_model_trusted=true or visual_ready_to_plot=true. "
-            "Homing is not required for visual-session controlled drawing, but paper, "
-            "green-cap safe-zone, and motion residual evidence must be current."
+            "Real drawing requires axis_model_trusted=true or a validated current "
+            "VisualPositionBinding. Cap-only visual readiness is relative evidence and "
+            "cannot unlock absolute drawing."
         )
 
     def _calibration_path(self, session_id: str) -> Path:
@@ -3589,6 +4050,86 @@ class PlotterBridge:
             raise ValueError("No paper registration has been saved.")
         return PaperFrameRegistration.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def _load_latest_paper_registration_or_none(self) -> PaperFrameRegistration | None:
+        try:
+            return self._load_latest_paper_registration()
+        except Exception:
+            return None
+
+    def _visual_position_binding_path(self, binding_id: str) -> Path:
+        if "/" in binding_id or ".." in binding_id:
+            raise ValueError("Invalid visual position binding_id.")
+        return self.config.calibration_dir / "visual_position_bindings" / f"{binding_id}.json"
+
+    def _latest_visual_position_binding_path(self) -> Path:
+        return self.config.calibration_dir / "latest_visual_position_binding.json"
+
+    def _save_visual_position_binding(self, binding: VisualPositionBinding) -> None:
+        binding.save_json(self._visual_position_binding_path(binding.binding_id))
+        binding.save_json(self._latest_visual_position_binding_path())
+
+    def _load_latest_visual_position_binding(self) -> VisualPositionBinding:
+        path = self._latest_visual_position_binding_path()
+        if not path.exists():
+            raise ValueError("No visual position binding has been saved.")
+        return VisualPositionBinding.load_json(path)
+
+    def _load_latest_visual_position_binding_or_none(self) -> VisualPositionBinding | None:
+        try:
+            return self._load_latest_visual_position_binding()
+        except Exception:
+            return None
+
+    def _load_or_create_visual_position_binding(
+        self,
+        *,
+        registration: PaperFrameRegistration,
+    ) -> VisualPositionBinding:
+        existing = self._load_latest_visual_position_binding_or_none()
+        if existing is not None and existing.paper_registration_id == registration.registration_id:
+            return existing
+
+        machine = self._load_machine_config()
+        readiness = self._load_latest_visual_readiness_or_none()
+        cap_observations = []
+        if readiness is not None and readiness.latest_cap_observation is not None:
+            cap_observations.append(readiness.latest_cap_observation)
+        safe_zone = (
+            readiness.safe_zone
+            if readiness is not None and readiness.safe_zone is not None
+            else self._drawing_safe_zone(machine=machine, inset_x_mm=10.0, inset_y_mm=10.0)
+        )
+        binding = create_visual_position_binding(
+            paper_registration_id=registration.registration_id,
+            camera_id=registration.camera_id,
+            camera_name=registration.camera_name,
+            drawing_frame=DrawingFrameMM(
+                origin_x_mm=machine.workspace.x_min,
+                origin_y_mm=machine.workspace.y_min,
+                width_mm=machine.workspace.x_max - machine.workspace.x_min,
+                height_mm=machine.workspace.y_max - machine.workspace.y_min,
+            ),
+            safe_zone=safe_zone,
+            cap_observations=cap_observations,
+        )
+        self._save_visual_position_binding(binding)
+        return binding
+
+    def _visual_position_binding_response(
+        self,
+        binding: VisualPositionBinding,
+        *,
+        observation_id: str | None = None,
+    ) -> VisualPositionBindingResponse:
+        status = "ready" if binding.validated else binding.validation_status
+        return VisualPositionBindingResponse(
+            status=status,
+            dry_run=self.config.dry_run,
+            binding=binding,
+            binding_file=str(self._latest_visual_position_binding_path()),
+            observation_id=observation_id,
+        )
+
     def _latest_visual_readiness_path(self) -> Path:
         return self.config.calibration_dir / "latest_visual_readiness.json"
 
@@ -3609,14 +4150,24 @@ class PlotterBridge:
 
     def _visual_ready_to_plot(self) -> bool:
         try:
-            return self._load_latest_visual_readiness().visual_ready_to_plot
+            registration = self._load_latest_paper_registration()
+            binding = self._load_latest_visual_position_binding()
+            return binding.is_valid_for(
+                paper_registration_id=registration.registration_id,
+                camera_id=registration.camera_id,
+            )
         except Exception:
             return False
 
     def _visual_readiness_status_fields(self) -> tuple[bool, list[str]]:
         try:
-            state = self._load_latest_visual_readiness()
-            return (state.visual_ready_to_plot, list(state.blockers))
+            registration = self._load_latest_paper_registration()
+            binding = self._load_latest_visual_position_binding()
+            ready = binding.is_valid_for(
+                paper_registration_id=registration.registration_id,
+                camera_id=registration.camera_id,
+            )
+            return (ready, list(binding.blockers))
         except Exception:
             return (False, [])
 
@@ -4060,11 +4611,12 @@ class PlotterBridge:
     def _response(
         self,
         *,
-        plan: DemoPlan,
+        plan: ShapeExecutionPlan,
         status: str,
         transcript_path: Path | None,
-    ) -> DemoRunResponse:
-        return DemoRunResponse(
+        preview_overlay: PreviewOverlay | None = None,
+    ) -> ShapeExecutionResponse:
+        return ShapeExecutionResponse(
             command_id=plan.command_id,
             status=status,
             dry_run=plan.dry_run,
@@ -4072,6 +4624,7 @@ class PlotterBridge:
             planned_commands=plan.command_strings,
             simulation=plan.simulation,
             evaluation=plan.evaluation,
+            preview_overlay=preview_overlay,
             event_log=str(self.config.event_log_path),
             controller_transcript=str(transcript_path) if transcript_path else None,
         )
@@ -4081,6 +4634,7 @@ class PlotterBridge:
         *,
         plan: PolygonDrawPlan,
         machine_response: MachineCommandResponse,
+        preview_overlay: PreviewOverlay | None = None,
     ) -> PolygonDrawResponse:
         return PolygonDrawResponse(
             command_id=plan.command_id,
@@ -4089,6 +4643,7 @@ class PlotterBridge:
             planned_commands=plan.command_strings,
             simulation=plan.simulation,
             summary=plan.summary,
+            preview_overlay=preview_overlay,
             event_log=str(self.config.event_log_path),
             controller_transcript=machine_response.controller_transcript,
             machine_status=machine_response.machine_status,
@@ -4461,6 +5016,58 @@ def _project_drawn_segment_to_camera(
     )
 
 
+def _preview_overlay_from_simulation(
+    *,
+    command_id: str,
+    simulation: SimulatedPath,
+    machine: MachineConfig,
+    registration: PaperFrameRegistration | None,
+    visual_position_binding_id: str | None = None,
+) -> PreviewOverlay:
+    primitives: list[PreviewOverlayPrimitive] = []
+    for index, segment in enumerate(simulation.drawn_segments):
+        start_paper = _machine_point_to_paper_mm(point=segment.start, machine=machine)
+        end_paper = _machine_point_to_paper_mm(point=segment.end, machine=machine)
+        start_camera: CameraPointNorm | None = None
+        end_camera: CameraPointNorm | None = None
+        if registration is not None:
+            start_camera = _project_paper_mm_to_camera_norm(
+                paper_mm=start_paper,
+                registration=registration,
+            )
+            end_camera = _project_paper_mm_to_camera_norm(
+                paper_mm=end_paper,
+                registration=registration,
+            )
+        primitives.append(
+            PreviewOverlayPrimitive(
+                primitive_id=f"{command_id}-seg-{index:04d}",
+                command_id=command_id,
+                segment_index=index,
+                start_paper_mm=start_paper,
+                end_paper_mm=end_paper,
+                start_camera_norm=start_camera,
+                end_camera_norm=end_camera,
+                length_mm=segment.length_mm,
+            )
+        )
+    return PreviewOverlay(
+        command_id=command_id,
+        coordinate_space="camera_norm" if registration is not None else "paper_mm",
+        projected=registration is not None,
+        paper_registration_id=registration.registration_id if registration is not None else None,
+        visual_position_binding_id=visual_position_binding_id,
+        primitives=primitives,
+    )
+
+
+def _machine_point_to_paper_mm(*, point: Any, machine: MachineConfig) -> PaperPointMM:
+    return PaperPointMM(
+        x=machine.axes.x.machine_to_logical(point.x),
+        y=machine.axes.y.machine_to_logical(point.y),
+    )
+
+
 def _project_paper_mm_to_camera_norm(
     *,
     paper_mm: PaperPointMM,
@@ -4569,18 +5176,13 @@ def _candidate_serial_ports() -> list[str]:
 def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
     post_routes = {
         "/draw/shape/preview": PostRoute(
-            DemoRunRequest,
-            bridge.preview_demo,
+            ShapeExecutionRequest,
+            bridge.preview_shape,
             lambda response: getattr(response, "status", "") == "ready",
         ),
-        "/demo/run": PostRoute(
-            DemoRunRequest,
-            bridge.run_demo,
-            lambda response: getattr(response, "status", "") == "completed",
-        ),
         "/draw/shape": PostRoute(
-            DemoRunRequest,
-            bridge.run_demo,
+            ShapeExecutionRequest,
+            bridge.draw_shape,
             lambda response: getattr(response, "status", "") == "completed",
         ),
         "/draw/polygon/preview": PostRoute(
@@ -4601,6 +5203,16 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
         "/draw/face": PostRoute(
             FaceRasterDrawRequest,
             bridge.draw_face_raster,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/capabilities/tests/preview": PostRoute(
+            CapabilityTestRequest,
+            bridge.preview_capability_test,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/capabilities/tests/run": PostRoute(
+            CapabilityTestRequest,
+            bridge.run_capability_test,
             lambda response: getattr(response, "status", "") == "completed",
         ),
         "/machine/arm": PostRoute(
@@ -4708,6 +5320,16 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.observe_visual_cap,
             lambda response: getattr(response, "status", "") != "failed",
         ),
+        "/calibration/binding/observe": PostRoute(
+            VisualBindingObservationRequest,
+            bridge.add_visual_binding_observation,
+            lambda response: getattr(response, "status", "") in {"ready", "validated", "collecting", "blocked"},
+        ),
+        "/calibration/binding/solve": PostRoute(
+            VisualBindingSolveRequest,
+            bridge.solve_visual_binding,
+            lambda response: getattr(response, "status", "") in {"ready", "validated", "collecting", "blocked"},
+        ),
         "/calibration/probe/preview": PostRoute(
             AdaptiveProbePreviewRequest,
             bridge.preview_adaptive_probe,
@@ -4776,6 +5398,9 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed_url.path == "/calibration/workflow/status":
                 self._write_model(HTTPStatus.OK, bridge.visual_readiness_status())
+                return
+            if parsed_url.path == "/calibration/binding/status":
+                self._write_model(HTTPStatus.OK, bridge.visual_position_binding_status())
                 return
             if parsed_url.path == "/paper/status":
                 response = bridge.paper_registration_status()

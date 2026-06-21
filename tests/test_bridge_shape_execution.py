@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from plotter_vision.bridge import server as bridge_server_module
-from plotter_vision.bridge.planner import DemoRunRequest, build_demo_plan
+from plotter_vision.bridge.planner import ShapeExecutionRequest, build_shape_execution_plan
 from plotter_vision.bridge.server import (
     AxisModelTrustRequest,
     AxisModelTrustSample,
@@ -42,10 +42,10 @@ from plotter_vision.controller.serial_transport import SerialPortInfo
 from plotter_vision.drawing import LuminanceRaster
 
 
-def test_demo_plan_builds_homing_center_triangle_and_park() -> None:
+def test_shape_plan_builds_homing_center_triangle_and_park() -> None:
     machine = _machine_with_pen()
-    plan = build_demo_plan(
-        request=DemoRunRequest(request_id="cmd-test"),
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(request_id="cmd-test"),
         machine=machine,
         safety=SafetyState(dry_run=True),
         command_id="cmd-test",
@@ -62,9 +62,9 @@ def test_demo_plan_builds_homing_center_triangle_and_park() -> None:
     assert commands[-1] == "G53 G1 X-221.7 Y-107.95"
 
 
-def test_demo_plan_omits_pen_commands_when_missing_in_dry_run() -> None:
-    plan = build_demo_plan(
-        request=DemoRunRequest(pattern="square", request_id="cmd-test"),
+def test_shape_plan_omits_pen_commands_when_missing_in_dry_run() -> None:
+    plan = build_shape_execution_plan(
+        request=ShapeExecutionRequest(pattern="square", request_id="cmd-test"),
         machine=MachineConfig(),
         safety=SafetyState(dry_run=True),
         command_id="cmd-test",
@@ -89,7 +89,7 @@ def test_bridge_dry_run_returns_completed_plan(tmp_path: Path) -> None:
         )
     )
 
-    response = bridge.run_demo(DemoRunRequest(request_id="cmd-dry"))
+    response = bridge.draw_shape(ShapeExecutionRequest(request_id="cmd-dry"))
 
     assert response.status == "completed"
     assert response.dry_run is True
@@ -102,7 +102,7 @@ def test_bridge_dry_run_returns_completed_plan(tmp_path: Path) -> None:
     assert (tmp_path / "events.jsonl").exists()
 
 
-def test_bridge_dry_run_blocks_demo_when_preview_draws_nothing(tmp_path: Path) -> None:
+def test_bridge_dry_run_blocks_shape_execution_when_preview_draws_nothing(tmp_path: Path) -> None:
     config_path = tmp_path / "machine_config.json"
     machine = MachineConfig()
     machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
@@ -119,7 +119,7 @@ def test_bridge_dry_run_blocks_demo_when_preview_draws_nothing(tmp_path: Path) -
         )
     )
 
-    response = bridge.run_demo(DemoRunRequest(pattern="square", request_id="cmd-no-preview"))
+    response = bridge.draw_shape(ShapeExecutionRequest(pattern="square", request_id="cmd-no-preview"))
 
     assert response.status == "failed"
     assert response.controller_transcript is None
@@ -128,15 +128,15 @@ def test_bridge_dry_run_blocks_demo_when_preview_draws_nothing(tmp_path: Path) -
     assert response.evaluation is not None
     assert response.evaluation.status == "failed"
     assert response.error is not None
-    assert "Demo preview failed geometry gate" in response.error
+    assert "Shape preview failed geometry gate" in response.error
 
 
 def test_bridge_live_shape_preview_does_not_move_or_require_axis_trust(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
 
-    response = bridge.preview_demo(
-        DemoRunRequest(
+    response = bridge.preview_shape(
+        ShapeExecutionRequest(
             pattern="square",
             include_homing=False,
             request_id="preview-square",
@@ -151,6 +151,59 @@ def test_bridge_live_shape_preview_does_not_move_or_require_axis_trust(tmp_path:
     assert response.evaluation is not None
     assert response.evaluation.status == "passed"
     assert not (tmp_path / "transcripts" / "preview-square.jsonl").exists()
+
+
+def test_shape_preview_returns_projected_overlay_and_binding_expected_geometry(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+    registration = bridge.register_paper(
+        PaperRegistrationRequest(
+            paper_width_mm=533.4,
+            paper_height_mm=215.9,
+            corners=[
+                PaperRegistrationCornerRequest(
+                    corner=corner,  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
+                )
+                for corner, observed in [
+                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
+                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
+                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
+                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
+                ]
+            ],
+        )
+    )
+
+    response = bridge.preview_shape(
+        ShapeExecutionRequest(
+            pattern="square",
+            include_homing=False,
+            request_id="shape-overlay",
+        )
+    )
+
+    assert response.status == "ready"
+    assert response.preview_overlay is not None
+    assert response.preview_overlay.projected is True
+    assert response.preview_overlay.paper_registration_id == registration.registration["registration_id"]
+    assert len(response.preview_overlay.primitives) == 4
+
+    first = response.preview_overlay.primitives[0]
+    expected_start = _project_paper_to_camera(
+        first.start_paper_mm.x / 533.4,
+        first.start_paper_mm.y / 215.9,
+    )
+    assert first.start_camera_norm is not None
+    assert first.start_camera_norm.x == pytest.approx(expected_start[0], abs=1e-9)
+    assert first.start_camera_norm.y == pytest.approx(expected_start[1], abs=1e-9)
+
+    binding = bridge.visual_position_binding_status()
+    assert binding.status == "collecting"
+    assert binding.binding is not None
+    assert len(binding.binding.expected_simulated_geometry) == 8
 
 
 def test_bridge_mock_live_run_writes_transcript(tmp_path: Path) -> None:
@@ -173,7 +226,7 @@ def test_bridge_mock_live_run_writes_transcript(tmp_path: Path) -> None:
         )
     )
 
-    response = bridge.run_demo(DemoRunRequest(request_id="cmd-live"))
+    response = bridge.draw_shape(ShapeExecutionRequest(request_id="cmd-live"))
 
     assert response.status == "completed"
     assert response.dry_run is False
@@ -562,7 +615,7 @@ def test_bridge_dot_test_run_requires_trusted_axis_model(tmp_path: Path) -> None
     assert "axis_model_trusted=true" in response.error
 
 
-def test_bridge_dot_test_run_rejects_axis_model_without_homed_position(tmp_path: Path) -> None:
+def test_bridge_dot_test_run_allows_axis_model_without_homed_position(tmp_path: Path) -> None:
     config_path = tmp_path / "machine_config.json"
     machine = _machine_with_pen()
     machine.homing_trusted = False
@@ -593,9 +646,9 @@ def test_bridge_dot_test_run_rejects_axis_model_without_homed_position(tmp_path:
         DotTestRunRequest(pattern="center", expected_plan_hash=preview.plan_hash)
     )
 
-    assert response.status == "failed"
-    assert response.error is not None
-    assert "homing_trusted=true" in response.error
+    assert response.status == "completed"
+    assert response.error is None
+    assert response.controller_transcript is not None
 
 
 def test_bridge_machine_status_reports_dry_run_without_controller(tmp_path: Path) -> None:
