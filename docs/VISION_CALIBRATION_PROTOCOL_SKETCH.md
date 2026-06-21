@@ -1,6 +1,6 @@
 # Vision Calibration Protocol Sketch
 
-This is a first sketch for connecting the native camera demo to the plotter controller without
+This is a first sketch for connecting the native camera operator app to the plotter controller without
 letting UI or vision code bypass the safety core.
 
 ## Boundary
@@ -77,9 +77,9 @@ Use a local append-only event stream first:
    normalized coordinates.
 5. Store residuals and reject the solve if the error is too high.
 
-## Demo Classifier
+## Later Classifier
 
-A fun later demo can ask the plotter to draw a randomly selected recognizable figure, then crop the
+A later capabilities test can ask the plotter to draw a randomly selected recognizable figure, then crop the
 changed/drawn region and classify it. That should be a presentation layer on top of the geometry
 loop, not the foundation. The foundation is still: command IDs, timestamps, observed coordinates,
 and calibration residuals.

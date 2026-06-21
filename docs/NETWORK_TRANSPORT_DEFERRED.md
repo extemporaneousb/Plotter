@@ -11,4 +11,4 @@ The BlackBox X32 may expose network behavior, but this repository has not yet ob
 - failure modes and reconnect semantics.
 
 Until those are confirmed from official documentation or real device transcripts, the only
-implemented transport is USB serial plus mock transport for tests and demos.
+implemented transport is USB serial plus mock transport for tests and previews.

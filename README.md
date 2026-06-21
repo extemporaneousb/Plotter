@@ -15,8 +15,13 @@ The active system has three canonical surfaces:
 - `plotterctl`: the root CLI for passive probes, guarded setup operations, and launching the bridge.
 - `plotter_vision.bridge`: the local HTTP bridge that owns machine actions, dry-run/live gates,
   paper registration, dot-test previews, and drawing execution.
-- `macos/PlotterVisionCameraDemo`: the native operator surface. It is a bridge client, not a serial
-  controller owner.
+- the native operator app in `macos/PlotterVisionCameraDemo`: the bridge client and visual surface,
+  not a serial controller owner.
+
+Authority stays deliberately narrow: Python owns calibration, bridge routing, safety gates, model
+persistence, shape planning, simulation, residual solving, persisted bindings, and execution
+routing. Swift owns operator interaction, camera observation display, overlay rendering, and typed
+bridge calls.
 
 Implemented vertical slices now include:
 
@@ -25,6 +30,34 @@ Implemented vertical slices now include:
 - paper homography registration from manual or detected fiducials;
 - preview-safe shape, raster, and dot-test planning with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible.
+
+## Canonical Operator Flow
+
+The normal development target is the fixed-camera drawing loop:
+
+1. Start the app against a preview or hardware-standby bridge.
+2. Open the calibration wizard.
+3. Click the paper fiducials, solve the paper homography, and confirm or localize the visible cap
+   marker.
+4. Calibrate by drawing small marks, measuring the result in the plotter camera video, adjusting the
+   model, and drawing again.
+5. Persist the learned parameters as future initialization values for the coordinate system and
+   shape-language parametrization.
+6. Draw through one of two lanes:
+   - capabilities tests: simple-to-more-complex shape programs that can include coordinate markup;
+   - portrait drawing: camera capture, contour or polygon extraction, and translation into the
+     drawing program.
+
+Both drawing lanes must run through the same bridge-owned pipeline before real motion:
+
+```text
+DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
+  -> Executor -> Vision Observer -> Residual Solver -> Persisted Binding
+```
+
+Simulation is not a decorative UI preview. It is the expected pen motion projected onto the plotter
+video stream, and the residual loop compares that expected geometry with video observations of the
+actual pen marks.
 
 The original passive probe remains the safest first hardware contact:
 
@@ -210,9 +243,12 @@ The app-side diagnostics surfaces are:
 Use the live endpoints to understand state before acting:
 
 ```bash
-curl -fsS http://127.0.0.1:8765/health | jq '{status, lifecycle_label, dry_run, bridge_build_id, arm_motion, arm_pen, event_log}'
-curl -fsS http://127.0.0.1:8765/machine/status | jq '{status, state, is_alarm, is_busy, pins, dry_run, arm_motion, arm_pen, homing_trusted, axis_model_trusted}'
-curl -fsS http://127.0.0.1:8765/paper/status | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
+curl -fsS http://127.0.0.1:8765/health \
+  | jq '{status, lifecycle_label, dry_run, bridge_build_id, arm_motion, arm_pen, event_log}'
+curl -fsS http://127.0.0.1:8765/machine/status \
+  | jq '{status, state, is_alarm, is_busy, pins, dry_run, arm_motion, arm_pen, homing_trusted, axis_model_trusted}'
+curl -fsS http://127.0.0.1:8765/paper/status \
+  | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
 curl -fsS http://127.0.0.1:8765/events | jq '.events[-10:]'
 tail -n 20 artifacts/bridge_events.jsonl | jq -c .
 ```
@@ -222,7 +258,8 @@ Include the app artifacts and merged snapshot in the same check:
 ```bash
 jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
 tail -n 20 artifacts/app_events.jsonl | jq -c .
-curl -fsS http://127.0.0.1:8765/codex/snapshot | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+curl -fsS http://127.0.0.1:8765/codex/snapshot \
+  | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
 ```
 
 Interpretation rules:
@@ -237,13 +274,11 @@ Interpretation rules:
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.
 
-In the app, use the plotter alignment panel to line up the translucent virtual bed with the physical
-plotter in the camera frame. The virtual bed uses the machine workspace dimensions from the bridge,
-then applies local opacity, scale, offset, and rotation controls in the app. The `Draw` shape action
-plans a triangle, simulates the exact emitted command stream, and draws the expected path inside the
-aligned plotter plane. For triangle/square shape plans it verifies edge count, side length,
-continuity, closure, and corner angle. If the simulated pen path does not produce the requested
-shape, the bridge returns a failed response and does not send the command stream.
+In the app, use the calibration wizard as the main operator path: paper fiducials establish the paper
+plane, the cap marker provides live carriage observations, and ink marks bind the observed motion to
+the pen tip. Bridge previews simulate the exact command stream and project the expected path into the
+camera view before any real drawing action is enabled. If simulated or observed geometry fails its
+gate, the bridge returns a failed response and does not send the command stream.
 Stop the background preview bridge with:
 
 ```bash
@@ -252,7 +287,10 @@ make bridge-stop
 
 The machine model treats the drawing workspace as logical plotter coordinates: `X0 Y0` is the
 corner opposite the homing switches, while the controller's `G53` machine coordinates are negative
-because this machine homes X/Y at the max-switch corner. Restart the bridge after model changes so
+because this machine homes X/Y at the max-switch corner. The fixed-camera workflow adds a
+session-local visual position binding on top of that model. A cap-only visual probe is relative
+motion evidence; it does not make `axis_model_trusted=true` by itself. Absolute drawing in the paper
+plane requires ink or pen-tip observations with residuals. Restart the bridge after model changes so
 the running process picks up the current transform.
 
 Real motion is still gated:

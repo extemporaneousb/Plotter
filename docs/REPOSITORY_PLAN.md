@@ -65,15 +65,61 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
   append-only JSONL logs, controller transcripts, app state artifacts, and the merged
   `/codex/snapshot`. Agents must not get a hidden command channel inside the app.
 
-Current doubts to keep explicit:
+## Canonical Drawing Flow
 
-- The legacy `DemoRunRequest` and `/demo/run` names still exist for compatibility, but the canonical
-  user-facing concept is shape preview/execution.
-- The green-cap visual probe measures relative motion only. It is not enough to set
-  `axis_model_trusted` or unlock absolute drawing.
-- The app still has multiple geometry sources: viewport box, Swift-detected paper quad, bridge paper
-  homography, expected path, and dot-test preview. They need a typed overlay model before larger UI
-  refactors.
+The fixed-camera workflow is:
+
+1. Start the app.
+2. Open the calibration wizard.
+3. Click paper fiducials, solve the paper homography, and confirm or localize the cap marker.
+4. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat
+   until residuals are acceptable.
+5. Persist learned parameters as future initialization values for coordinate-system setup and
+   shape-language parametrization.
+6. Draw either capabilities tests or portrait/image-derived programs.
+
+Both post-calibration drawing lanes use the same pipeline:
+
+```text
+DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
+  -> Executor -> Vision Observer -> Residual Solver -> Persisted Binding
+```
+
+- Capabilities tests are first-class drawing programs. They should start with simple shapes and move
+  toward more complex shape sets, including coordinate markup when useful for residual inspection.
+- Portrait drawing is camera capture plus contour or polygon extraction, then translation into the
+  same `DrawingProgram` contract.
+- The simulator is the source for expected pen motion. The video projector maps that expected motion
+  into the plotter camera view before execution, and the residual solver compares video-observed ink
+  or pen-tip marks against the projected expectation.
+
+## Coordinate Spaces And Authority
+
+The app should not maintain competing geometry sources. It should render views over explicit spaces
+and transforms:
+
+| Space | Owner | Purpose |
+| --- | --- | --- |
+| Camera image space | Swift observes; Python persists evidence | Raw points, contours, cap detections, and ink marks. |
+| Paper space | Python bridge/calibration | The registered paper plane from bridge-owned homography. |
+| Observed logical millimeters | Python calibration/readiness | Observations in the logical drawing frame. |
+| Drawing/logical millimeters | Python drawing/planning | Shape-language coordinates used by `plotter_vision.drawing`. |
+| Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
+| Display space | Swift | Fit/fill/rotation and overlay rendering only; it is not motion authority. |
+
+Demo compatibility is not an architecture requirement. When no external caller exists, stale
+`DemoRunRequest`, `/demo/run`, and "demo" UI/API names should be removed or renamed into the
+capabilities-test and shape-execution flow rather than preserved as aliases.
+
+Cap-marker evidence is session evidence. A green-cap visual probe measures relative carriage motion
+in the registered paper plane; cap-only motion is not enough to set durable `axis_model_trusted` or
+unlock absolute drawing. Drawing unlocks should use a persisted visual position binding backed by
+paper homography, cap localization, ink or pen-tip observations, residuals, camera identity, and
+freshness.
+
+Only Python may promote persisted bindings or trust flags. Swift can collect and display evidence,
+but it does not decide that `axis_model_trusted`, `homing_trusted`, or visual drawing readiness is
+valid.
 
 ## Staged Task List
 
@@ -110,12 +156,12 @@ human opt-in flags.
 ### Phase 3 — Human-Assisted Calibration
 
 Status: partially implemented. Calibration session/model scaffolding and paper homography
-registration exist; the remaining work is to converge those into the trusted fixed-camera machine
-model used for absolute drawing.
+registration exist; the remaining work is to converge those into a trusted fixed-camera visual
+position binding used for paper-plane drawing.
 
 - Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
   artifact JSON.
-- Keep paper registration and machine-axis trust separate until the position-binding proof exists.
+- Keep paper registration, visual position binding, and durable machine-axis trust separate.
 - Keep pen command trial workflow behind explicit commands and confirmation.
 
 ### Phase 4 — Local UI/API
@@ -159,7 +205,8 @@ test -s artifacts/bridge_events.jsonl
 test -s artifacts/app_state.json
 jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
 test -s artifacts/app_events.jsonl
-curl -fsS http://127.0.0.1:8765/codex/snapshot | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+curl -fsS http://127.0.0.1:8765/codex/snapshot \
+  | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
 make bridge-stop
 ```
 
@@ -170,25 +217,30 @@ Status: first vertical slice implemented.
 - Add optional camera enumeration/capture and point-picking after human calibration works.
 
 The camera app overlays detected line/shape segments and motion tracks, talks to the local bridge,
-renders an alpha-blended plotter bed with app-side alignment controls, and draws the backend's
-simulated expected shape path in that plotter plane.
+renders paper and expected-path overlays as views over bridge geometry, and keeps display transforms
+separate from motion authority.
 
 ### Phase 5.5 — Command Simulation and Preview Gate
 
-Status: implemented for emitted shape command streams.
+Status: implemented for emitted shape command streams; the next cleanup is to generalize the same
+path for capabilities tests and image-derived `DrawingProgram` previews.
 
 - Interpret the same G-code/pen command stream that the bridge would send to hardware.
 - Track modal G90/G91, G20/G21, G53 absolute machine moves, feed-only moves, and configured pen
   up/down commands.
 - Emit drawn line segments only when the simulated pen is down.
-- Verify triangle/square command streams by edge count, side length, continuity, closure, and
-  corner angle.
+- Verify capabilities-test command streams by edge count, side length, continuity, closure, corner
+  angle, or other program-specific checks.
 - Include normalized expected path segments in bridge JSON so the macOS video overlay can draw the
-  preview path.
+  preview path in the registered paper plane.
 - Block shape execution when the simulated geometry fails the gate.
 
 ### Phase 6 — Drawing/Vector Ingestion
 
-Status: explicitly deferred.
+Status: started for image/contour previews and face raster drawing; broad vector import remains
+deferred.
 
-- Do not implement SVG/vector import until the control and calibration foundation is reliable.
+- Capabilities tests and portrait/image-to-shape should use `DrawingProgram` before any broad SVG or
+  CAM import.
+- Do not implement SVG/vector import until the control, calibration, simulation, and residual
+  foundation is reliable.

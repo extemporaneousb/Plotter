@@ -1,4 +1,4 @@
-# Plotter Vision
+# Plotter Vision Native Operator App
 
 Native macOS camera and operator surface for the fixed-camera Plotter workflow. The app is
 intentionally isolated from the machine-control core: it does not talk to serial ports or implement
@@ -16,7 +16,7 @@ The script creates:
 build/PlotterVisionCamera.app
 ```
 
-## Run
+## Run Directly
 
 ```bash
 ./run.sh
@@ -25,10 +25,19 @@ build/PlotterVisionCamera.app
 macOS will ask for camera permission the first time the app opens. If permission is denied, enable it
 in System Settings > Privacy & Security > Camera for `Plotter Vision`.
 
+For normal operator use from the repository root, prefer:
+
+```bash
+make launch
+```
+
+`make launch` keeps the app and bridge lifecycle together. Direct `./run.sh` and manual bridge
+targets are developer paths for focused debugging.
+
 ## Controller Bridge Preview
 
-From the repository root, start the local dry-run hardware-standby bridge in the background before
-using machine controls in the app:
+From the repository root, a direct dry-run hardware-standby bridge can still be started for focused
+developer sessions:
 
 ```bash
 make bridge-standby-bg
@@ -49,7 +58,8 @@ including:
 
 Real hardware can be connected after the app starts: use the Machine panel's Connect button to
 attach a visible USB serial controller and leave dry-run mode. Runtime arming only changes bridge
-safety state after a status query; it does not home, unlock, move, or actuate the pen by itself.
+safety state after `/health` and `/machine/status` show the expected bridge/controller state; it does
+not home, unlock, move, or actuate the pen by itself.
 Stop the background bridge with `make bridge-stop`.
 
 The bridge uses logical plotter coordinates for planning: `X0 Y0` is the corner opposite the X/Y
@@ -60,12 +70,18 @@ coordinates when sending motion commands.
 
 - Shows native AVFoundation plotter and face camera previews.
 - Runs Vision passes for line/shape segments, fiducials, carriage markers, and frame-change reports.
-- Renders bridge-planned expected paths, paper homography state, and dot-test preview points over
-  the camera image.
+- Renders bridge-planned expected paths, paper homography state, dot-test preview points, and
+  observed marks over the camera image.
 - Exposes the Machine panel as the operator surface for bridge/controller state, arm gates, alarms,
   busy state, stop/resume, pen actions, homing, centering, and jogs.
-- Supports manual paper fiducials, paper registration, visual cap-marker probing, center-dot preview,
-  and preview-safe drawing tests.
+- Supports the wizard-first operator flow: manual paper fiducials, paper homography, cap
+  localization, visual motion probing, center-dot preview, and watched mark drawing.
+- Presents two post-calibration lanes: capabilities tests and portrait/image-to-shape drawing.
 
 Canonical geometry still belongs in the Python bridge/calibration/drawing layers. Swift overlays are
 views over bridge state and local camera observations; they are not motion authority.
+
+Both drawing lanes must preview before machine execution. Preview calls force dry-run behavior,
+return simulated geometry for the video overlay, must not move hardware, and must not write
+controller transcripts. Preview success is not execution readiness; the bridge's safety and
+persisted-binding gates decide whether execution is allowed.

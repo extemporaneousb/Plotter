@@ -21,6 +21,42 @@
 - No automatic homing/unlocking.
 - No auto-detected servo commands.
 
+## Current architecture boundary
+
+- `plotter_vision.bridge` is the local machine-action boundary. It owns routing, safety validation,
+  planning, simulation, controller access, transcripts, and persisted calibration/binding artifacts.
+- The macOS app is the operator and visual surface. It can select cameras, collect observations,
+  render overlays, and call typed bridge endpoints. It must not own serial transport, raw G-code
+  semantics, trust promotion, or persisted model authority.
+- Python owns calibration, paper registration, shape planning, simulation, residual solving,
+  persisted bindings, and trust flags.
+- Preview is separate from execution. Preview endpoints must force dry-run behavior, return simulated
+  geometry only, never move hardware, and never write controller transcripts.
+- Obsolete compatibility paths should be removed when no external caller exists. Do not preserve old
+  "demo" routes, DTOs, or UI actions unless they directly become capabilities-test or shape-execution
+  infrastructure.
+
+## Canonical fixed-camera flow
+
+The app-first drawing flow is:
+
+1. Start the app against a preview or hardware-standby bridge.
+2. Open the calibration wizard.
+3. Click paper fiducials, solve paper homography, and confirm or localize the cap marker.
+4. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat.
+5. Persist learned parameters as future initialization values.
+6. Draw capabilities tests or portrait/image-derived programs through:
+
+```text
+DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
+  -> Executor -> Vision Observer -> Residual Solver -> Persisted Binding
+```
+
+Cap-only motion is relative session evidence. Absolute drawing in the paper plane requires a visual
+position binding backed by paper homography, cap localization, ink or pen-tip observations,
+residuals, camera identity, and freshness. Swift observations are evidence; Python decides whether a
+binding or trust flag is valid.
+
 ## Core entities
 
 ### ControllerSnapshot
@@ -63,6 +99,7 @@ A serializable config object:
   "max_feed_mm_min": 600,
   "max_jog_mm": 5,
   "homing_trusted": false,
+  "axis_model_trusted": false,
   "pen": {
     "up_command": null,
     "down_command": null
@@ -113,18 +150,19 @@ Every command and response should be represented as data:
 
 ## Local protocol design
 
-When UI/API is introduced, use core service methods and typed request/response models. The API is a frontend boundary, not the owner of hardware logic.
+Use core service methods and typed request/response models. The HTTP bridge is a frontend boundary,
+not the owner of hardware logic.
 
 Preferred pattern:
 
 ```text
-FastAPI route -> service method -> safety validator -> controller -> transport
+HTTP route -> service method -> safety validator -> planner/simulator -> controller -> transport
 ```
 
 Forbidden pattern:
 
 ```text
-FastAPI route -> serial.write(...)
+HTTP route -> serial.write(...)
 ```
 
 ## Transport design
@@ -132,7 +170,7 @@ FastAPI route -> serial.write(...)
 Transport should be replaceable:
 
 - `SerialTransport`: implemented first.
-- `MockTransport`: implemented for tests and demos.
+- `MockTransport`: implemented for tests and preview workflows.
 - `NetworkTransport`: placeholder only until the BlackBox Wi-Fi protocol is verified.
 
 Do not guess network protocol behavior. Add an ADR/TODO after observing official docs or device behavior.
