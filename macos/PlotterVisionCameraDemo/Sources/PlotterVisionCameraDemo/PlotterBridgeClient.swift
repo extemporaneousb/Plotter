@@ -172,7 +172,7 @@ private func currentRequiredBridgeApiVersion() -> Int {
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
         return parsed
     }
-    return 2
+    return 3
 }
 
 private func normalizedBuildId(_ value: String?) -> String? {
@@ -666,6 +666,38 @@ struct BridgeAdaptiveProbeRunRequest: Encodable {
     let expectedPlanId: String?
 }
 
+struct BridgeVisualProbeCapSnapshotRequest: Encodable {
+    let cameraNorm: NormPoint
+    let paperNorm: NormPoint
+    let logicalMm: PaperPointMmSnapshot
+    let frameId: Int
+    let confidence: Double
+}
+
+struct BridgeVisualProbeSampleRequest: Encodable {
+    let runId: String
+    let sampleId: String
+    let requestId: String?
+    let planId: String?
+    let commandId: String?
+    let cameraId: String?
+    let cameraName: String?
+    let source: String
+    let axis: String?
+    let commandedDxMm: Double
+    let commandedDyMm: Double
+    let before: BridgeVisualProbeCapSnapshotRequest
+    let after: BridgeVisualProbeCapSnapshotRequest
+    let predictedDxMm: Double?
+    let predictedDyMm: Double?
+    let residualMm: Double?
+    let residualLimitMm: Double?
+    let status: String
+    let blockers: [String]
+    let rejectionReason: String?
+    let controllerTranscript: String?
+}
+
 struct BridgeVisualReadinessResponse: Decodable {
     let status: String
     let dryRun: Bool
@@ -759,6 +791,14 @@ struct BridgeAdaptiveProbeResponse: Decodable {
     let eventLog: String
     let controllerTranscript: String?
     let machineStatus: MachineStatusResponse?
+    let error: String?
+}
+
+struct BridgeVisualProbeSampleResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let readiness: BridgeVisualReadinessState?
+    let readinessFile: String
     let error: String?
 }
 
@@ -1014,6 +1054,10 @@ final class PlotterBridgeClient {
         try await post(path: "calibration/probe/run", request: request)
     }
 
+    func observeVisualProbeSample(_ request: BridgeVisualProbeSampleRequest) async throws -> BridgeVisualProbeSampleResponse {
+        try await post(path: "calibration/probe/observe", request: request)
+    }
+
     private func postMachineCommand<Request: Encodable>(
         path: String,
         request: Request
@@ -1141,6 +1185,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var visualCenterDotStatus = "VIS --"
     @Published var latestAdaptiveProbePlan: BridgeAdaptiveVisualProbePlan?
+    @Published var visualProbeEvidenceRunId = "swift-probe-\(UUID().uuidString.lowercased())"
     @Published var dotTestPreviewPoints: [DotTestPreviewPoint] = []
     @Published var dotTestPreviewSegments: [DotTestPreviewSegment] = []
     @Published var dotTestPreviewPlanHash = ""
@@ -1175,6 +1220,12 @@ final class PlotterBridgeModel: ObservableObject {
 
     var isLiveMotionMode: Bool {
         isOnline && !isDryRun
+    }
+
+    func startVisualProbeEvidenceRun(prefix: String = "swift-probe") -> String {
+        let runId = "\(prefix)-\(UUID().uuidString.lowercased())"
+        visualProbeEvidenceRunId = runId
+        return runId
     }
 
     var isMockBridge: Bool {
@@ -2470,6 +2521,49 @@ final class PlotterBridgeModel: ObservableObject {
             isMachineAlarm = true
             diagnosticsEvent("adaptive_probe_run_failed", ["request_id": requestId, "error": error.localizedDescription], snapshot: true)
             return nil
+        }
+    }
+
+    func observeVisualProbeSample(_ request: BridgeVisualProbeSampleRequest) async -> Bool {
+        do {
+            let response = try await client.observeVisualProbeSample(request)
+            isOnline = true
+            adaptiveProbeStatus = response.status == "accepted" ? "PROBE EVID OK" : "PROBE EVID \(response.status.uppercased())"
+            if let error = response.error {
+                statusText = error
+            } else if let blockers = response.readiness?.blockers, !blockers.isEmpty {
+                statusText = blockers.joined(separator: ", ")
+            } else {
+                statusText = adaptiveProbeStatus
+            }
+            diagnosticsEvent(
+                "visual_probe_sample_observed",
+                [
+                    "run_id": request.runId,
+                    "sample_id": request.sampleId,
+                    "source": request.source,
+                    "axis": request.axis ?? "",
+                    "status": response.status,
+                    "readiness_status": response.readiness?.visualReadyToPlot == true ? "ready" : "blocked"
+                ],
+                snapshot: true
+            )
+            return response.status != "failed"
+        } catch {
+            shortStatus = "ERR"
+            adaptiveProbeStatus = "PROBE EVID ERR"
+            statusText = error.localizedDescription
+            diagnosticsEvent(
+                "visual_probe_sample_failed",
+                [
+                    "run_id": request.runId,
+                    "sample_id": request.sampleId,
+                    "source": request.source,
+                    "error": error.localizedDescription
+                ],
+                snapshot: true
+            )
+            return false
         }
     }
 

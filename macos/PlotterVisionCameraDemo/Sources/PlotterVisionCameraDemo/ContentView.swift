@@ -438,6 +438,7 @@ struct ContentView: View {
         updateObservedPenPoint(initialObservation)
         visualMotionModel = nil
         visualMotionSamples = []
+        _ = bridge.startVisualProbeEvidenceRun(prefix: "swift-probe")
         manualPenMode = false
         manualFiducialMode = false
         manualCapColorMode = false
@@ -688,6 +689,27 @@ struct ContentView: View {
             observedDistanceMm: observedDistance,
             strength: min(before.strength, after.strength)
         )
+        let commandDx = axis == "X" ? distanceMm : 0.0
+        let commandDy = axis == "Y" ? distanceMm : 0.0
+        guard await bridge.observeVisualProbeSample(
+            visualProbeSampleRequest(
+                source: "motion_probe",
+                axis: axis,
+                commandedDxMm: commandDx,
+                commandedDyMm: commandDy,
+                before: before,
+                after: after,
+                commandId: response.commandId,
+                controllerTranscript: response.controllerTranscript,
+                status: "accepted",
+                sampleIdSuffix: "axis-\(sampleIndex)"
+            )
+        ) else {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Bridge failed to persist probe evidence"
+            calibrationStatusText = "CAL cap-marker probe stopped: evidence persistence failed"
+            return nil
+        }
         recordVisualMotionProbeSample(
             sample,
             sampleIndex: sampleIndex,
@@ -848,6 +870,30 @@ struct ContentView: View {
             let observedDx = after.paperMm.x - current.paperMm.x
             let observedDy = after.paperMm.y - current.paperMm.y
             let observedDistance = hypot(observedDx, observedDy)
+            let bootstrapAccepted = observedDx >= visualProbeBootstrapMinProgressXMm
+            guard await bridge.observeVisualProbeSample(
+                visualProbeSampleRequest(
+                    source: "x_min_bootstrap",
+                    axis: "X",
+                    commandedDxMm: commandMm,
+                    commandedDyMm: 0.0,
+                    before: current,
+                    after: after,
+                    requestId: "swift-xmin-bootstrap-run-\(requestSuffix)",
+                    planId: plan.planId,
+                    commandId: response.commandId,
+                    controllerTranscript: response.controllerTranscript,
+                    status: bootstrapAccepted ? "accepted" : "rejected",
+                    blockers: bootstrapAccepted ? [] : ["X-min bootstrap did not meet minimum positive-X progress."],
+                    rejectionReason: bootstrapAccepted ? nil : "bootstrap_min_progress_not_met",
+                    sampleIdSuffix: "bootstrap-\(moveIndex)"
+                )
+            ) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Bridge failed to persist bootstrap evidence"
+                calibrationStatusText = "CAL cap-marker bootstrap stopped: evidence persistence failed"
+                return nil
+            }
             bridge.recordOperatorEvent(
                 "visual_motion_probe_bootstrap_sample",
                 details: [
@@ -866,7 +912,7 @@ struct ContentView: View {
                     "strength": min(current.strength, after.strength)
                 ]
             )
-            guard observedDx >= visualProbeBootstrapMinProgressXMm else {
+            guard bootstrapAccepted else {
                 updateLearningSummary(
                     samples: [],
                     status: "STOP",
@@ -1095,6 +1141,69 @@ struct ContentView: View {
                 "observed_distance_mm": sample.observedDistanceMm,
                 "strength": sample.strength
             ]
+        )
+    }
+
+    private func visualProbeSampleRequest(
+        source: String,
+        axis: String?,
+        commandedDxMm: Double,
+        commandedDyMm: Double,
+        before: GreenCapPaperObservation,
+        after: GreenCapPaperObservation,
+        requestId: String? = nil,
+        planId: String? = nil,
+        commandId: String? = nil,
+        predictedDxMm: Double? = nil,
+        predictedDyMm: Double? = nil,
+        residualMm: Double? = nil,
+        residualLimitMm: Double? = nil,
+        controllerTranscript: String? = nil,
+        status: String,
+        blockers: [String] = [],
+        rejectionReason: String? = nil,
+        sampleIdSuffix: String
+    ) -> BridgeVisualProbeSampleRequest {
+        let runId = bridge.visualProbeEvidenceRunId
+        return BridgeVisualProbeSampleRequest(
+            runId: runId,
+            sampleId: "\(runId)-\(sampleIdSuffix)-\(before.frameNumber)-\(after.frameNumber)",
+            requestId: requestId,
+            planId: planId,
+            commandId: commandId,
+            cameraId: "plotter-camera",
+            cameraName: "Plotter Camera",
+            source: source,
+            axis: axis,
+            commandedDxMm: commandedDxMm,
+            commandedDyMm: commandedDyMm,
+            before: visualProbeCapSnapshot(before),
+            after: visualProbeCapSnapshot(after),
+            predictedDxMm: predictedDxMm,
+            predictedDyMm: predictedDyMm,
+            residualMm: residualMm,
+            residualLimitMm: residualLimitMm,
+            status: status,
+            blockers: blockers,
+            rejectionReason: rejectionReason,
+            controllerTranscript: controllerTranscript
+        )
+    }
+
+    private func visualProbeCapSnapshot(
+        _ observation: GreenCapPaperObservation
+    ) -> BridgeVisualProbeCapSnapshotRequest {
+        BridgeVisualProbeCapSnapshotRequest(
+            cameraNorm: NormPoint(observation.cameraPoint),
+            paperNorm: NormPoint(
+                CGPoint(
+                    x: min(1.0, max(0.0, observation.paperMm.x / max(bridge.workspaceXMm, 0.000_001))),
+                    y: min(1.0, max(0.0, observation.paperMm.y / max(bridge.workspaceYMm, 0.000_001)))
+                )
+            ),
+            logicalMm: observation.paperMm,
+            frameId: observation.frameNumber,
+            confidence: observation.strength
         )
     }
 
@@ -1806,6 +1915,31 @@ struct ContentView: View {
                 details["retry_count"] = residualRetries
                 details["max_retries"] = maxResidualRetries
                 details["next_command_cap_mm"] = nextCommandCapMm
+                guard await bridge.observeVisualProbeSample(
+                    visualProbeSampleRequest(
+                        source: "center_target_residual",
+                        axis: nil,
+                        commandedDxMm: commandX,
+                        commandedDyMm: commandY,
+                        before: before,
+                        after: after,
+                        commandId: response.commandId,
+                        predictedDxMm: predicted.dx,
+                        predictedDyMm: predicted.dy,
+                        residualMm: residualMm,
+                        residualLimitMm: residualLimitMm,
+                        controllerTranscript: response.controllerTranscript,
+                        status: "rejected",
+                        blockers: [failureReason],
+                        rejectionReason: failureReason,
+                        sampleIdSuffix: "target-\(targetIndex)-segment-\(segmentIndex)-rejected-\(residualRetries)"
+                    )
+                ) else {
+                    bridge.visualCenterDotStatus = "VIS EVID ERR"
+                    calibrationStatusText = "CAL visual target stopped: evidence persistence failed"
+                    updateObservedPenPoint(after)
+                    return nil
+                }
 
                 guard residualRetries <= maxResidualRetries else {
                     bridge.visualCenterDotStatus = String(format: "VIS RESID %.1f", residualMm)
@@ -1860,6 +1994,29 @@ struct ContentView: View {
                 continue
             }
 
+            guard await bridge.observeVisualProbeSample(
+                visualProbeSampleRequest(
+                    source: "center_target_segment",
+                    axis: nil,
+                    commandedDxMm: commandX,
+                    commandedDyMm: commandY,
+                    before: before,
+                    after: after,
+                    commandId: response.commandId,
+                    predictedDxMm: predicted.dx,
+                    predictedDyMm: predicted.dy,
+                    residualMm: residualMm,
+                    residualLimitMm: residualLimitMm,
+                    controllerTranscript: response.controllerTranscript,
+                    status: "accepted",
+                    sampleIdSuffix: "target-\(targetIndex)-segment-\(segmentIndex)-accepted"
+                )
+            ) else {
+                bridge.visualCenterDotStatus = "VIS EVID ERR"
+                calibrationStatusText = "CAL visual target stopped: evidence persistence failed"
+                updateObservedPenPoint(after)
+                return nil
+            }
             if let updatedModel = appendAcceptedVisualMotionSample(
                 machineDxMm: commandX,
                 machineDyMm: commandY,

@@ -248,17 +248,37 @@ class VisualReadinessState(BaseModel):
     safe_zone_evaluation: SafeZoneEvaluation | None = None
     zone_check: SafeZoneEvaluation | None = None
     latest_probe_plan: AdaptiveVisualProbePlan | None = None
+    latest_visual_probe_run_id: str | None = None
+    latest_visual_probe_sample_id: str | None = None
+    latest_visual_probe_run_file: str | None = None
+    probe_raw_sample_count: int = 0
     probe_observation_count: int = 0
+    probe_rejected_sample_count: int = 0
+    probe_stale_sample_count: int = 0
+    probe_axes_represented: list[ProbeAxis] = Field(default_factory=list)
+    probe_bootstrap_sample_count: int = 0
+    probe_adaptive_sample_count: int = 0
+    probe_center_target_sample_count: int = 0
+    probe_x_field_recovery_sample_count: int = 0
     probe_rms_residual_mm: float | None = None
     probe_max_residual_mm: float | None = None
     visual_ready_to_plot: bool = False
     blockers: list[str] = Field(default_factory=list)
 
-    @field_validator("probe_observation_count")
+    @field_validator(
+        "probe_raw_sample_count",
+        "probe_observation_count",
+        "probe_rejected_sample_count",
+        "probe_stale_sample_count",
+        "probe_bootstrap_sample_count",
+        "probe_adaptive_sample_count",
+        "probe_center_target_sample_count",
+        "probe_x_field_recovery_sample_count",
+    )
     @classmethod
     def _validate_probe_count(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("probe_observation_count must be non-negative.")
+            raise ValueError("probe evidence counts must be non-negative.")
         return value
 
     @field_validator("probe_rms_residual_mm", "probe_max_residual_mm")
@@ -296,8 +316,19 @@ class VisualReadinessState(BaseModel):
             cap_observation=self.latest_cap_observation,
             safe_zone_evaluation=check,
             probe_observation_count=self.probe_observation_count,
+            probe_raw_sample_count=self.probe_raw_sample_count,
+            probe_rejected_sample_count=self.probe_rejected_sample_count,
+            probe_stale_sample_count=self.probe_stale_sample_count,
+            probe_axes_represented=self.probe_axes_represented,
+            probe_bootstrap_sample_count=self.probe_bootstrap_sample_count,
+            probe_adaptive_sample_count=self.probe_adaptive_sample_count,
+            probe_center_target_sample_count=self.probe_center_target_sample_count,
+            probe_x_field_recovery_sample_count=self.probe_x_field_recovery_sample_count,
             probe_rms_residual_mm=self.probe_rms_residual_mm,
             probe_max_residual_mm=self.probe_max_residual_mm,
+            latest_visual_probe_run_id=self.latest_visual_probe_run_id,
+            latest_visual_probe_sample_id=self.latest_visual_probe_sample_id,
+            latest_visual_probe_run_file=self.latest_visual_probe_run_file,
         )
         self.updated_at = utc_now_iso()
         self.cap_localized = updated.cap_localized
@@ -516,8 +547,19 @@ def build_visual_readiness_state(
     cap_observation: VisualCapObservation | None,
     safe_zone_evaluation: SafeZoneEvaluation | None,
     probe_observation_count: int,
+    probe_raw_sample_count: int | None = None,
+    probe_rejected_sample_count: int = 0,
+    probe_stale_sample_count: int = 0,
+    probe_axes_represented: list[ProbeAxis] | None = None,
+    probe_bootstrap_sample_count: int = 0,
+    probe_adaptive_sample_count: int = 0,
+    probe_center_target_sample_count: int = 0,
+    probe_x_field_recovery_sample_count: int = 0,
     probe_rms_residual_mm: float | None = None,
     probe_max_residual_mm: float | None = None,
+    latest_visual_probe_run_id: str | None = None,
+    latest_visual_probe_sample_id: str | None = None,
+    latest_visual_probe_run_file: str | None = None,
     min_probe_observation_count: int = DEFAULT_MIN_PROBE_OBSERVATIONS,
     max_probe_rms_residual_mm: float = DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM,
     max_probe_max_residual_mm: float = DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM,
@@ -552,6 +594,10 @@ def build_visual_readiness_state(
             f"{min_probe_observation_count} observations; got {probe_observation_count}."
         )
     if probe_observation_count >= min_probe_observation_count:
+        if probe_axes_represented is not None and not {"X", "Y"}.issubset(
+            set(probe_axes_represented)
+        ):
+            blockers.append("Visual probe needs accepted current samples spanning X and Y axes.")
         if probe_rms_residual_mm is None:
             blockers.append("Visual probe RMS residual is missing.")
         elif probe_rms_residual_mm > max_probe_rms_residual_mm:
@@ -574,7 +620,20 @@ def build_visual_readiness_state(
         cap_inside_safe_zone=cap_inside_safe_zone,
         latest_cap_observation=cap_observation,
         safe_zone_evaluation=safe_zone_evaluation,
+        latest_visual_probe_run_id=latest_visual_probe_run_id,
+        latest_visual_probe_sample_id=latest_visual_probe_sample_id,
+        latest_visual_probe_run_file=latest_visual_probe_run_file,
+        probe_raw_sample_count=(
+            probe_raw_sample_count if probe_raw_sample_count is not None else probe_observation_count
+        ),
         probe_observation_count=probe_observation_count,
+        probe_rejected_sample_count=probe_rejected_sample_count,
+        probe_stale_sample_count=probe_stale_sample_count,
+        probe_axes_represented=probe_axes_represented or [],
+        probe_bootstrap_sample_count=probe_bootstrap_sample_count,
+        probe_adaptive_sample_count=probe_adaptive_sample_count,
+        probe_center_target_sample_count=probe_center_target_sample_count,
+        probe_x_field_recovery_sample_count=probe_x_field_recovery_sample_count,
         probe_rms_residual_mm=probe_rms_residual_mm,
         probe_max_residual_mm=probe_max_residual_mm,
         visual_ready_to_plot=not blockers,

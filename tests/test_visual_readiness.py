@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -14,6 +15,11 @@ from plotter_vision.calibration.readiness import (
     build_visual_readiness_state,
     evaluate_cap_inside_safe_zone,
     plan_adaptive_visual_probe,
+)
+from plotter_vision.calibration.probe_evidence import (
+    VisualProbeCapSnapshot,
+    VisualProbeRun,
+    VisualProbeSample,
 )
 from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
@@ -201,6 +207,36 @@ def test_visual_readiness_blocks_high_probe_residuals() -> None:
     assert any("max residual" in blocker for blocker in readiness.blockers)
 
 
+def test_visual_probe_artifact_serialization_round_trip(tmp_path: Path) -> None:
+    sample = _probe_sample(
+        run_id="probe-run-test",
+        sample_id="sample-1",
+        axis="X",
+        commanded_dx=25.0,
+        commanded_dy=0.0,
+        before_x=100.0,
+        before_y=80.0,
+        after_x=124.0,
+        after_y=81.0,
+    )
+    run = VisualProbeRun(run_id="probe-run-test")
+    run.upsert_sample(
+        sample,
+        current_paper_registration_id="paper-1",
+        current_camera_id="cam-1",
+    )
+
+    path = tmp_path / "probe-run.json"
+    run.save_json(path)
+
+    loaded = VisualProbeRun.load_json(path)
+    assert loaded == run
+    assert loaded.summary.raw_sample_count == 1
+    assert loaded.summary.accepted_sample_count == 1
+    assert loaded.samples[0].observed_dx_mm == pytest.approx(24.0)
+    assert loaded.samples[0].observed_distance_mm == pytest.approx((24.0**2 + 1.0**2) ** 0.5)
+
+
 def _safe_zone() -> DrawingSafeZone:
     return DrawingSafeZone.from_frame(
         drawing_frame=DrawingFrameMM(
@@ -228,4 +264,41 @@ def _cap(
         camera_name="Fixed Camera",
         confidence=0.94,
         source="operator_confirmed",
+    )
+
+
+def _probe_sample(
+    *,
+    run_id: str,
+    sample_id: str,
+    axis: Literal["X", "Y"],
+    commanded_dx: float,
+    commanded_dy: float,
+    before_x: float,
+    before_y: float,
+    after_x: float,
+    after_y: float,
+) -> VisualProbeSample:
+    return VisualProbeSample(
+        run_id=run_id,
+        sample_id=sample_id,
+        paper_registration_id="paper-1",
+        camera_id="cam-1",
+        camera_name="Fixed Camera",
+        source="motion_probe",
+        axis=axis,
+        commanded_dx_mm=commanded_dx,
+        commanded_dy_mm=commanded_dy,
+        before=_probe_snapshot(before_x, before_y, frame=1),
+        after=_probe_snapshot(after_x, after_y, frame=2),
+    )
+
+
+def _probe_snapshot(x: float, y: float, *, frame: int) -> VisualProbeCapSnapshot:
+    return VisualProbeCapSnapshot(
+        camera_norm=CameraPointNorm(x=x / 500.0, y=y / 200.0),
+        paper_norm=PaperPointNorm(x=x / 500.0, y=y / 200.0),
+        logical_mm=LogicalPointMM(x=x, y=y),
+        frame_id=frame,
+        confidence=0.9,
     )

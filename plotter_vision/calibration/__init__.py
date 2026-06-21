@@ -9,6 +9,12 @@ from plotter_vision.calibration.paper import (
     build_paper_registration_from_red_fiducials,
     paper_corner_norm,
 )
+from plotter_vision.calibration.probe_evidence import (
+    VisualProbeCapSnapshot,
+    VisualProbeRun,
+    VisualProbeSample,
+    VisualProbeSummary,
+)
 from plotter_vision.calibration.readiness import (
     AdaptiveVisualProbePlan,
     DrawingSafeZone,
@@ -33,6 +39,10 @@ __all__ = [
     "ScaleObservation",
     "VisualCapObservation",
     "VisualPositionBinding",
+    "VisualProbeCapSnapshot",
+    "VisualProbeRun",
+    "VisualProbeSample",
+    "VisualProbeSummary",
     "VisualReadinessState",
     "build_paper_registration_from_red_fiducials",
     "build_scale_observation",

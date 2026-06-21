@@ -39,6 +39,14 @@ from plotter_vision.calibration.binding import (
     solve_visual_position_binding,
     upsert_expected_geometry,
 )
+from plotter_vision.calibration.probe_evidence import (
+    VisualProbeCapSnapshot,
+    VisualProbeRun,
+    VisualProbeSample,
+    VisualProbeSource,
+    VisualProbeSummary,
+    summarize_visual_probe_samples,
+)
 from plotter_vision.calibration.readiness import (
     AdaptiveVisualProbePlan,
     DrawingSafeZone,
@@ -115,7 +123,7 @@ from plotter_vision.motion.simulator import (
 
 DotTestPattern = Literal["center", "five", "nine"]
 BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
-BRIDGE_API_VERSION = 2
+BRIDGE_API_VERSION = 3
 BRIDGE_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -414,6 +422,44 @@ class AdaptiveProbeResponse(BaseModel):
     event_log: str
     controller_transcript: str | None = None
     machine_status: MachineStatusResponse | None = None
+    error: str | None = None
+
+
+class VisualProbeSampleObservationRequest(BaseModel):
+    run_id: str | None = None
+    sample_id: str | None = None
+    observed_at: str | None = None
+    request_id: str | None = None
+    plan_id: str | None = None
+    command_id: str | None = None
+    paper_registration_id: str | None = None
+    camera_id: str | None = None
+    camera_name: str | None = None
+    source: VisualProbeSource
+    axis: Literal["X", "Y"] | None = None
+    commanded_dx_mm: float
+    commanded_dy_mm: float
+    before: VisualProbeCapSnapshot
+    after: VisualProbeCapSnapshot
+    predicted_dx_mm: float | None = None
+    predicted_dy_mm: float | None = None
+    residual_mm: float | None = None
+    residual_limit_mm: float | None = None
+    status: Literal["accepted", "rejected", "blocked"] = "accepted"
+    blockers: list[str] = Field(default_factory=list)
+    rejection_reason: str | None = None
+    controller_transcript: str | None = None
+
+
+class VisualProbeSampleObservationResponse(BaseModel):
+    status: str
+    dry_run: bool
+    sample: VisualProbeSample | None = None
+    summary: VisualProbeSummary | None = None
+    probe_run_file: str = ""
+    latest_probe_run_file: str = ""
+    readiness: dict[str, Any] | None = None
+    readiness_file: str = ""
     error: str | None = None
 
 
@@ -2048,6 +2094,8 @@ class PlotterBridge:
     def visual_readiness_status(self) -> VisualReadinessResponse:
         try:
             state = self._load_latest_visual_readiness()
+            state = self._visual_state_with_latest_probe_evidence(state)
+            self._save_visual_readiness(state)
             return self._visual_readiness_response(state)
         except Exception as exc:
             paper_registered = False
@@ -2069,6 +2117,125 @@ class PlotterBridge:
                 status="blocked",
                 dry_run=self.config.dry_run,
                 readiness=state.model_dump(mode="json"),
+                readiness_file=str(self._latest_visual_readiness_path()),
+                error=str(exc),
+            )
+
+    def observe_visual_probe_sample(
+        self,
+        request: VisualProbeSampleObservationRequest,
+    ) -> VisualProbeSampleObservationResponse:
+        try:
+            registration = self._load_latest_paper_registration()
+            if (
+                request.paper_registration_id is not None
+                and request.paper_registration_id != registration.registration_id
+            ):
+                raise ValueError(
+                    "Probe sample paper_registration_id does not match the current paper registration."
+                )
+            run_id = request.run_id or f"probe-run-{uuid.uuid4().hex[:12]}"
+            sample_kwargs: dict[str, Any] = {}
+            if request.sample_id is not None:
+                sample_kwargs["sample_id"] = request.sample_id
+            if request.observed_at is not None:
+                sample_kwargs["observed_at"] = request.observed_at
+            sample = VisualProbeSample(
+                **sample_kwargs,
+                run_id=run_id,
+                request_id=request.request_id,
+                plan_id=request.plan_id,
+                command_id=request.command_id,
+                paper_registration_id=registration.registration_id,
+                camera_id=request.camera_id or registration.camera_id,
+                camera_name=request.camera_name or registration.camera_name,
+                source=request.source,
+                axis=request.axis,
+                commanded_dx_mm=request.commanded_dx_mm,
+                commanded_dy_mm=request.commanded_dy_mm,
+                before=request.before,
+                after=request.after,
+                predicted_dx_mm=request.predicted_dx_mm,
+                predicted_dy_mm=request.predicted_dy_mm,
+                residual_mm=request.residual_mm,
+                residual_limit_mm=request.residual_limit_mm,
+                status=request.status,
+                blockers=request.blockers,
+                rejection_reason=request.rejection_reason,
+                controller_transcript=request.controller_transcript,
+            )
+            run = self._load_visual_probe_run_or_new(run_id)
+            run.upsert_sample(
+                sample,
+                current_paper_registration_id=registration.registration_id,
+                current_camera_id=registration.camera_id,
+            )
+            self._save_visual_probe_run(run)
+
+            previous = self._load_latest_visual_readiness_or_none()
+            machine = self._load_machine_config()
+            safe_zone = (
+                previous.safe_zone
+                if previous is not None and previous.safe_zone is not None
+                else self._drawing_safe_zone(machine=machine, inset_x_mm=10.0, inset_y_mm=10.0)
+            )
+            cap = VisualCapObservation(
+                timestamp=sample.observed_at,
+                camera_norm=sample.after.camera_norm,
+                paper_norm=sample.after.paper_norm,
+                logical_mm=sample.after.logical_mm,
+                confidence=sample.after.confidence,
+                source="camera_detection",
+                camera_id=sample.camera_id,
+                camera_name=sample.camera_name,
+                paper_registration_id=registration.registration_id,
+            )
+            evaluation = evaluate_cap_inside_safe_zone(observation=cap, safe_zone=safe_zone)
+            state = self._visual_state_from_probe_run(
+                cap=cap,
+                safe_zone_evaluation=evaluation,
+                previous=previous,
+                run=run,
+            )
+            self._save_visual_readiness(state)
+            self.event_log.emit(
+                "calibration.probe_sample_observed",
+                command_id=sample.command_id or sample.sample_id,
+                status=sample.status,
+                payload={
+                    "run_id": run.run_id,
+                    "sample_id": sample.sample_id,
+                    "source": sample.source,
+                    "axis": sample.axis,
+                    "status": sample.status,
+                    "accepted_sample_count": run.summary.accepted_sample_count,
+                    "rejected_sample_count": run.summary.rejected_sample_count,
+                    "axes_represented": run.summary.axes_represented,
+                    "visual_ready_to_plot": state.visual_ready_to_plot,
+                    "blockers": state.blockers,
+                    "probe_run_file": str(self._visual_probe_run_path(run.run_id)),
+                },
+            )
+            return VisualProbeSampleObservationResponse(
+                status=sample.status,
+                dry_run=self.config.dry_run,
+                sample=sample,
+                summary=run.summary,
+                probe_run_file=str(self._visual_probe_run_path(run.run_id)),
+                latest_probe_run_file=str(self._latest_visual_probe_run_path()),
+                readiness=state.model_dump(mode="json"),
+                readiness_file=str(self._latest_visual_readiness_path()),
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.probe_sample_failed",
+                status="failed",
+                payload={"error": str(exc), "source": request.source},
+            )
+            return VisualProbeSampleObservationResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                latest_probe_run_file=str(self._latest_visual_probe_run_path()),
                 readiness_file=str(self._latest_visual_readiness_path()),
                 error=str(exc),
             )
@@ -4130,6 +4297,30 @@ class PlotterBridge:
             observation_id=observation_id,
         )
 
+    def _visual_probe_run_path(self, run_id: str) -> Path:
+        if "/" in run_id or ".." in run_id:
+            raise ValueError("Invalid visual probe run_id.")
+        return self.config.calibration_dir / "visual_probe_runs" / f"{run_id}.json"
+
+    def _latest_visual_probe_run_path(self) -> Path:
+        return self.config.calibration_dir / "latest_visual_probe_run.json"
+
+    def _load_visual_probe_run_or_new(self, run_id: str) -> VisualProbeRun:
+        path = self._visual_probe_run_path(run_id)
+        if path.exists():
+            return VisualProbeRun.load_json(path)
+        return VisualProbeRun(run_id=run_id)
+
+    def _load_latest_visual_probe_run_or_none(self) -> VisualProbeRun | None:
+        path = self._latest_visual_probe_run_path()
+        if not path.exists():
+            return None
+        return VisualProbeRun.load_json(path)
+
+    def _save_visual_probe_run(self, run: VisualProbeRun) -> None:
+        run.save_json(self._visual_probe_run_path(run.run_id))
+        run.save_json(self._latest_visual_probe_run_path())
+
     def _latest_visual_readiness_path(self) -> Path:
         return self.config.calibration_dir / "latest_visual_readiness.json"
 
@@ -4177,6 +4368,58 @@ class PlotterBridge:
             dry_run=self.config.dry_run,
             readiness=state.model_dump(mode="json"),
             readiness_file=str(self._latest_visual_readiness_path()),
+        )
+
+    def _visual_state_with_latest_probe_evidence(
+        self,
+        state: VisualReadinessState,
+    ) -> VisualReadinessState:
+        run = self._load_latest_visual_probe_run_or_none()
+        if run is None:
+            return state
+        registration = self._load_latest_paper_registration_or_none()
+        run.summary = summarize_visual_probe_samples(
+            run.samples,
+            current_paper_registration_id=(
+                registration.registration_id if registration is not None else state.paper_registration_id
+            ),
+            current_camera_id=registration.camera_id if registration is not None else None,
+        )
+        return self._visual_state_from_probe_run(
+            cap=state.latest_cap_observation,
+            safe_zone_evaluation=state.zone_check or state.safe_zone_evaluation,
+            previous=state,
+            run=run,
+        )
+
+    def _visual_state_from_probe_run(
+        self,
+        *,
+        cap: VisualCapObservation | None,
+        safe_zone_evaluation: Any | None,
+        previous: VisualReadinessState | None,
+        run: VisualProbeRun,
+    ) -> VisualReadinessState:
+        summary = run.summary
+        return self._visual_state_from_evidence(
+            cap=cap,
+            safe_zone_evaluation=safe_zone_evaluation,
+            previous=previous,
+            sample_count=summary.accepted_sample_count,
+            raw_sample_count=summary.raw_sample_count,
+            rejected_sample_count=summary.rejected_sample_count,
+            stale_sample_count=summary.stale_sample_count,
+            axes_represented=summary.axes_represented,
+            bootstrap_sample_count=summary.bootstrap_sample_count,
+            adaptive_sample_count=summary.adaptive_sample_count,
+            center_target_sample_count=summary.center_target_sample_count,
+            x_field_recovery_sample_count=summary.x_field_recovery_sample_count,
+            rms_residual_mm=summary.rms_residual_mm,
+            max_residual_mm=summary.max_residual_mm,
+            latest_probe_run_id=run.run_id,
+            latest_probe_sample_id=summary.latest_sample_id,
+            latest_probe_run_file=str(self._visual_probe_run_path(run.run_id)),
+            extra_probe_blockers=summary.blockers,
         )
 
     def _visual_cap_observation(
@@ -4319,8 +4562,20 @@ class PlotterBridge:
         safe_zone_evaluation: Any | None,
         previous: VisualReadinessState | None,
         sample_count: int | None = None,
+        raw_sample_count: int | None = None,
+        rejected_sample_count: int | None = None,
+        stale_sample_count: int | None = None,
+        axes_represented: list[Literal["X", "Y"]] | None = None,
+        bootstrap_sample_count: int | None = None,
+        adaptive_sample_count: int | None = None,
+        center_target_sample_count: int | None = None,
+        x_field_recovery_sample_count: int | None = None,
         rms_residual_mm: float | None = None,
         max_residual_mm: float | None = None,
+        latest_probe_run_id: str | None = None,
+        latest_probe_sample_id: str | None = None,
+        latest_probe_run_file: str | None = None,
+        extra_probe_blockers: list[str] | None = None,
     ) -> VisualReadinessState:
         state = build_visual_readiness_state(
             paper_registered=cap is not None or bool(previous and previous.paper_registered),
@@ -4330,6 +4585,44 @@ class PlotterBridge:
                 sample_count
                 if sample_count is not None
                 else (previous.probe_observation_count if previous is not None else 0)
+            ),
+            probe_raw_sample_count=(
+                raw_sample_count
+                if raw_sample_count is not None
+                else (previous.probe_raw_sample_count if previous is not None else None)
+            ),
+            probe_rejected_sample_count=(
+                rejected_sample_count
+                if rejected_sample_count is not None
+                else (previous.probe_rejected_sample_count if previous is not None else 0)
+            ),
+            probe_stale_sample_count=(
+                stale_sample_count
+                if stale_sample_count is not None
+                else (previous.probe_stale_sample_count if previous is not None else 0)
+            ),
+            probe_axes_represented=(
+                axes_represented if axes_represented is not None else None
+            ),
+            probe_bootstrap_sample_count=(
+                bootstrap_sample_count
+                if bootstrap_sample_count is not None
+                else (previous.probe_bootstrap_sample_count if previous is not None else 0)
+            ),
+            probe_adaptive_sample_count=(
+                adaptive_sample_count
+                if adaptive_sample_count is not None
+                else (previous.probe_adaptive_sample_count if previous is not None else 0)
+            ),
+            probe_center_target_sample_count=(
+                center_target_sample_count
+                if center_target_sample_count is not None
+                else (previous.probe_center_target_sample_count if previous is not None else 0)
+            ),
+            probe_x_field_recovery_sample_count=(
+                x_field_recovery_sample_count
+                if x_field_recovery_sample_count is not None
+                else (previous.probe_x_field_recovery_sample_count if previous is not None else 0)
             ),
             probe_rms_residual_mm=(
                 rms_residual_mm
@@ -4341,13 +4634,35 @@ class PlotterBridge:
                 if max_residual_mm is not None
                 else (previous.probe_max_residual_mm if previous is not None else None)
             ),
+            latest_visual_probe_run_id=(
+                latest_probe_run_id
+                if latest_probe_run_id is not None
+                else (previous.latest_visual_probe_run_id if previous is not None else None)
+            ),
+            latest_visual_probe_sample_id=(
+                latest_probe_sample_id
+                if latest_probe_sample_id is not None
+                else (previous.latest_visual_probe_sample_id if previous is not None else None)
+            ),
+            latest_visual_probe_run_file=(
+                latest_probe_run_file
+                if latest_probe_run_file is not None
+                else (previous.latest_visual_probe_run_file if previous is not None else None)
+            ),
         )
         if previous is not None:
             state.state_id = previous.state_id
             state.latest_probe_plan = previous.latest_probe_plan
             state.paper_registration_id = previous.paper_registration_id
+            if axes_represented is None:
+                state.probe_axes_represented = previous.probe_axes_represented
         if cap is not None and cap.paper_registration_id is not None:
             state.paper_registration_id = cap.paper_registration_id
+        if extra_probe_blockers:
+            for blocker in extra_probe_blockers:
+                if blocker not in state.blockers:
+                    state.blockers.append(blocker)
+            state.visual_ready_to_plot = False
         return state
 
     def _machine_status_from_report(
@@ -5339,6 +5654,11 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             AdaptiveProbeRunRequest,
             bridge.run_adaptive_probe,
             lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/calibration/probe/observe": PostRoute(
+            VisualProbeSampleObservationRequest,
+            bridge.observe_visual_probe_sample,
+            lambda response: getattr(response, "status", "") in {"accepted", "rejected", "blocked"},
         ),
         "/paper/register": PostRoute(
             PaperRegistrationRequest,

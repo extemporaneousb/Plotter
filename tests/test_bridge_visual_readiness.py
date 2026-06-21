@@ -9,12 +9,15 @@ from typing import Any, Iterator
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
+
 from plotter_vision.bridge.server import (
     BridgeRuntimeConfig,
     LocalThreadingHTTPServer,
     PlotterBridge,
     _make_handler,
 )
+from plotter_vision.calibration.probe_evidence import VisualProbeRun
 from plotter_vision.config import MachineConfig
 
 
@@ -230,6 +233,172 @@ def test_visual_probe_mock_run_executes_x_min_bootstrap_without_homing(
         text = transcript.read_text(encoding="utf-8")
         assert '"payload":"$H"' not in text
         assert '"payload":"G91"' in text
+
+
+def test_visual_probe_observe_persists_samples_and_updates_readiness(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-durable"):
+            status_code, response = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+            assert response["status"] == "accepted"
+
+        run_path = tmp_path / "calibration" / "visual_probe_runs" / "probe-run-durable.json"
+        latest_path = tmp_path / "calibration" / "latest_visual_probe_run.json"
+        assert run_path.exists()
+        assert latest_path.exists()
+        run = VisualProbeRun.load_json(run_path)
+        assert len(run.samples) == 4
+        assert run.summary.accepted_sample_count == 4
+        assert run.summary.axes_represented == ["X", "Y"]
+        assert run.summary.rms_residual_mm == pytest.approx(0.0)
+
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        readiness = status["readiness"]
+        assert readiness["probe_raw_sample_count"] == 4
+        assert readiness["probe_observation_count"] == 4
+        assert readiness["probe_axes_represented"] == ["X", "Y"]
+        assert readiness["latest_visual_probe_run_id"] == "probe-run-durable"
+        assert readiness["visual_ready_to_plot"] is True
+
+
+def test_persisted_visual_probe_samples_survive_bridge_reload(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-reload"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+    reloaded = _bridge(tmp_path=tmp_path, config_path=config_path)
+    with _running_bridge(reloaded) as client:
+        status_code, status = client.get("/calibration/workflow/status")
+
+    assert status_code == 200
+    readiness = status["readiness"]
+    assert readiness["latest_visual_probe_run_id"] == "probe-run-reload"
+    assert readiness["probe_observation_count"] == 4
+    assert readiness["probe_rms_residual_mm"] == pytest.approx(0.0)
+
+
+def test_x_min_bootstrap_sample_persists_without_satisfying_full_probe_readiness(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        status_code, response = client.post(
+            "/calibration/probe/observe",
+            _probe_sample_payload(
+                run_id="probe-run-bootstrap",
+                sample_id="boot-1",
+                source="x_min_bootstrap",
+                axis="X",
+                command_x=80.0,
+                command_y=0.0,
+                before=(20.0, 100.0),
+                after=(100.0, 100.0),
+            ),
+        )
+
+        assert status_code == 200
+        assert response["status"] == "accepted"
+        readiness = response["readiness"]
+        assert readiness["probe_bootstrap_sample_count"] == 1
+        assert readiness["probe_observation_count"] == 1
+        assert readiness["visual_ready_to_plot"] is False
+        assert any("at least 2 observations" in blocker for blocker in readiness["blockers"])
+
+
+def test_rejected_visual_probe_sample_persists_without_counting_as_readiness(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        status_code, response = client.post(
+            "/calibration/probe/observe",
+            _probe_sample_payload(
+                run_id="probe-run-rejected",
+                sample_id="reject-1",
+                source="center_target_residual",
+                axis=None,
+                command_x=6.0,
+                command_y=0.0,
+                before=(250.0, 100.0),
+                after=(251.0, 100.0),
+                predicted_dx=6.0,
+                predicted_dy=0.0,
+                residual=5.0,
+                residual_limit=3.5,
+                status="rejected",
+                rejection_reason="residual exceeded limit",
+            ),
+        )
+
+        assert status_code == 200
+        assert response["status"] == "rejected"
+        run = VisualProbeRun.load_json(
+            tmp_path / "calibration" / "visual_probe_runs" / "probe-run-rejected.json"
+        )
+        assert run.summary.raw_sample_count == 1
+        assert run.summary.accepted_sample_count == 0
+        assert run.summary.rejected_sample_count == 1
+        readiness = response["readiness"]
+        assert readiness["probe_raw_sample_count"] == 1
+        assert readiness["probe_observation_count"] == 0
+        assert readiness["probe_rejected_sample_count"] == 1
+        assert readiness["visual_ready_to_plot"] is False
+
+
+def test_durable_cap_probe_evidence_does_not_unlock_absolute_drawing(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(
+        tmp_path=tmp_path,
+        config_path=config_path,
+        dry_run=False,
+        arm_motion=True,
+        arm_pen=True,
+        arm_homing=False,
+    )
+
+    with _running_bridge(bridge) as client:
+        _register_and_observe_center_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-no-unlock"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert status["readiness"]["visual_ready_to_plot"] is True
+
+        status_code, drawing = client.post(
+            "/calibration/run",
+            {
+                "request_id": "probe-evidence-draw",
+                "include_homing": False,
+                "mark_size_mm": 4.0,
+            },
+        )
+
+        assert status_code == 400
+        assert drawing["status"] == "failed"
+        assert drawing["controller_transcript"] is None
+        assert "VisualPositionBinding" in drawing["error"]
+        machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
+        assert machine.homing_trusted is False
+        assert machine.axis_model_trusted is False
 
 
 def test_visual_probe_run_aborts_when_projection_outside_bootstrap_band(tmp_path: Path) -> None:
@@ -516,6 +685,104 @@ def _cap_observation_payload(
     if logical_x is not None and logical_y is not None:
         payload["observed_logical_mm"] = {"x": logical_x, "y": logical_y}
     return payload
+
+
+def _probe_sample_payloads(*, run_id: str) -> list[dict[str, Any]]:
+    return [
+        _probe_sample_payload(
+            run_id=run_id,
+            sample_id="probe-x-pos",
+            source="motion_probe",
+            axis="X",
+            command_x=25.0,
+            command_y=0.0,
+            before=(250.0, 100.0),
+            after=(275.0, 100.0),
+        ),
+        _probe_sample_payload(
+            run_id=run_id,
+            sample_id="probe-x-neg",
+            source="motion_probe",
+            axis="X",
+            command_x=-25.0,
+            command_y=0.0,
+            before=(275.0, 100.0),
+            after=(250.0, 100.0),
+        ),
+        _probe_sample_payload(
+            run_id=run_id,
+            sample_id="probe-y-pos",
+            source="motion_probe",
+            axis="Y",
+            command_x=0.0,
+            command_y=25.0,
+            before=(250.0, 100.0),
+            after=(250.0, 125.0),
+        ),
+        _probe_sample_payload(
+            run_id=run_id,
+            sample_id="probe-y-neg",
+            source="motion_probe",
+            axis="Y",
+            command_x=0.0,
+            command_y=-25.0,
+            before=(250.0, 125.0),
+            after=(250.0, 100.0),
+        ),
+    ]
+
+
+def _probe_sample_payload(
+    *,
+    run_id: str,
+    sample_id: str,
+    source: str,
+    axis: str | None,
+    command_x: float,
+    command_y: float,
+    before: tuple[float, float],
+    after: tuple[float, float],
+    predicted_dx: float | None = None,
+    predicted_dy: float | None = None,
+    residual: float | None = None,
+    residual_limit: float | None = None,
+    status: str = "accepted",
+    rejection_reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "sample_id": sample_id,
+        "source": source,
+        "axis": axis,
+        "commanded_dx_mm": command_x,
+        "commanded_dy_mm": command_y,
+        "before": _probe_cap_snapshot(*before, frame=1),
+        "after": _probe_cap_snapshot(*after, frame=2),
+        "status": status,
+        "camera_id": "plotter-camera",
+        "camera_name": "Plotter Camera",
+    }
+    if predicted_dx is not None:
+        payload["predicted_dx_mm"] = predicted_dx
+    if predicted_dy is not None:
+        payload["predicted_dy_mm"] = predicted_dy
+    if residual is not None:
+        payload["residual_mm"] = residual
+    if residual_limit is not None:
+        payload["residual_limit_mm"] = residual_limit
+    if rejection_reason is not None:
+        payload["rejection_reason"] = rejection_reason
+    return payload
+
+
+def _probe_cap_snapshot(x_mm: float, y_mm: float, *, frame: int) -> dict[str, Any]:
+    return {
+        "camera_norm": {"x": x_mm / 533.4, "y": y_mm / 215.9},
+        "paper_norm": {"x": x_mm / 533.4, "y": y_mm / 215.9},
+        "logical_mm": {"x": x_mm, "y": y_mm},
+        "frame_id": frame,
+        "confidence": 0.95,
+    }
 
 
 def _trust_sample(
