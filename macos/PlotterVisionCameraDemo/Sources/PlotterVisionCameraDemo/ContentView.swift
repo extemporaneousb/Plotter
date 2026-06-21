@@ -1413,6 +1413,7 @@ struct ContentView: View {
             || status == "VIS SOLVE FAIL"
             || status == "VIS TINY MOVE"
             || status == "VIS WEAK PRED"
+            || status.hasPrefix("VIS BACK")
             || status.hasPrefix("VIS PIN")
     }
 
@@ -1683,8 +1684,13 @@ struct ContentView: View {
         updateObservedPenPoint(current)
         let targetToleranceMm = 4.0
         let maxSegments = 30
+        let maxResidualRetries = 6
+        let minimumCommandCapMm = 3.0
+        let maximumCommandCapMm = 18.0
         let feedMmMin = min(300.0, bridge.manualFeedMmMin)
         var goodSegments = 0
+        var residualRetries = 0
+        var adaptiveCommandCapMm = maximumCommandCapMm
         let initialDistance = paperDistance(from: current.paperMm, to: target)
 
         for segmentIndex in 1...maxSegments {
@@ -1709,7 +1715,8 @@ struct ContentView: View {
                 return nil
             }
 
-            let commandCapMm = goodSegments >= 2 ? 18.0 : (goodSegments == 1 ? 12.0 : 6.0)
+            let rampCommandCapMm = goodSegments >= 2 ? 18.0 : (goodSegments == 1 ? 12.0 : 6.0)
+            let commandCapMm = min(rampCommandCapMm, adaptiveCommandCapMm)
             let scale = min(1.0, commandCapMm / commandLength)
             let commandX = machineDelta.xMm * scale
             let commandY = machineDelta.yMm * scale
@@ -1772,42 +1779,85 @@ struct ContentView: View {
             let observedDistance = hypot(observedDx, observedDy)
             let residualMm = hypot(observedDx - predicted.dx, observedDy - predicted.dy)
             let residualLimitMm = max(3.5, predictedDistance * 0.45)
-            guard observedDistance >= predictedDistance * 0.35, residualMm <= residualLimitMm else {
-                bridge.visualCenterDotStatus = String(format: "VIS RESID %.1f", residualMm)
+            let observedTooSmall = observedDistance < predictedDistance * 0.35
+            let residualRejected = residualMm > residualLimitMm
+            if observedTooSmall || residualRejected {
+                residualRetries += 1
+                let failureReason = observedTooSmall ? "short_observed_move" : "residual"
+                let nextCommandCapMm = max(minimumCommandCapMm, commandCapMm * 0.5)
+                var details = visualTargetResidualDetails(
+                    label: label,
+                    targetIndex: targetIndex,
+                    segmentIndex: segmentIndex,
+                    target: target,
+                    commandX: commandX,
+                    commandY: commandY,
+                    before: before,
+                    after: after,
+                    predicted: predicted,
+                    predictedDistance: predictedDistance,
+                    observedDx: observedDx,
+                    observedDy: observedDy,
+                    observedDistance: observedDistance,
+                    residualMm: residualMm,
+                    residualLimitMm: residualLimitMm
+                )
+                details["failure_reason"] = failureReason
+                details["retry_count"] = residualRetries
+                details["max_retries"] = maxResidualRetries
+                details["next_command_cap_mm"] = nextCommandCapMm
+
+                guard residualRetries <= maxResidualRetries else {
+                    bridge.visualCenterDotStatus = String(format: "VIS RESID %.1f", residualMm)
+                    bridge.recordOperatorEvent("visual_target_residual_rejected", details: details)
+                    calibrationStatusText = String(
+                        format: "CAL visual target stopped: residual %.1fmm predicted %.1f observed %.1f after %d retries",
+                        residualMm,
+                        predictedDistance,
+                        observedDistance,
+                        maxResidualRetries
+                    )
+                    updateObservedPenPoint(after)
+                    return nil
+                }
+
+                bridge.visualCenterDotStatus = String(
+                    format: "VIS RETRY %d %.1f",
+                    residualRetries,
+                    residualMm
+                )
                 bridge.recordOperatorEvent(
-                    "visual_target_residual_rejected",
-                    details: [
-                        "label": label,
-                        "target_index": targetIndex,
-                        "segment_index": segmentIndex,
-                        "target_paper_x_mm": target.x,
-                        "target_paper_y_mm": target.y,
-                        "command_x_mm": commandX,
-                        "command_y_mm": commandY,
-                        "before_frame": before.frameNumber,
-                        "after_frame": after.frameNumber,
-                        "before_paper_x_mm": before.paperMm.x,
-                        "before_paper_y_mm": before.paperMm.y,
-                        "after_paper_x_mm": after.paperMm.x,
-                        "after_paper_y_mm": after.paperMm.y,
-                        "predicted_dx_mm": predicted.dx,
-                        "predicted_dy_mm": predicted.dy,
-                        "predicted_distance_mm": predictedDistance,
-                        "observed_dx_mm": observedDx,
-                        "observed_dy_mm": observedDy,
-                        "observed_distance_mm": observedDistance,
-                        "residual_mm": residualMm,
-                        "residual_limit_mm": residualLimitMm
-                    ]
+                    "visual_target_residual_retry",
+                    details: details
                 )
                 calibrationStatusText = String(
-                    format: "CAL visual target stopped: residual %.1fmm predicted %.1f observed %.1f",
+                    format: "CAL visual %@ retry %d: residual %.1fmm predicted %.1f observed %.1f; backing out to verified point",
+                    label,
+                    residualRetries,
                     residualMm,
                     predictedDistance,
                     observedDistance
                 )
-                updateObservedPenPoint(after)
-                return nil
+                guard let rollback = await rollbackRejectedVisualMove(
+                    commandX: commandX,
+                    commandY: commandY,
+                    before: before,
+                    after: after,
+                    label: label,
+                    targetIndex: targetIndex,
+                    segmentIndex: segmentIndex,
+                    residualMm: residualMm,
+                    residualLimitMm: residualLimitMm,
+                    feedMmMin: feedMmMin
+                ) else {
+                    adaptiveCommandCapMm = nextCommandCapMm
+                    updateObservedPenPoint(after)
+                    return nil
+                }
+                adaptiveCommandCapMm = nextCommandCapMm
+                current = rollback
+                updateObservedPenPoint(rollback)
+                continue
             }
 
             if let updatedModel = appendAcceptedVisualMotionSample(
@@ -1821,6 +1871,9 @@ struct ContentView: View {
                 model = updatedModel
             }
             goodSegments += 1
+            if commandCapMm < maximumCommandCapMm && residualMm <= residualLimitMm * 0.5 {
+                adaptiveCommandCapMm = min(maximumCommandCapMm, adaptiveCommandCapMm * 1.5)
+            }
             current = after
             updateObservedPenPoint(after)
         }
@@ -1843,6 +1896,171 @@ struct ContentView: View {
             return nil
         }
         return final
+    }
+
+    private func visualTargetResidualDetails(
+        label: String,
+        targetIndex: Int,
+        segmentIndex: Int,
+        target: PaperPointMmSnapshot,
+        commandX: Double,
+        commandY: Double,
+        before: GreenCapPaperObservation,
+        after: GreenCapPaperObservation,
+        predicted: (dx: Double, dy: Double),
+        predictedDistance: Double,
+        observedDx: Double,
+        observedDy: Double,
+        observedDistance: Double,
+        residualMm: Double,
+        residualLimitMm: Double
+    ) -> [String: Any] {
+        [
+            "label": label,
+            "target_index": targetIndex,
+            "segment_index": segmentIndex,
+            "target_paper_x_mm": target.x,
+            "target_paper_y_mm": target.y,
+            "command_x_mm": commandX,
+            "command_y_mm": commandY,
+            "before_frame": before.frameNumber,
+            "after_frame": after.frameNumber,
+            "before_paper_x_mm": before.paperMm.x,
+            "before_paper_y_mm": before.paperMm.y,
+            "after_paper_x_mm": after.paperMm.x,
+            "after_paper_y_mm": after.paperMm.y,
+            "predicted_dx_mm": predicted.dx,
+            "predicted_dy_mm": predicted.dy,
+            "predicted_distance_mm": predictedDistance,
+            "observed_dx_mm": observedDx,
+            "observed_dy_mm": observedDy,
+            "observed_distance_mm": observedDistance,
+            "residual_mm": residualMm,
+            "residual_limit_mm": residualLimitMm
+        ]
+    }
+
+    @MainActor
+    private func rollbackRejectedVisualMove(
+        commandX: Double,
+        commandY: Double,
+        before: GreenCapPaperObservation,
+        after: GreenCapPaperObservation,
+        label: String,
+        targetIndex: Int,
+        segmentIndex: Int,
+        residualMm: Double,
+        residualLimitMm: Double,
+        feedMmMin: Double
+    ) async -> GreenCapPaperObservation? {
+        let rollbackToleranceMm = max(5.0, residualLimitMm)
+        let displacedDistanceMm = paperDistance(from: after.paperMm, to: before.paperMm)
+        bridge.visualCenterDotStatus = String(format: "VIS BACK %@ %02d", label, segmentIndex)
+        calibrationStatusText = String(
+            format: "CAL visual %@ rollback after residual %.1fmm",
+            label,
+            residualMm
+        )
+
+        guard let response = await bridge.visualRelativeMove(
+            xMm: -commandX,
+            yMm: -commandY,
+            feedMmMin: feedMmMin
+        ) else {
+            bridge.recordOperatorEvent(
+                "visual_target_rollback_failed",
+                details: [
+                    "label": label,
+                    "target_index": targetIndex,
+                    "segment_index": segmentIndex,
+                    "reason": "move_failed",
+                    "residual_mm": residualMm,
+                    "residual_limit_mm": residualLimitMm,
+                    "rollback_command_x_mm": -commandX,
+                    "rollback_command_y_mm": -commandY
+                ]
+            )
+            calibrationStatusText = "CAL visual target stopped: rollback move failed"
+            bridge.visualCenterDotStatus = "VIS BACK FAIL"
+            return nil
+        }
+        if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+            bridge.visualCenterDotStatus = "VIS PIN \(pins)"
+            bridge.recordOperatorEvent(
+                "visual_target_rollback_failed",
+                details: [
+                    "label": label,
+                    "target_index": targetIndex,
+                    "segment_index": segmentIndex,
+                    "reason": "pin_active",
+                    "pins": pins,
+                    "residual_mm": residualMm,
+                    "residual_limit_mm": residualLimitMm
+                ]
+            )
+            calibrationStatusText = "CAL visual target stopped: rollback pin active \(pins)"
+            return nil
+        }
+
+        try? await Task.sleep(nanoseconds: 450_000_000)
+        guard let rollback = await waitForGreenCapPaperObservation(
+            afterFrame: after.frameNumber,
+            timeoutSeconds: 4.0
+        ), rollback.frameNumber > after.frameNumber else {
+            bridge.recordOperatorEvent(
+                "visual_target_rollback_failed",
+                details: [
+                    "label": label,
+                    "target_index": targetIndex,
+                    "segment_index": segmentIndex,
+                    "reason": "no_new_frame",
+                    "residual_mm": residualMm,
+                    "residual_limit_mm": residualLimitMm,
+                    "rollback_command_x_mm": -commandX,
+                    "rollback_command_y_mm": -commandY
+                ]
+            )
+            bridge.visualCenterDotStatus = "VIS BACK NO FRAME"
+            calibrationStatusText = "CAL visual target stopped: rollback produced no new cap observation"
+            return nil
+        }
+
+        let rollbackDistanceMm = paperDistance(from: rollback.paperMm, to: before.paperMm)
+        let rollbackImprovementMm = displacedDistanceMm - rollbackDistanceMm
+        let details: [String: Any] = [
+            "label": label,
+            "target_index": targetIndex,
+            "segment_index": segmentIndex,
+            "before_frame": before.frameNumber,
+            "after_frame": after.frameNumber,
+            "rollback_frame": rollback.frameNumber,
+            "before_paper_x_mm": before.paperMm.x,
+            "before_paper_y_mm": before.paperMm.y,
+            "after_paper_x_mm": after.paperMm.x,
+            "after_paper_y_mm": after.paperMm.y,
+            "rollback_paper_x_mm": rollback.paperMm.x,
+            "rollback_paper_y_mm": rollback.paperMm.y,
+            "rollback_command_x_mm": -commandX,
+            "rollback_command_y_mm": -commandY,
+            "rollback_distance_mm": rollbackDistanceMm,
+            "rollback_tolerance_mm": rollbackToleranceMm,
+            "rollback_improvement_mm": rollbackImprovementMm,
+            "residual_mm": residualMm,
+            "residual_limit_mm": residualLimitMm
+        ]
+        bridge.recordOperatorEvent("visual_target_rollback_completed", details: details)
+        guard rollbackDistanceMm <= rollbackToleranceMm else {
+            bridge.visualCenterDotStatus = String(format: "VIS BACK %.1f", rollbackDistanceMm)
+            bridge.recordOperatorEvent("visual_target_rollback_rejected", details: details)
+            calibrationStatusText = String(
+                format: "CAL visual target stopped: rollback %.1fmm from verified point",
+                rollbackDistanceMm
+            )
+            updateObservedPenPoint(rollback)
+            return nil
+        }
+
+        return rollback
     }
 
     @MainActor
