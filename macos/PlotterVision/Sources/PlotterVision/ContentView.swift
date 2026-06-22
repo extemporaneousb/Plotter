@@ -12,6 +12,7 @@ private let visualProbeFieldRecoveryMaxTotalXMm = 150.0
 private let visualCapReacquireStepXMm = 25.0
 private let visualCapReacquireMaxTotalXMm = 150.0
 private let visualCapReacquireMaxAttempts = 2
+private let visualCapFreshFrameAdvance = 3
 private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
 private let visualCalibrationMarkSizeMm = 6.0
@@ -169,7 +170,7 @@ struct ContentView: View {
 
                     MeasurementOverlay(
                         segments: plotterCamera.segments,
-                        carriageMarker: (manualPenMode || manualCapColorMode) ? nil : plotterCamera.carriageMarker,
+                        carriageMarker: (manualPenMode || manualCapColorMode) ? nil : currentCarriageMarker,
                         confirmedCapPoint: confirmedCapPoint,
                         motionTracks: plotterCamera.motionTracks,
                         expectedPathSegments: bridge.expectedPathSegments,
@@ -1363,6 +1364,7 @@ struct ContentView: View {
     @MainActor
     private func waitForGreenCapPaperObservation(
         afterFrame: Int? = nil,
+        minimumFrameAdvance: Int = 1,
         timeoutSeconds: Double
     ) async -> GreenCapPaperObservation? {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
@@ -1370,7 +1372,7 @@ struct ContentView: View {
         while Date() < deadline {
             if let observation = currentGreenCapPaperObservation() {
                 latest = observation
-                if afterFrame == nil || observation.frameNumber > afterFrame! {
+                if afterFrame == nil || observation.frameNumber >= afterFrame! + minimumFrameAdvance {
                     return observation
                 }
             }
@@ -1386,8 +1388,9 @@ struct ContentView: View {
     ) async -> GreenCapPaperObservation? {
         guard let observation = await waitForGreenCapPaperObservation(
             afterFrame: afterFrame,
+            minimumFrameAdvance: visualCapFreshFrameAdvance,
             timeoutSeconds: timeoutSeconds
-        ), observation.frameNumber > afterFrame else {
+        ), observation.frameNumber >= afterFrame + visualCapFreshFrameAdvance else {
             return nil
         }
         return observation
@@ -1534,7 +1537,7 @@ struct ContentView: View {
 
     @MainActor
     private func currentGreenCapPaperObservation() -> GreenCapPaperObservation? {
-        guard let marker = plotterCamera.carriageMarker else { return nil }
+        guard let marker = currentCarriageMarker else { return nil }
         let cameraPoint = CGPoint(
             x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
@@ -1546,6 +1549,10 @@ struct ContentView: View {
             paperMm: paperMm,
             strength: marker.strength
         )
+    }
+
+    private var currentCarriageMarker: CarriageMarker? {
+        plotterCamera.stabilizedCarriageMarker ?? plotterCamera.carriageMarker
     }
 
     private func isGreenCapInsideSafeZone(_ paperMm: PaperPointMmSnapshot) -> Bool {
@@ -1721,7 +1728,7 @@ struct ContentView: View {
             && currentGreenCapSafeZoneReady
             && frameLearning.status == "MEASURED"
             && visualMotionModel?.isUsable == true
-            && plotterCamera.carriageMarker != nil
+            && currentCarriageMarker != nil
             && !bridge.isRunning
             && !bridge.isMachineBusy
             && !bridge.isMachineAlarm
@@ -1744,7 +1751,7 @@ struct ContentView: View {
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
             return "Preview five binding marks before visual run"
         }
-        if plotterCamera.carriageMarker == nil { return "Cap marker not detected" }
+        if currentCarriageMarker == nil { return "Cap marker not detected" }
         return bridge.visualBindingDetail
     }
 
@@ -1870,7 +1877,7 @@ struct ContentView: View {
         bridge.isLiveMotionMode
             && !bridge.hasBridgeContractMismatch
             && confirmedCapPoint?.paperMm != nil
-            && plotterCamera.carriageMarker != nil
+            && currentCarriageMarker != nil
             && currentGreenCapCanStartProbe
             && !bridge.isMachineBusy
             && !bridge.isRunning
@@ -2163,8 +2170,8 @@ struct ContentView: View {
             let observedDy = after.paperMm.y - before.paperMm.y
             let observedDistance = hypot(observedDx, observedDy)
             let residualMm = hypot(observedDx - predicted.dx, observedDy - predicted.dy)
-            let residualLimitMm = max(3.5, predictedDistance * 0.45)
-            let observedTooSmall = observedDistance < predictedDistance * 0.35
+            let residualLimitMm = max(10.0, predictedDistance * 0.80)
+            let observedTooSmall = observedDistance < predictedDistance * 0.20
             let residualRejected = residualMm > residualLimitMm
             if observedTooSmall || residualRejected {
                 residualRetries += 1
@@ -2380,7 +2387,7 @@ struct ContentView: View {
         residualLimitMm: Double,
         feedMmMin: Double
     ) async -> GreenCapPaperObservation? {
-        let rollbackToleranceMm = max(5.0, residualLimitMm)
+        let rollbackToleranceMm = max(15.0, residualLimitMm * 1.5)
         let displacedDistanceMm = paperDistance(from: after.paperMm, to: before.paperMm)
         bridge.visualCenterDotStatus = String(format: "VIS BACK %@ %02d", label, segmentIndex)
         calibrationStatusText = String(
@@ -2761,7 +2768,7 @@ struct ContentView: View {
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
-            capDetected: plotterCamera.carriageMarker != nil,
+            capDetected: currentCarriageMarker != nil,
             canMoveXIntoCameraField: canMoveXIntoCameraFieldForProbe,
             canConfirmSetup: bridge.hasPaperLock,
             primaryAction: runCalibrationWizardPrimaryAction,
@@ -2786,7 +2793,7 @@ struct ContentView: View {
 
     private var wizardGreenCapStatus: CalibrationWizardStepStatus {
         if confirmedCapPoint?.paperMm != nil { return .done }
-        if plotterCamera.carriageMarker != nil { return .done }
+        if currentCarriageMarker != nil { return .done }
         return bridge.hasPaperLock ? .active : .pending
     }
 
@@ -2820,7 +2827,7 @@ struct ContentView: View {
     }
 
     private var wizardGreenCapDetail: String {
-        guard let marker = plotterCamera.carriageMarker else {
+        guard let marker = currentCarriageMarker else {
             if confirmedCapPoint?.paperMm != nil {
                 return "Manual cap position accepted"
             }
@@ -2846,7 +2853,7 @@ struct ContentView: View {
             return "Fiducials are captured. Solve paper homography to create the paper-mm frame."
         }
         if confirmedCapPoint?.paperMm == nil {
-            if plotterCamera.carriageMarker == nil {
+            if currentCarriageMarker == nil {
                 return "Stored paper homography is locked. Confirm setup if the grid still aligns, then pick the cap region or click the cap position."
             }
             if currentGreenCapPaperObservation() == nil {
@@ -2855,7 +2862,7 @@ struct ContentView: View {
             return "Stored paper homography is locked. Confirm setup if the grid still aligns, then confirm the detected carriage cap."
         }
         if frameLearning.status != "MEASURED" {
-            if plotterCamera.carriageMarker == nil {
+            if currentCarriageMarker == nil {
                 return "Visual calibration needs a live cap marker. If power-off gravity parked X off-camera, move X into the camera field first."
             }
             if currentGreenCapBootstrapReady {
@@ -2930,7 +2937,7 @@ struct ContentView: View {
             if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
             if bridge.isMachineAlarm { return "machine alarm" }
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
-            if plotterCamera.carriageMarker == nil { return "cap marker not detected; move X into field if parked off-camera" }
+            if currentCarriageMarker == nil { return "cap marker not detected; move X into field if parked off-camera" }
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
             return "visual calibration blocked"
         }
@@ -2977,7 +2984,7 @@ struct ContentView: View {
         if frameLearning.status != "MEASURED" {
             guard canRunWizardMotionProbe else {
                 calibrationStatusText = "WIZ visual calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
-                if plotterCamera.carriageMarker == nil, canMoveXIntoCameraFieldForProbe {
+                if currentCarriageMarker == nil, canMoveXIntoCameraFieldForProbe {
                     requestXFieldMovePrompt(source: "wizard_probe_blocked_no_cap")
                 }
                 return
@@ -3283,7 +3290,7 @@ struct ContentView: View {
     }
 
     private func useDetectedCarriageMarker() {
-        guard let marker = plotterCamera.carriageMarker else {
+        guard let marker = currentCarriageMarker else {
             startManualPenClick()
             return
         }

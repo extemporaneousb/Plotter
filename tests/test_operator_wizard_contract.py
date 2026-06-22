@@ -212,6 +212,23 @@ def test_visual_probe_reacquires_cap_before_stopping() -> None:
     assert '"visual_calibration_session_reset"' in model
 
 
+def test_visual_cap_gates_use_stabilized_marker_observation() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
+
+    assert "@Published var stabilizedCarriageMarker" in camera_model
+    assert "carriageMarkerSmoothingWindow = 5" in camera_model
+    assert "carriageMarkerHoldMisses = 6" in camera_model
+    assert "publishCarriageMarkerObservation(visionResult.carriageMarker)" in camera_model
+    assert "averagedCarriageMarker(from: carriageMarkerHistory)" in camera_model
+    assert "private var currentCarriageMarker" in content
+    assert "plotterCamera.stabilizedCarriageMarker ?? plotterCamera.carriageMarker" in content
+    assert "visualCapFreshFrameAdvance = 3" in content
+    assert "minimumFrameAdvance: visualCapFreshFrameAdvance" in content
+    assert "guard let marker = currentCarriageMarker else { return nil }" in content
+    assert "plotterCamera.carriageMarker != nil" not in content
+
+
 def test_removed_bridge_routes_and_red_detection_support_are_absent() -> None:
     server = _read(ROOT / "plotter_vision" / "bridge" / "server.py")
     paper = _read(ROOT / "plotter_vision" / "calibration" / "paper.py")

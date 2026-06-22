@@ -127,6 +127,7 @@ class VisualProbeSummary(BaseModel):
     center_target_sample_count: int = 0
     x_field_recovery_sample_count: int = 0
     rms_residual_mm: float | None = None
+    p95_residual_mm: float | None = None
     max_residual_mm: float | None = None
     latest_sample_id: str | None = None
     latest_observed_at: str | None = None
@@ -148,7 +149,7 @@ class VisualProbeSummary(BaseModel):
             raise ValueError("probe summary counts must be non-negative.")
         return value
 
-    @field_validator("rms_residual_mm", "max_residual_mm")
+    @field_validator("rms_residual_mm", "p95_residual_mm", "max_residual_mm")
     @classmethod
     def _validate_residual(cls, value: float | None) -> float | None:
         if value is None:
@@ -224,7 +225,7 @@ def summarize_visual_probe_samples(
     accepted = [sample for sample in current_samples if sample.status == "accepted"]
     rejected = [sample for sample in current_samples if sample.status == "rejected"]
     axes = sorted({sample.axis for sample in accepted if sample.axis is not None})
-    rms, max_residual = _motion_residual_summary(accepted)
+    rms, p95_residual, max_residual = _motion_residual_summary(accepted)
     latest_sample = max(samples, key=lambda sample: sample.observed_at, default=None)
 
     blockers: list[str] = []
@@ -250,6 +251,7 @@ def summarize_visual_probe_samples(
             1 for sample in accepted if sample.source == "x_field_recovery"
         ),
         rms_residual_mm=rms,
+        p95_residual_mm=p95_residual,
         max_residual_mm=max_residual,
         latest_sample_id=latest_sample.sample_id if latest_sample is not None else None,
         latest_observed_at=latest_sample.observed_at if latest_sample is not None else None,
@@ -273,16 +275,18 @@ def _sample_matches_current(
     return True
 
 
-def _motion_residual_summary(samples: list[VisualProbeSample]) -> tuple[float | None, float | None]:
+def _motion_residual_summary(
+    samples: list[VisualProbeSample],
+) -> tuple[float | None, float | None, float | None]:
     if not samples:
-        return (None, None)
+        return (None, None, None)
     explicit_residuals = [sample.residual_mm for sample in samples if sample.residual_mm is not None]
     if len(explicit_residuals) == len(samples):
         return _residual_stats(explicit_residuals)
 
     residuals = _least_squares_motion_residuals(samples)
     if residuals is None:
-        return (None, None)
+        return (None, None, None)
     return _residual_stats(residuals)
 
 
@@ -324,9 +328,24 @@ def _least_squares_motion_residuals(samples: list[VisualProbeSample]) -> list[fl
     ]
 
 
-def _residual_stats(residuals: list[float]) -> tuple[float, float]:
+def _residual_stats(residuals: list[float]) -> tuple[float, float, float]:
     rms = math.sqrt(sum(residual * residual for residual in residuals) / len(residuals))
-    return (rms, max(residuals))
+    return (rms, _percentile(residuals, 0.95), max(residuals))
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        raise ValueError("percentile requires at least one value.")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = percentile * (len(ordered) - 1)
+    lower = math.floor(rank)
+    upper = math.ceil(rank)
+    if lower == upper:
+        return ordered[int(rank)]
+    fraction = rank - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
 
 def _finite(value: float, *, label: str) -> float:

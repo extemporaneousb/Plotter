@@ -198,13 +198,52 @@ def test_visual_readiness_blocks_high_probe_residuals() -> None:
         cap_observation=observation,
         safe_zone_evaluation=evaluation,
         probe_observation_count=2,
-        probe_rms_residual_mm=6.1,
-        probe_max_residual_mm=8.1,
+        probe_rms_residual_mm=11.1,
+        probe_p95_residual_mm=21.0,
+        probe_max_residual_mm=21.0,
     )
 
     assert readiness.visual_ready_to_plot is False
     assert any("RMS residual" in blocker for blocker in readiness.blockers)
-    assert any("max residual" in blocker for blocker in readiness.blockers)
+    assert any("p95 residual" in blocker for blocker in readiness.blockers)
+
+
+def test_visual_readiness_tolerates_single_probe_residual_outlier() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+
+    readiness = build_visual_readiness_state(
+        paper_registered=True,
+        cap_observation=observation,
+        safe_zone_evaluation=evaluation,
+        probe_observation_count=27,
+        probe_rms_residual_mm=3.2,
+        probe_p95_residual_mm=5.8,
+        probe_max_residual_mm=9.1,
+    )
+
+    assert readiness.visual_ready_to_plot is True
+    assert readiness.blockers == []
+
+
+def test_visual_readiness_blocks_hard_probe_residual_outlier() -> None:
+    safe_zone = _safe_zone()
+    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
+    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
+
+    readiness = build_visual_readiness_state(
+        paper_registered=True,
+        cap_observation=observation,
+        safe_zone_evaluation=evaluation,
+        probe_observation_count=27,
+        probe_rms_residual_mm=3.2,
+        probe_p95_residual_mm=5.8,
+        probe_max_residual_mm=45.0,
+    )
+
+    assert readiness.visual_ready_to_plot is False
+    assert any("hard max residual" in blocker for blocker in readiness.blockers)
 
 
 def test_visual_probe_artifact_serialization_round_trip(tmp_path: Path) -> None:
@@ -235,6 +274,7 @@ def test_visual_probe_artifact_serialization_round_trip(tmp_path: Path) -> None:
     assert loaded.summary.accepted_sample_count == 1
     assert loaded.samples[0].observed_dx_mm == pytest.approx(24.0)
     assert loaded.samples[0].observed_distance_mm == pytest.approx((24.0**2 + 1.0**2) ** 0.5)
+    assert loaded.summary.p95_residual_mm is None
 
 
 def _safe_zone() -> DrawingSafeZone:

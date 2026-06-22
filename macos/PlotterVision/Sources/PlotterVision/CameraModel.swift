@@ -39,6 +39,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var selectedCameraName = "Camera"
     @Published var segments: [VisionSegment] = []
     @Published var carriageMarker: CarriageMarker?
+    @Published var stabilizedCarriageMarker: CarriageMarker?
     @Published var motionTracks: [MotionTrack] = []
     @Published var changeReport = ChangeReport.idle
     @Published var stats = AnalysisStats()
@@ -63,6 +64,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private var lastVideoSize = CGSize.zero
     private var fpsWindowStart = CACurrentMediaTime()
     private var fpsFrames = 0
+    private var carriageMarkerHistory: [CarriageMarker] = []
+    private var carriageMarkerMissCount = 0
+    private let carriageMarkerSmoothingWindow = 5
+    private let carriageMarkerHoldMisses = 6
+    private let carriageMarkerJumpResetDistance = 0.10
 
     init(role: CameraRole = .plotter) {
         self.role = role
@@ -161,7 +167,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 self.isReceivingFrames = false
                 self.isPaused = false
                 self.segments = []
-                self.carriageMarker = nil
+                self.clearCarriageMarkerObservation()
                 self.configureAndStart()
             }
         }
@@ -216,6 +222,9 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
     func clearCarriageMarkerObservation() {
         carriageMarker = nil
+        stabilizedCarriageMarker = nil
+        carriageMarkerHistory = []
+        carriageMarkerMissCount = 0
         stats.carriageMarkerStatus = "CAP --"
     }
 
@@ -487,12 +496,9 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
                 DispatchQueue.main.async {
                     self.segments = visionResult.segments
-                    self.carriageMarker = visionResult.carriageMarker
+                    self.publishCarriageMarkerObservation(visionResult.carriageMarker)
                     self.stats.frameNumber = frame
                     self.stats.segmentCount = visionResult.segments.count
-                    self.stats.carriageMarkerStatus = visionResult.carriageMarker.map {
-                        "CAP \($0.colorName)"
-                    } ?? "CAP --"
                     self.stats.analysisMilliseconds = elapsed
                     self.stats.cameraName = self.cameraName
                     if let changeResult {
@@ -513,6 +519,60 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 }
             }
         }
+    }
+
+    private func publishCarriageMarkerObservation(_ marker: CarriageMarker?) {
+        carriageMarker = marker
+        guard let marker else {
+            carriageMarkerMissCount += 1
+            if carriageMarkerMissCount > carriageMarkerHoldMisses {
+                stabilizedCarriageMarker = nil
+                carriageMarkerHistory = []
+                stats.carriageMarkerStatus = "CAP --"
+            } else if let stabilizedCarriageMarker {
+                stats.carriageMarkerStatus = "CAP \(stabilizedCarriageMarker.colorName) HOLD"
+            } else {
+                stats.carriageMarkerStatus = "CAP --"
+            }
+            return
+        }
+
+        if let previous = carriageMarkerHistory.last {
+            let dx = Double(marker.center.x - previous.center.x)
+            let dy = Double(marker.center.y - previous.center.y)
+            if hypot(dx, dy) > carriageMarkerJumpResetDistance {
+                carriageMarkerHistory.removeAll()
+            }
+        }
+
+        carriageMarkerMissCount = 0
+        carriageMarkerHistory.append(marker)
+        if carriageMarkerHistory.count > carriageMarkerSmoothingWindow {
+            carriageMarkerHistory.removeFirst(carriageMarkerHistory.count - carriageMarkerSmoothingWindow)
+        }
+        stabilizedCarriageMarker = averagedCarriageMarker(from: carriageMarkerHistory)
+        stats.carriageMarkerStatus = "CAP \(marker.colorName)"
+    }
+
+    private func averagedCarriageMarker(from markers: [CarriageMarker]) -> CarriageMarker? {
+        guard let latest = markers.last else { return nil }
+        let count = CGFloat(markers.count)
+        let centerX = markers.reduce(CGFloat.zero) { $0 + $1.center.x } / count
+        let centerY = markers.reduce(CGFloat.zero) { $0 + $1.center.y } / count
+        let boxX = markers.reduce(CGFloat.zero) { $0 + $1.boundingBox.origin.x } / count
+        let boxY = markers.reduce(CGFloat.zero) { $0 + $1.boundingBox.origin.y } / count
+        let boxWidth = markers.reduce(CGFloat.zero) { $0 + $1.boundingBox.width } / count
+        let boxHeight = markers.reduce(CGFloat.zero) { $0 + $1.boundingBox.height } / count
+        let pixelArea = markers.reduce(CGFloat.zero) { $0 + $1.pixelArea } / count
+        let strength = markers.reduce(0.0) { $0 + $1.strength } / Double(markers.count)
+        return CarriageMarker(
+            id: latest.id,
+            boundingBox: CGRect(x: boxX, y: boxY, width: boxWidth, height: boxHeight),
+            center: CGPoint(x: centerX, y: centerY),
+            pixelArea: pixelArea,
+            strength: strength,
+            colorName: latest.colorName
+        )
     }
 
     private func updateSettings(_ mutate: (inout AnalyzerSettings) -> Void) {
@@ -932,6 +992,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         isRunning = false
         isPaused = false
         segments = []
+        clearCarriageMarkerObservation()
         motionTracks = []
     }
 }

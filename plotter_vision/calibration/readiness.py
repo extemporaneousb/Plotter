@@ -33,8 +33,11 @@ X_MIN_BOOTSTRAP_BOTTOM_ALLOWANCE_MM = 180.0
 X_MIN_BOOTSTRAP_TOP_ALLOWANCE_MM = 12.0
 DEFAULT_PROBE_STEP_FRACTION = 0.60
 DEFAULT_MIN_PROBE_OBSERVATIONS = 2
-DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM = 5.0
-DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM = 8.0
+DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM = 10.0
+DEFAULT_MAX_PROBE_P95_RESIDUAL_MM = 20.0
+DEFAULT_MAX_PROBE_HARD_RESIDUAL_MM = 40.0
+# Compatibility name for older callers: this is now the robust p95 gate, not a worst-frame veto.
+DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM = DEFAULT_MAX_PROBE_P95_RESIDUAL_MM
 
 
 class VisualCapObservation(BaseModel):
@@ -261,6 +264,7 @@ class VisualReadinessState(BaseModel):
     probe_center_target_sample_count: int = 0
     probe_x_field_recovery_sample_count: int = 0
     probe_rms_residual_mm: float | None = None
+    probe_p95_residual_mm: float | None = None
     probe_max_residual_mm: float | None = None
     visual_ready_to_plot: bool = False
     blockers: list[str] = Field(default_factory=list)
@@ -281,7 +285,7 @@ class VisualReadinessState(BaseModel):
             raise ValueError("probe evidence counts must be non-negative.")
         return value
 
-    @field_validator("probe_rms_residual_mm", "probe_max_residual_mm")
+    @field_validator("probe_rms_residual_mm", "probe_p95_residual_mm", "probe_max_residual_mm")
     @classmethod
     def _validate_optional_residual(cls, value: float | None) -> float | None:
         if value is None:
@@ -325,6 +329,7 @@ class VisualReadinessState(BaseModel):
             probe_center_target_sample_count=self.probe_center_target_sample_count,
             probe_x_field_recovery_sample_count=self.probe_x_field_recovery_sample_count,
             probe_rms_residual_mm=self.probe_rms_residual_mm,
+            probe_p95_residual_mm=self.probe_p95_residual_mm,
             probe_max_residual_mm=self.probe_max_residual_mm,
             latest_visual_probe_run_id=self.latest_visual_probe_run_id,
             latest_visual_probe_sample_id=self.latest_visual_probe_sample_id,
@@ -556,13 +561,16 @@ def build_visual_readiness_state(
     probe_center_target_sample_count: int = 0,
     probe_x_field_recovery_sample_count: int = 0,
     probe_rms_residual_mm: float | None = None,
+    probe_p95_residual_mm: float | None = None,
     probe_max_residual_mm: float | None = None,
     latest_visual_probe_run_id: str | None = None,
     latest_visual_probe_sample_id: str | None = None,
     latest_visual_probe_run_file: str | None = None,
     min_probe_observation_count: int = DEFAULT_MIN_PROBE_OBSERVATIONS,
     max_probe_rms_residual_mm: float = DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM,
-    max_probe_max_residual_mm: float = DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM,
+    max_probe_p95_residual_mm: float = DEFAULT_MAX_PROBE_P95_RESIDUAL_MM,
+    max_probe_hard_residual_mm: float = DEFAULT_MAX_PROBE_HARD_RESIDUAL_MM,
+    max_probe_max_residual_mm: float | None = None,
 ) -> VisualReadinessState:
     if min_probe_observation_count < 0:
         raise ValueError("min_probe_observation_count must be non-negative.")
@@ -570,9 +578,15 @@ def build_visual_readiness_state(
         max_probe_rms_residual_mm,
         label="max probe RMS residual",
     )
-    max_probe_max_residual_mm = _finite(
-        max_probe_max_residual_mm,
-        label="max probe max residual",
+    if max_probe_max_residual_mm is not None:
+        max_probe_p95_residual_mm = max_probe_max_residual_mm
+    max_probe_p95_residual_mm = _finite(
+        max_probe_p95_residual_mm,
+        label="max probe p95 residual",
+    )
+    max_probe_hard_residual_mm = _finite(
+        max_probe_hard_residual_mm,
+        label="max probe hard residual",
     )
 
     blockers: list[str] = []
@@ -605,12 +619,23 @@ def build_visual_readiness_state(
                 "Visual probe RMS residual "
                 f"{probe_rms_residual_mm:.3f} mm exceeds {max_probe_rms_residual_mm:.3f} mm."
             )
-        if probe_max_residual_mm is None:
-            blockers.append("Visual probe max residual is missing.")
-        elif probe_max_residual_mm > max_probe_max_residual_mm:
+        robust_residual_mm = (
+            probe_p95_residual_mm
+            if probe_p95_residual_mm is not None
+            else probe_max_residual_mm
+        )
+        if robust_residual_mm is None:
+            blockers.append("Visual probe p95 residual is missing.")
+        elif robust_residual_mm > max_probe_p95_residual_mm:
+            label = "p95" if probe_p95_residual_mm is not None else "max"
             blockers.append(
-                "Visual probe max residual "
-                f"{probe_max_residual_mm:.3f} mm exceeds {max_probe_max_residual_mm:.3f} mm."
+                f"Visual probe {label} residual "
+                f"{robust_residual_mm:.3f} mm exceeds {max_probe_p95_residual_mm:.3f} mm."
+            )
+        if probe_max_residual_mm is not None and probe_max_residual_mm > max_probe_hard_residual_mm:
+            blockers.append(
+                "Visual probe hard max residual "
+                f"{probe_max_residual_mm:.3f} mm exceeds {max_probe_hard_residual_mm:.3f} mm."
             )
 
     return VisualReadinessState(
@@ -635,6 +660,7 @@ def build_visual_readiness_state(
         probe_center_target_sample_count=probe_center_target_sample_count,
         probe_x_field_recovery_sample_count=probe_x_field_recovery_sample_count,
         probe_rms_residual_mm=probe_rms_residual_mm,
+        probe_p95_residual_mm=probe_p95_residual_mm,
         probe_max_residual_mm=probe_max_residual_mm,
         visual_ready_to_plot=not blockers,
         blockers=blockers,

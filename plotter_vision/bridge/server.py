@@ -4253,6 +4253,7 @@ class PlotterBridge:
             center_target_sample_count=summary.center_target_sample_count,
             x_field_recovery_sample_count=summary.x_field_recovery_sample_count,
             rms_residual_mm=summary.rms_residual_mm,
+            p95_residual_mm=summary.p95_residual_mm,
             max_residual_mm=summary.max_residual_mm,
             latest_probe_run_id=run.run_id,
             latest_probe_sample_id=summary.latest_sample_id,
@@ -4409,6 +4410,7 @@ class PlotterBridge:
         center_target_sample_count: int | None = None,
         x_field_recovery_sample_count: int | None = None,
         rms_residual_mm: float | None = None,
+        p95_residual_mm: float | None = None,
         max_residual_mm: float | None = None,
         latest_probe_run_id: str | None = None,
         latest_probe_sample_id: str | None = None,
@@ -4466,6 +4468,11 @@ class PlotterBridge:
                 rms_residual_mm
                 if rms_residual_mm is not None
                 else (previous.probe_rms_residual_mm if previous is not None else None)
+            ),
+            probe_p95_residual_mm=(
+                p95_residual_mm
+                if p95_residual_mm is not None
+                else (previous.probe_p95_residual_mm if previous is not None else None)
             ),
             probe_max_residual_mm=(
                 max_residual_mm
