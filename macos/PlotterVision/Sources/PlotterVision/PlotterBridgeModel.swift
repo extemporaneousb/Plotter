@@ -63,14 +63,14 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var shapeSideMm = 35.0
     @Published var shapeCenterXNorm = 0.5
     @Published var shapeCenterYNorm = 0.5
-    @Published var shapeDrawFeedMmMin = 180.0
+    @Published var shapeDrawFeedMmMin = 240.0
     @Published var pathRevealProgress = 1.0
     @Published var pathAnimationStatus = "IDLE"
     @Published var isMachineBusy = false
     @Published var isMachineAlarm = false
     @Published var activeAction = ""
     @Published var manualStepMm = 1.0
-    @Published var manualFeedMmMin = 500.0
+    @Published var manualFeedMmMin = 600.0
 
     private let client = PlotterBridgeClient()
     private let diagnostics = AppDiagnostics.shared
@@ -1076,7 +1076,7 @@ final class PlotterBridgeModel: ObservableObject {
                     centerXMm: shapeCenterXNorm * workspaceXMm,
                     centerYMm: shapeCenterYNorm * workspaceYMm,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0
+                    travelFeedMmMin: 600.0
                 )
             )
             expectedPathSegments = response.simulation?.previewSegments ?? []
@@ -1130,7 +1130,7 @@ final class PlotterBridgeModel: ObservableObject {
                     centerXMm: centerXMm ?? shapeCenterXNorm * workspaceXMm,
                     centerYMm: centerYMm ?? shapeCenterYNorm * workspaceYMm,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0
+                    travelFeedMmMin: 600.0
                 )
             )
             shortStatus = response.dryRun ? "DRY" : "DONE"
@@ -1162,6 +1162,137 @@ final class PlotterBridgeModel: ObservableObject {
             isMachineBusy = false
             isMachineAlarm = true
             diagnosticsEvent("shape_draw_failed", errorPayload(error), snapshot: true)
+            return false
+        }
+    }
+
+    func drawVisualBindingBoundsFrame(points: [DotTestPreviewPoint]) async -> Bool {
+        guard canRunAbsoluteDrawing else {
+            drawVerifyStatus = "DRAW BLOCK"
+            drawVerifyDetail = drawPreflightMessage
+            statusText = drawPreflightMessage
+            diagnosticsEvent("visual_binding_bounds_frame_blocked", ["reason": drawPreflightMessage], snapshot: true)
+            return false
+        }
+        guard !points.isEmpty else {
+            drawVerifyStatus = "DRAW BLOCK"
+            drawVerifyDetail = "Binding frame requires preview points"
+            statusText = drawVerifyDetail
+            diagnosticsEvent("visual_binding_bounds_frame_blocked", ["reason": "missing_preview_points"], snapshot: true)
+            return false
+        }
+
+        let xs = points.map { $0.paperMm.x }
+        let ys = points.map { $0.paperMm.y }
+        guard let minX = xs.min(),
+              let maxX = xs.max(),
+              let minY = ys.min(),
+              let maxY = ys.max(),
+              maxX - minX > 1.0,
+              maxY - minY > 1.0 else {
+            drawVerifyStatus = "DRAW BLOCK"
+            drawVerifyDetail = "Binding frame bounds are degenerate"
+            statusText = drawVerifyDetail
+            diagnosticsEvent("visual_binding_bounds_frame_blocked", ["reason": "degenerate_bounds"], snapshot: true)
+            return false
+        }
+
+        isRunning = true
+        isMachineBusy = true
+        activeAction = "binding-bounds-frame"
+        shortStatus = "RUN"
+        drawVerifyStatus = "DRAW RUN"
+        drawVerifyKind = "visual_binding_bounds_frame"
+        drawVerifyLabel = "Binding Bounds Frame"
+        drawVerifyCommandId = ""
+        drawVerifyPlanHash = ""
+        drawVerifyDetail = "Drawing binding bounds frame"
+        statusText = drawVerifyDetail
+        diagnosticsEvent(
+            "visual_binding_bounds_frame_started",
+            [
+                "point_count": points.count,
+                "min_x_mm": minX,
+                "max_x_mm": maxX,
+                "min_y_mm": minY,
+                "max_y_mm": maxY
+            ],
+            snapshot: true
+        )
+        defer {
+            isRunning = false
+            activeAction = ""
+        }
+
+        do {
+            let response = try await client.drawPolygon(
+                BridgePolygonDrawRequest(
+                    program: BridgeDrawingProgramRequest(
+                        polylines: [
+                            BridgePolylinePrimitiveRequest(
+                                points: [
+                                    BridgePaperPointNormRequest(x: 0.0, y: 0.0),
+                                    BridgePaperPointNormRequest(x: 1.0, y: 0.0),
+                                    BridgePaperPointNormRequest(x: 1.0, y: 1.0),
+                                    BridgePaperPointNormRequest(x: 0.0, y: 1.0)
+                                ],
+                                role: "outline",
+                                closed: true
+                            )
+                        ]
+                    ),
+                    frame: BridgeDrawingFrameRequest(
+                        originXMm: minX,
+                        originYMm: minY,
+                        widthMm: maxX - minX,
+                        heightMm: maxY - minY,
+                        flipY: false
+                    ),
+                    includeHoming: false,
+                    visualPositionTrusted: visualBindingValid,
+                    drawFeedMmMin: min(600.0, max(240.0, shapeDrawFeedMmMin)),
+                    travelFeedMmMin: min(600.0, manualFeedMmMin),
+                    maxSegmentMm: 50.0,
+                    maxPolylineCount: 4,
+                    requestId: "binding-bounds-frame-\(UUID().uuidString.lowercased())"
+                )
+            )
+            shortStatus = response.dryRun ? "DRY" : (response.status == "completed" ? "DONE" : "ERR")
+            expectedPathSegments = response.simulation?.previewSegments ?? []
+            previewStatus = "SIM \(response.status.uppercased())"
+            let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
+            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: min(600.0, max(240.0, shapeDrawFeedMmMin)))
+            let segments = response.summary?.drawSegmentCount ?? 0
+            drawVerifyStatus = "DRAW \(response.status.uppercased())"
+            drawVerifyCommandId = response.commandId
+            drawVerifyDetail = "\(response.commandId) binding frame \(segments)s"
+            statusText = drawVerifyDetail
+            if let machineStatus = response.machineStatus {
+                applyMachineStatus(machineStatus)
+            } else {
+                await refreshMachineStatus()
+            }
+            isOnline = true
+            diagnosticsEvent(
+                "visual_binding_bounds_frame_completed",
+                [
+                    "command_id": response.commandId,
+                    "status": response.status,
+                    "dry_run": response.dryRun,
+                    "drawn_length_mm": drawnLength,
+                    "draw_segment_count": segments
+                ],
+                snapshot: true
+            )
+            return response.status == "completed"
+        } catch {
+            shortStatus = "ERR"
+            drawVerifyStatus = "DRAW ERR"
+            drawVerifyDetail = error.localizedDescription
+            statusText = error.localizedDescription
+            isMachineBusy = false
+            isMachineAlarm = true
+            diagnosticsEvent("visual_binding_bounds_frame_failed", errorPayload(error), snapshot: true)
             return false
         }
     }
@@ -1210,7 +1341,7 @@ final class PlotterBridgeModel: ObservableObject {
                     ),
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0,
+                    travelFeedMmMin: 600.0,
                     maxSegmentMm: 25.0
                 )
             )
@@ -1297,7 +1428,7 @@ final class PlotterBridgeModel: ObservableObject {
                         maxContours: 900
                     ),
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0,
+                    travelFeedMmMin: 600.0,
                     maxSegmentMm: 25.0
                 )
             )
@@ -1837,7 +1968,7 @@ final class PlotterBridgeModel: ObservableObject {
                 MachineRelativeMarkRequest(
                     markSizeMm: markSizeMm,
                     drawFeedMmMin: drawFeedMmMin,
-                    travelFeedMmMin: min(300.0, manualFeedMmMin)
+                    travelFeedMmMin: min(600.0, manualFeedMmMin)
                 )
             )
             if let machineStatus = response.machineStatus {
@@ -2160,7 +2291,7 @@ final class PlotterBridgeModel: ObservableObject {
                     markSizeMm: 6.0,
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0,
+                    travelFeedMmMin: 600.0,
                     maxSegmentMm: 25.0
                 )
             )
@@ -2409,7 +2540,7 @@ final class PlotterBridgeModel: ObservableObject {
                     markSizeMm: 6.0,
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 500.0,
+                    travelFeedMmMin: 600.0,
                     maxSegmentMm: 25.0,
                     expectedPlanHash: expectedHash
                 )

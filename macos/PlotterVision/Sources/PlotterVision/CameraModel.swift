@@ -698,12 +698,19 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         let centerY = Int(round((1.0 - yNorm) * Double(height - 1)))
         let radius = max(6, min(24, radiusPx))
         let ringRadius = min(max(radius + 6, radius * 2), 42)
+        let strokeBand = max(2, radius / 4)
 
         var centerTotal = 0.0
         var centerCount = 0.0
         var surroundTotal = 0.0
         var surroundCount = 0.0
         var darkCount = 0.0
+        var horizontalBandCount = 0.0
+        var horizontalDarkCount = 0.0
+        var verticalBandCount = 0.0
+        var verticalDarkCount = 0.0
+        var crossBandCount = 0.0
+        var crossDarkCount = 0.0
 
         for y in max(0, centerY - ringRadius)...min(height - 1, centerY + ringRadius) {
             let row = baseAddress.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt8.self)
@@ -742,8 +749,29 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 let green = Double(row[offset + 1])
                 let red = Double(row[offset + 2])
                 let luma = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255.0
+                let inHorizontalBand = abs(dy) <= strokeBand
+                let inVerticalBand = abs(dx) <= strokeBand
+                let inCrossBand = inHorizontalBand || inVerticalBand
+                if inHorizontalBand {
+                    horizontalBandCount += 1.0
+                }
+                if inVerticalBand {
+                    verticalBandCount += 1.0
+                }
+                if inCrossBand {
+                    crossBandCount += 1.0
+                }
                 if luma <= darkThreshold {
                     darkCount += 1.0
+                    if inHorizontalBand {
+                        horizontalDarkCount += 1.0
+                    }
+                    if inVerticalBand {
+                        verticalDarkCount += 1.0
+                    }
+                    if inCrossBand {
+                        crossDarkCount += 1.0
+                    }
                 }
             }
         }
@@ -752,7 +780,10 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             centerLuma: centerMean,
             surroundLuma: surroundMean,
             contrast: surroundMean - centerMean,
-            darkFraction: darkCount / centerCount
+            darkFraction: darkCount / centerCount,
+            horizontalDarkFraction: horizontalBandCount > 0 ? horizontalDarkCount / horizontalBandCount : 0.0,
+            verticalDarkFraction: verticalBandCount > 0 ? verticalDarkCount / verticalBandCount : 0.0,
+            crossDarkFraction: crossBandCount > 0 ? crossDarkCount / crossBandCount : 0.0
         )
     }
 

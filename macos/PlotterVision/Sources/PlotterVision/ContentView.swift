@@ -15,9 +15,6 @@ private let visualCapReacquireMaxAttempts = 2
 private let visualCapFreshFrameAdvance = 3
 private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
-private let visualCalibrationMarkSizeMm = 6.0
-private let visualCalibrationRetryMarkSizeMm = 10.0
-private let visualCalibrationParkMm = 24.0
 
 struct ContentView: View {
     @StateObject private var plotterCamera = CameraModel(role: .plotter)
@@ -640,7 +637,7 @@ struct ContentView: View {
     ) async -> FrameLearningSample? {
         let commandDx = axis == "X" ? distanceMm : 0.0
         let commandDy = axis == "Y" ? distanceMm : 0.0
-        let feedMmMin = min(300.0, bridge.manualFeedMmMin)
+        let feedMmMin = min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
         var attempt = 0
 
         while attempt <= visualCapReacquireMaxAttempts {
@@ -651,7 +648,7 @@ struct ContentView: View {
                           source: "probe_before_move",
                           label: "\(axis)-\(sampleIndex)",
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
-                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
                               await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
@@ -723,7 +720,7 @@ struct ContentView: View {
                           source: "probe_after_move",
                           label: "\(axis)-\(sampleIndex)",
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
-                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
                               await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
@@ -874,7 +871,7 @@ struct ContentView: View {
                 bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
                 bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
                 bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
-                feedMmMin: min(300.0, bridge.manualFeedMmMin)
+                feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
             ), preview.status == "ready",
                let plan = preview.plan,
                plan.planMode == "x_min_bootstrap",
@@ -923,7 +920,7 @@ struct ContentView: View {
                 bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
                 bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
                 bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
-                feedMmMin: min(300.0, bridge.manualFeedMmMin)
+                feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
             ), response.status == "completed" else {
                 clearVisualMoveIntent(reason: "bootstrap_move_failed")
                 frameLearning.status = "STOP"
@@ -1116,7 +1113,7 @@ struct ContentView: View {
                 "source": source,
                 "step_x_mm": visualProbeFieldRecoveryStepXMm,
                 "max_total_x_mm": visualProbeFieldRecoveryMaxTotalXMm,
-                "feed_mm_min": min(240.0, bridge.manualFeedMmMin)
+                "feed_mm_min": min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
             ]
         )
 
@@ -1138,7 +1135,7 @@ struct ContentView: View {
             guard let response = await bridge.learningJog(
                 axis: "X",
                 distanceMm: commandMm,
-                feedMmMin: min(240.0, bridge.manualFeedMmMin)
+                feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
             ) else {
                 calibrationStatusText = "CAL move-X stopped: move failed"
                 frameLearning.detail = "Move-X recovery failed"
@@ -1956,91 +1953,64 @@ struct ContentView: View {
 
         let bindingCommandId = bridge.dotTestPreviewCommandId
         var visibleCount = 0
+        var failedPointIds: [String] = []
         for (index, point) in targets.enumerated() {
             bridge.visualCenterDotStatus = String(format: "VIS %@ %d/%d", point.pointId, index + 1, targets.count)
-            guard let final = await approachVisualTarget(
-                point.paperMm,
-                label: point.pointId,
-                targetIndex: index + 1
-            ) else {
-                return
-            }
-            let finalDistance = paperDistance(from: final.paperMm, to: point.paperMm)
-            guard finalDistance <= 4.0 else {
-                bridge.visualCenterDotStatus = String(format: "VIS OFF %.1f", finalDistance)
-                calibrationStatusText = String(
-                    format: "CAL visual %@ stopped %.1fmm from %@; no mark",
-                    pattern,
-                    finalDistance,
-                    point.pointId
-                )
-                return
-            }
-
-            guard await bridge.relativeMarkCurrentPosition(
-                markSizeMm: visualCalibrationMarkSizeMm,
-                drawFeedMmMin: min(140.0, bridge.shapeDrawFeedMmMin)
-            ) else {
-                calibrationStatusText = "CAL visual \(pattern) reached \(point.pointId); mark failed"
-                return
-            }
-
-            let parked = await parkAwayFromMark(
-                markPaperPoint: point.paperMm,
-                label: point.pointId
-            )
-            guard parked else { return }
-            let inkResult = await inspectInkAt(point)
-            if inkResult?.isVisible == true {
-                guard await recordVisualBindingInkObservation(
-                    point: point,
-                    commandId: bindingCommandId,
-                    inkResult: inkResult
-                ) else { return }
+            if await runVisualBindingPoint(
+                pattern: pattern,
+                point: point,
+                index: index,
+                total: targets.count,
+                bindingCommandId: bindingCommandId
+            ) {
                 visibleCount += 1
-                bridge.visualCenterDotStatus = String(format: "VIS %@ OK", point.pointId)
-                continue
-            }
-
-            calibrationStatusText = "CAL \(point.pointId) weak ink; retrying larger mark"
-            guard await approachVisualTarget(point.paperMm, label: "\(point.pointId)-retry", targetIndex: index + 1) != nil else {
-                return
-            }
-            guard await bridge.relativeMarkCurrentPosition(
-                markSizeMm: visualCalibrationRetryMarkSizeMm,
-                drawFeedMmMin: min(120.0, bridge.shapeDrawFeedMmMin)
-            ) else {
-                calibrationStatusText = "CAL visual \(pattern) retry mark failed"
-                return
-            }
-            guard await parkAwayFromMark(markPaperPoint: point.paperMm, label: "\(point.pointId)-retry") else {
-                return
-            }
-            let retryInkResult = await inspectInkAt(point)
-            if retryInkResult?.isVisible == true {
-                guard await recordVisualBindingInkObservation(
-                    point: point,
-                    commandId: bindingCommandId,
-                    inkResult: retryInkResult
-                ) else { return }
-                visibleCount += 1
-                bridge.visualCenterDotStatus = String(format: "VIS %@ OK+", point.pointId)
             } else {
-                bridge.visualCenterDotStatus = String(format: "VIS %@ WEAK", point.pointId)
-                calibrationStatusText = "CAL visual \(pattern) \(point.pointId) ink still weak after larger mark"
+                failedPointIds.append(point.pointId)
                 if pattern == "center" { return }
             }
         }
 
         bridge.visualCenterDotStatus = String(format: "VIS MARK %d/%d", visibleCount, targets.count)
+        let requiredObservations = pattern == "five" ? targets.count : 1
+        guard visibleCount >= requiredObservations else {
+            bridge.visualBindingStatus = String(format: "BIND INCOMPLETE %d/%d", visibleCount, requiredObservations)
+            bridge.visualBindingDetail = "Accepted ink observations: \(visibleCount)/\(requiredObservations); failed \(failedPointIds.joined(separator: ","))"
+            calibrationStatusText = "CAL visual \(pattern) incomplete; accepted \(visibleCount)/\(requiredObservations); failed \(failedPointIds.joined(separator: ","))"
+            bridge.recordOperatorEvent(
+                "visual_binding_incomplete",
+                details: [
+                    "pattern": pattern,
+                    "accepted_count": visibleCount,
+                    "required_count": requiredObservations,
+                    "failed_points": failedPointIds.joined(separator: ",")
+                ]
+            )
+            return
+        }
+
         let solved = await bridge.solveVisualBinding(requestId: "wizard-binding-\(pattern)")
-        calibrationStatusText = solved
-            ? String(format: "CAL visual %@ complete; binding validated %d/%d", pattern, visibleCount, targets.count)
-            : String(format: "CAL visual %@ complete; ink visible %d/%d; %@", pattern, visibleCount, targets.count, bridge.visualBindingStatus)
+        guard solved else {
+            calibrationStatusText = String(format: "CAL visual %@ complete; ink visible %d/%d; %@", pattern, visibleCount, targets.count, bridge.visualBindingStatus)
+            return
+        }
+
+        if pattern == "five" {
+            bridge.visualCenterDotStatus = "VIS FRAME"
+            let frameDrawn = await bridge.drawVisualBindingBoundsFrame(points: targets)
+            if frameDrawn {
+                bridge.visualCenterDotStatus = "VIS READY"
+                calibrationStatusText = "CAL visual five ready for drawing; binding validated and bounds frame drawn"
+            } else {
+                bridge.visualCenterDotStatus = "VIS FRAME FAIL"
+                calibrationStatusText = "CAL visual five binding validated; bounds frame failed: \(bridge.drawVerifyDetail)"
+            }
+        } else {
+            calibrationStatusText = String(format: "CAL visual %@ complete; binding validated %d/%d", pattern, visibleCount, targets.count)
+        }
     }
 
     @MainActor
-    private func recordVisualBindingInkObservation(
+    func recordVisualBindingInkObservation(
         point: DotTestPreviewPoint,
         commandId: String,
         inkResult: InkInspectionResult?
@@ -2051,7 +2021,10 @@ struct ContentView: View {
             bridge.visualBindingDetail = "Preview expected geometry before binding observation"
             return false
         }
-        let confidence = min(1.0, max(0.25, inkResult?.darkFraction ?? 0.5))
+        let rawConfidence = inkResult.map {
+            max($0.darkFraction, $0.crossDarkFraction, $0.strokeScore)
+        } ?? 0.5
+        let confidence = min(1.0, max(0.25, rawConfidence))
         guard await bridge.observeVisualBindingPoint(
             commandId: commandId,
             point: point,
@@ -2068,7 +2041,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func approachVisualTarget(
+    func approachVisualTarget(
         _ target: PaperPointMmSnapshot,
         label: String,
         targetIndex: Int
@@ -2088,7 +2061,7 @@ struct ContentView: View {
         let maxResidualRetries = 6
         let minimumCommandCapMm = 3.0
         let maximumCommandCapMm = 18.0
-        let feedMmMin = min(300.0, bridge.manualFeedMmMin)
+        let feedMmMin = min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
         var goodSegments = 0
         var residualRetries = 0
         var noNewFrameReacquires = 0
@@ -2188,7 +2161,7 @@ struct ContentView: View {
                           source: "visual_target_no_new_frame",
                           label: label,
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandX),
-                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
                               await bridge.visualRelativeMove(xMm: commandMm, yMm: 0.0, feedMmMin: feedMmMin)
                           }
@@ -2555,7 +2528,11 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func parkAwayFromMark(markPaperPoint: PaperPointMmSnapshot, label: String) async -> Bool {
+    func parkAwayFromMark(
+        markPaperPoint: PaperPointMmSnapshot,
+        label: String,
+        attemptIndex: Int
+    ) async -> Bool {
         guard let current = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0),
               let model = visualMotionModel,
               model.isUsable else {
@@ -2564,9 +2541,7 @@ struct ContentView: View {
             return false
         }
 
-        let parkDx = markPaperPoint.x + visualCalibrationParkMm <= bridge.workspaceXMm - 2.0
-            ? visualCalibrationParkMm
-            : -visualCalibrationParkMm
+        let parkDx = visualCalibrationParkDx(for: markPaperPoint, attemptIndex: attemptIndex)
         let parkDy = 0.0
         guard let machineDelta = model.machineDelta(forPaperDx: parkDx, paperDy: parkDy) else {
             bridge.visualCenterDotStatus = "VIS PARK SOLVE"
@@ -2581,35 +2556,52 @@ struct ContentView: View {
                 y: current.paperMm.y + parkDy
             ),
             label: "PARK \(label)",
-            detail: String(format: "cmd X%+.1f Y%+.1f", machineDelta.xMm, machineDelta.yMm)
+            detail: String(format: "try %d cmd X%+.1f Y%+.1f", attemptIndex, machineDelta.xMm, machineDelta.yMm)
         )
         guard await bridge.visualRelativeMove(
             xMm: machineDelta.xMm,
             yMm: machineDelta.yMm,
-            feedMmMin: min(300.0, bridge.manualFeedMmMin)
+            feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
         ) != nil else {
             clearVisualMoveIntent(reason: "park_move_failed")
             calibrationStatusText = "CAL visual \(label) park move failed"
             return false
         }
         try? await Task.sleep(nanoseconds: 650_000_000)
-        _ = await waitForGreenCapPaperObservation(afterFrame: current.frameNumber, timeoutSeconds: 3.0)
+        guard await waitForFreshGreenCapPaperObservation(
+            afterFrame: current.frameNumber,
+            timeoutSeconds: 3.0
+        ) != nil else {
+            clearVisualMoveIntent(reason: "park_no_fresh_frame")
+            bridge.visualCenterDotStatus = "VIS PARK NOFRAME"
+            calibrationStatusText = "CAL visual \(label) park did not produce a fresh cap frame"
+            bridge.recordOperatorEvent(
+                "visual_binding_park_no_fresh_frame",
+                details: [
+                    "label": label,
+                    "attempt": attemptIndex,
+                    "park_dx_mm": parkDx,
+                    "before_frame": current.frameNumber
+                ]
+            )
+            return false
+        }
         clearVisualMoveIntent(reason: "park_observed")
         return true
     }
 
     @MainActor
-    private func inspectInkAt(_ point: DotTestPreviewPoint) async -> InkInspectionResult? {
+    func inspectInkAt(_ point: DotTestPreviewPoint, radiusPx: Int = 12) async -> InkInspectionResult? {
         try? await Task.sleep(nanoseconds: 300_000_000)
         let cameraPoint = CGPoint(x: point.cameraNorm.x, y: point.cameraNorm.y)
-        let result = plotterCamera.inspectInk(cameraPoint: cameraPoint)
+        let result = plotterCamera.inspectInk(cameraPoint: cameraPoint, radiusPx: radiusPx)
         calibrationStatusText = result.map {
             "CAL \(point.pointId) \($0.summary)"
         } ?? "CAL \(point.pointId) ink check unavailable"
         return result
     }
 
-    private func paperDistance(from point: PaperPointMmSnapshot, to target: PaperPointMmSnapshot) -> Double {
+    func paperDistance(from point: PaperPointMmSnapshot, to target: PaperPointMmSnapshot) -> Double {
         hypot(target.x - point.x, target.y - point.y)
     }
 

@@ -281,6 +281,33 @@ struct BridgeDrawingFrameRequest: Encodable {
     let flipY: Bool
 }
 
+struct BridgePaperPointNormRequest: Encodable {
+    let x: Double
+    let y: Double
+}
+
+struct BridgePolylinePrimitiveRequest: Encodable {
+    let points: [BridgePaperPointNormRequest]
+    let role: String
+    let closed: Bool
+}
+
+struct BridgeDrawingProgramRequest: Encodable {
+    let polylines: [BridgePolylinePrimitiveRequest]
+}
+
+struct BridgePolygonDrawRequest: Encodable {
+    let program: BridgeDrawingProgramRequest
+    let frame: BridgeDrawingFrameRequest?
+    let includeHoming: Bool
+    let visualPositionTrusted: Bool
+    let drawFeedMmMin: Double
+    let travelFeedMmMin: Double
+    let maxSegmentMm: Double
+    let maxPolylineCount: Int
+    let requestId: String?
+}
+
 struct BridgeLuminanceRasterRequest: Encodable {
     let samples: [[Double]]
 }
@@ -364,6 +391,20 @@ struct BridgeFaceRasterDrawResponse: Decodable {
     let simulation: BridgeShapeSimulation?
     let summary: BridgePolygonDrawSummary?
     let rasterSummary: BridgeRasterPolygonSummary?
+    let previewOverlay: BridgePreviewOverlay?
+    let eventLog: String
+    let controllerTranscript: String?
+    let machineStatus: MachineStatusResponse?
+    let error: String?
+}
+
+struct BridgePolygonDrawResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let plannedCommands: [String]
+    let simulation: BridgeShapeSimulation?
+    let summary: BridgePolygonDrawSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
@@ -899,6 +940,10 @@ final class PlotterBridgeClient {
 
     func previewShape(_ request: BridgeShapeExecutionRequest) async throws -> BridgeShapeExecutionResponse {
         try await post(path: "draw/shape/preview", request: request)
+    }
+
+    func drawPolygon(_ request: BridgePolygonDrawRequest) async throws -> BridgePolygonDrawResponse {
+        try await post(path: "draw/polygon", request: request)
     }
 
     func drawFaceRaster(_ request: BridgeFaceRasterDrawRequest) async throws -> BridgeFaceRasterDrawResponse {

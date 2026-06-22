@@ -27,17 +27,29 @@ struct InkInspectionResult: Equatable {
     let surroundLuma: Double
     let contrast: Double
     let darkFraction: Double
+    let horizontalDarkFraction: Double
+    let verticalDarkFraction: Double
+    let crossDarkFraction: Double
+
+    var strokeScore: Double {
+        min(horizontalDarkFraction, verticalDarkFraction)
+    }
 
     var isVisible: Bool {
-        contrast >= 0.05 && darkFraction >= 0.10
+        let centerVisible = contrast >= 0.05 && darkFraction >= 0.10
+        let crossVisible = contrast >= 0.035 && strokeScore >= 0.12 && crossDarkFraction >= 0.12
+        return centerVisible || crossVisible
     }
 
     var summary: String {
         String(
-            format: "ink %@ contrast %.2f dark %.0f%%",
+            format: "ink %@ contrast %.2f dark %.0f%% stroke %.0f/%.0f%% cross %.0f%%",
             isVisible ? "visible" : "weak",
             contrast,
-            darkFraction * 100
+            darkFraction * 100,
+            horizontalDarkFraction * 100,
+            verticalDarkFraction * 100,
+            crossDarkFraction * 100
         )
     }
 }

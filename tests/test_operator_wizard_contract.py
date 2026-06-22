@@ -141,6 +141,42 @@ def test_wizard_drives_visual_position_binding_loop() -> None:
     assert 'post(path: "calibration/binding/solve"' in client
 
 
+def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    runner = _read(SWIFT_DIR / "VisualBindingMarkRunner.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+
+    assert "visualCalibrationMaxMarkAttempts = 4" in runner
+    assert "visualCalibrationParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]" in runner
+    assert "visual_binding_mark_attempt" in runner
+    assert "visual_binding_incomplete" in content
+    assert "BIND INCOMPLETE" in content
+    assert "solveVisualBinding" in content
+    assert content.find("guard visibleCount >= requiredObservations") < content.find("solveVisualBinding")
+    assert "drawVisualBindingBoundsFrame(points: targets)" in content
+    assert "VIS READY" in content
+    assert "waitForFreshGreenCapPaperObservation" in content.split("func parkAwayFromMark", 1)[1]
+    assert "visualCalibrationTravelFeedMmMin = 600.0" in runner
+
+    assert "horizontalDarkFraction" in models
+    assert "verticalDarkFraction" in models
+    assert "crossDarkFraction" in models
+    assert "strokeScore" in models
+    assert "inHorizontalBand" in camera_model
+    assert "inVerticalBand" in camera_model
+
+    assert "BridgePolygonDrawRequest" in client
+    assert 'post(path: "draw/polygon"' in client
+    assert "func drawVisualBindingBoundsFrame" in model
+    assert '"visual_binding_bounds_frame_started"' in model
+    assert '"visual_binding_bounds_frame_completed"' in model
+    assert "shapeDrawFeedMmMin = 240.0" in model
+    assert "manualFeedMmMin = 600.0" in model
+
+
 def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
