@@ -6,7 +6,6 @@ struct AnalyzerSettings: Equatable {
     var sensitivity = 0.68
     var minAreaRatio = 0.0008
     var maxSegments = 54
-    var redFiducialsEnabled = true
     var greenMarkerEnabled = true
     var capMarkerColorTarget: CapMarkerColorTarget?
     var changeEnabled = true
@@ -113,18 +112,6 @@ struct VisionSegment: Identifiable, Equatable {
     }
 }
 
-struct FiducialMark: Identifiable, Equatable {
-    let id: Int
-    let boundingBox: CGRect
-    let center: CGPoint
-    let pixelArea: CGFloat
-    let strength: Double
-
-    var label: String {
-        String(format: "FID-%02d %.0f%%", id, strength * 100)
-    }
-}
-
 struct CarriageMarker: Identifiable, Equatable {
     let id: Int
     let boundingBox: CGRect
@@ -159,38 +146,21 @@ struct ManualFiducialPoint: Identifiable, Equatable {
     }
 }
 
-struct ObservedPenPoint: Identifiable, Equatable {
+struct ConfirmedCapPoint: Identifiable, Equatable {
     let id = UUID()
     var point: CGPoint
     var cameraPoint: CGPoint
     var paperMm: PaperPointMmSnapshot?
 
     var label: String {
-        guard let paperMm else { return "CAP PAPER ?" }
-        return String(format: "CAP %.1f,%.1f mm", paperMm.x, paperMm.y)
-    }
-}
-
-struct PaperRegistration: Identifiable, Equatable {
-    let id: Int
-    let frameNumber: Int
-    let fiducialCount: Int
-    let quad: [CGPoint]
-    let boundingBox: CGRect
-    let confidence: Double
-
-    var status: String {
-        if fiducialCount >= 4 { return "LOCK" }
-        if fiducialCount >= 3 { return "WEAK" }
-        return "SEEK"
+        guard let paperMm else { return "CONF CAP PAPER ?" }
+        return String(format: "CONF CAP %.1f,%.1f mm", paperMm.x, paperMm.y)
     }
 }
 
 struct VisionAnalysisResult {
     let segments: [VisionSegment]
-    let fiducials: [FiducialMark]
     let carriageMarker: CarriageMarker?
-    let paperRegistration: PaperRegistration?
     let elapsedMilliseconds: Double
 }
 
@@ -201,26 +171,6 @@ struct FaceRasterSample: Equatable {
     let faceBounds: CGRect
     let frameNumber: Int
     let confidence: Double
-}
-
-struct PaperCalibrationObservation: Codable, Equatable {
-    var type = "paper.registration"
-    var schema = 1
-    let cameraID: String
-    let cameraName: String
-    let frameNumber: Int
-    let videoSize: NormSize
-    let fiducials: [PaperFiducialSample]
-    let paperQuadNorm: [NormPoint]
-    let confidence: Double
-}
-
-struct PaperFiducialSample: Codable, Equatable {
-    let id: Int
-    let centerNorm: NormPoint
-    let bboxNorm: NormRect
-    let strength: Double
-    let pixelArea: Double
 }
 
 struct NormPoint: Codable, Equatable {
@@ -260,8 +210,6 @@ struct NormSize: Codable, Equatable {
 struct AnalysisStats: Equatable {
     var frameNumber = 0
     var segmentCount = 0
-    var fiducialCount = 0
-    var paperStatus = "SEEK"
     var motionCount = 0
     var carriageMarkerStatus = "CAP --"
     var reportNumber = 0

@@ -4,28 +4,30 @@ import pytest
 
 from plotter_vision.calibration.paper import (
     PaperCornerObservation,
-    PaperFiducialDetection,
     PaperPointMM,
     build_paper_frame_registration,
-    build_paper_registration_from_red_fiducials,
     paper_corner_norm,
 )
 from plotter_vision.calibration.vision_model import CameraPointNorm
 
 
-def test_paper_registration_solves_homography_from_red_fiducials() -> None:
-    detections = [
-        PaperFiducialDetection(observed_norm=CameraPointNorm(x=x, y=y), strength=strength)
-        for x, y, strength in [
-            (*_project_paper_to_camera(1.0, 1.0), 0.86),
-            (*_project_paper_to_camera(0.0, 0.0), 0.91),
-            (*_project_paper_to_camera(0.0, 1.0), 0.84),
-            (*_project_paper_to_camera(1.0, 0.0), 0.88),
+def test_paper_registration_solves_homography_from_manual_corners() -> None:
+    corners = [
+        PaperCornerObservation(
+            corner=corner,  # type: ignore[arg-type]
+            expected_paper_norm=paper_corner_norm(corner),  # type: ignore[arg-type]
+            observed_norm=CameraPointNorm(x=x, y=y),
+        )
+        for corner, x, y in [
+            ("bottom_left", *_project_paper_to_camera(0.0, 0.0)),
+            ("bottom_right", *_project_paper_to_camera(1.0, 0.0)),
+            ("top_right", *_project_paper_to_camera(1.0, 1.0)),
+            ("top_left", *_project_paper_to_camera(0.0, 1.0)),
         ]
     ]
 
-    registration = build_paper_registration_from_red_fiducials(
-        detections,
+    registration = build_paper_frame_registration(
+        corners,
         paper_width_mm=210.0,
         paper_height_mm=297.0,
     )
@@ -51,13 +53,20 @@ def test_paper_registration_solves_homography_from_red_fiducials() -> None:
     assert camera_top_right.y == pytest.approx(expected_top_right[1], abs=1e-12)
 
 
-def test_paper_registration_rejects_missing_fiducials() -> None:
-    with pytest.raises(ValueError, match="four red paper fiducials"):
-        build_paper_registration_from_red_fiducials(
+def test_paper_registration_rejects_missing_corners() -> None:
+    with pytest.raises(ValueError, match="four paper corner observations"):
+        build_paper_frame_registration(
             [
-                PaperFiducialDetection(observed_norm=CameraPointNorm(x=0.1, y=0.1)),
-                PaperFiducialDetection(observed_norm=CameraPointNorm(x=0.8, y=0.1)),
-                PaperFiducialDetection(observed_norm=CameraPointNorm(x=0.8, y=0.8)),
+                PaperCornerObservation(
+                    corner=corner,  # type: ignore[arg-type]
+                    expected_paper_norm=paper_corner_norm(corner),  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=x, y=y),
+                )
+                for corner, x, y in [
+                    ("bottom_left", 0.1, 0.1),
+                    ("bottom_right", 0.8, 0.1),
+                    ("top_right", 0.8, 0.8),
+                ]
             ],
             paper_width_mm=210.0,
             paper_height_mm=297.0,

@@ -84,10 +84,6 @@ struct MachineControlPanel: View {
                 statusValue(bridge.machineWPos.replacingOccurrences(of: "W ", with: ""))
             }
             GridRow {
-                statusLabel("Model")
-                statusValue(bridge.modelStatus.replacingOccurrences(of: "MODEL ", with: ""))
-            }
-            GridRow {
                 statusLabel("Mode")
                 statusValue(bridge.motionModeLabel)
             }

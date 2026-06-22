@@ -15,7 +15,7 @@ from pathlib import Path
 from socketserver import TCPServer
 from threading import Lock
 from typing import Any, Callable, Literal
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -23,12 +23,10 @@ from plotter_vision import __version__ as PLOTTER_VERSION
 from plotter_vision.calibration.paper import (
     PaperCorner,
     PaperCornerObservation,
-    PaperFiducialDetection,
     PaperFrameRegistration,
     PaperPointMM,
     paper_corner_norm,
     build_paper_frame_registration,
-    build_paper_registration_from_red_fiducials,
 )
 from plotter_vision.calibration.binding import (
     ObservedGeometrySample,
@@ -57,14 +55,11 @@ from plotter_vision.calibration.readiness import (
     evaluate_cap_inside_safe_zone,
     plan_adaptive_visual_probe,
 )
-from plotter_vision.calibration.session import CalibrationSession, build_calibration_session
-from plotter_vision.calibration.synthetic import synthetic_observations
+from plotter_vision.calibration.session import build_calibration_session
 from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
     LogicalPointMM,
-    MachinePointMM,
     PaperPointNorm,
-    VisionCalibrationObservation,
 )
 from plotter_vision.bridge.planner import (
     ShapeExecutionPlan,
@@ -278,14 +273,6 @@ class ShapeExecutionResponse(BaseModel):
     error: str | None = None
 
 
-class CalibrationStartRequest(BaseModel):
-    margin_mm: float = 25.0
-    travel_feed_mm_min: float = 500.0
-    include_homing: bool = False
-    simulate_observations: bool = False
-    synthetic_noise_norm: float = 0.0
-
-
 class CalibrationMarkPlanRequest(BaseModel):
     margin_mm: float = 25.0
     mark_size_mm: float = 4.0
@@ -296,22 +283,11 @@ class CalibrationMarkPlanRequest(BaseModel):
     request_id: str | None = None
 
 
-class CalibrationObservationRequest(BaseModel):
-    session_id: str
-    point_id: str
-    observed_norm: CameraPointNorm
-    observed_paper_norm: PaperPointNorm | None = None
-    reported_machine_mm: MachinePointMM | None = None
-    camera_id: str | None = None
-    camera_name: str | None = None
-    strength: float = 1.0
-
-
 class PaperRegistrationCornerRequest(BaseModel):
     corner: PaperCorner
     observed_norm: CameraPointNorm
     strength: float = 1.0
-    observation_source: Literal["manual_click", "red_fiducial", "synthetic"] = "manual_click"
+    observation_source: Literal["manual_click", "synthetic"] = "manual_click"
     camera_id: str | None = None
     camera_name: str | None = None
 
@@ -320,20 +296,6 @@ class PaperRegistrationRequest(BaseModel):
     paper_width_mm: float | None = None
     paper_height_mm: float | None = None
     corners: list[PaperRegistrationCornerRequest] = Field(default_factory=list)
-    detections: list[PaperFiducialDetection] = Field(default_factory=list)
-
-
-class CalibrationSessionResponse(BaseModel):
-    session_id: str
-    status: str
-    dry_run: bool
-    planned_commands: list[str]
-    waypoints: list[dict[str, Any]]
-    observed_count: int
-    model: dict[str, Any]
-    session_file: str
-    latest_model_file: str | None = None
-    error: str | None = None
 
 
 class PaperRegistrationResponse(BaseModel):
@@ -1785,107 +1747,6 @@ class PlotterBridge:
                 error=str(exc),
             )
 
-    def start_calibration(self, request: CalibrationStartRequest) -> CalibrationSessionResponse:
-        try:
-            machine = self._load_machine_config()
-            session = build_calibration_session(
-                machine=machine,
-                margin_mm=request.margin_mm,
-                travel_feed_mm_min=request.travel_feed_mm_min,
-                include_homing=request.include_homing,
-            )
-            if request.simulate_observations:
-                observations = synthetic_observations(
-                    machine=machine,
-                    logical_points=[waypoint.logical_mm for waypoint in session.waypoints],
-                    command_id=session.session_id,
-                    noise_norm=request.synthetic_noise_norm,
-                )
-                for observation in observations:
-                    session.add_observation(observation)
-
-            self._save_calibration_session(session)
-            self.event_log.emit(
-                "calibration.session_started",
-                command_id=session.session_id,
-                status=session.status,
-                payload={
-                    "point_count": len(session.waypoints),
-                    "simulate_observations": request.simulate_observations,
-                    "dry_run": self.config.dry_run,
-                },
-            )
-            return self._calibration_response(session)
-        except Exception as exc:
-            session_id = f"cal-{uuid.uuid4().hex[:12]}"
-            self.event_log.emit(
-                "calibration.session_failed",
-                command_id=session_id,
-                status="failed",
-                payload={"error": str(exc)},
-            )
-            return CalibrationSessionResponse(
-                session_id=session_id,
-                status="failed",
-                dry_run=self.config.dry_run,
-                planned_commands=[],
-                waypoints=[],
-                observed_count=0,
-                model={},
-                session_file="",
-                error=str(exc),
-            )
-
-    def add_calibration_observation(
-        self,
-        request: CalibrationObservationRequest,
-    ) -> CalibrationSessionResponse:
-        try:
-            session = self._load_calibration_session(request.session_id)
-            waypoint = next(
-                waypoint for waypoint in session.waypoints if waypoint.point_id == request.point_id
-            )
-            observation = VisionCalibrationObservation(
-                command_id=session.session_id,
-                point_id=waypoint.point_id,
-                role=waypoint.role,
-                observation_source="manual_click",
-                expected_logical_mm=waypoint.logical_mm,
-                expected_paper_norm=waypoint.paper_norm,
-                commanded_machine_mm=waypoint.machine_mm,
-                reported_machine_mm=request.reported_machine_mm,
-                observed_norm=request.observed_norm,
-                observed_paper_norm=request.observed_paper_norm,
-                camera_id=request.camera_id,
-                camera_name=request.camera_name,
-                strength=request.strength,
-            )
-            session.add_observation(observation)
-            self._save_calibration_session(session)
-            self.event_log.emit(
-                "calibration.observation_added",
-                command_id=session.session_id,
-                status=session.status,
-                payload={
-                    "point_id": waypoint.point_id,
-                    "observed_count": session.observed_count,
-                },
-            )
-            return self._calibration_response(session)
-        except StopIteration:
-            return self._calibration_error(
-                session_id=request.session_id,
-                error=f"Unknown calibration point_id {request.point_id!r}.",
-            )
-        except Exception as exc:
-            return self._calibration_error(session_id=request.session_id, error=str(exc))
-
-    def calibration_status(self, session_id: str) -> CalibrationSessionResponse:
-        try:
-            return self._calibration_response(self._load_calibration_session(session_id))
-        except Exception as exc:
-            return self._calibration_error(session_id=session_id, error=str(exc))
-
     def preview_calibration_marks(
         self,
         request: CalibrationMarkPlanRequest,
@@ -2026,32 +1887,25 @@ class PlotterBridge:
             machine = self._load_machine_config()
             paper_width_mm = request.paper_width_mm or machine.axes.x.travel_mm
             paper_height_mm = request.paper_height_mm or machine.axes.y.travel_mm
-            if request.corners:
-                corner_observations = [
-                    PaperCornerObservation(
-                        corner=corner.corner,
-                        expected_paper_norm=paper_corner_norm(corner.corner),
-                        observed_norm=corner.observed_norm,
-                        strength=corner.strength,
-                        observation_source=corner.observation_source,
-                        camera_id=corner.camera_id,
-                        camera_name=corner.camera_name,
-                    )
-                    for corner in request.corners
-                ]
-                registration = build_paper_frame_registration(
-                    corner_observations,
-                    paper_width_mm=paper_width_mm,
-                    paper_height_mm=paper_height_mm,
+            if not request.corners:
+                raise ValueError("Provide four paper corner observations.")
+            corner_observations = [
+                PaperCornerObservation(
+                    corner=corner.corner,
+                    expected_paper_norm=paper_corner_norm(corner.corner),
+                    observed_norm=corner.observed_norm,
+                    strength=corner.strength,
+                    observation_source=corner.observation_source,
+                    camera_id=corner.camera_id,
+                    camera_name=corner.camera_name,
                 )
-            elif request.detections:
-                registration = build_paper_registration_from_red_fiducials(
-                    request.detections,
-                    paper_width_mm=paper_width_mm,
-                    paper_height_mm=paper_height_mm,
-                )
-            else:
-                raise ValueError("Provide four paper corner observations or red fiducial detections.")
+                for corner in request.corners
+            ]
+            registration = build_paper_frame_registration(
+                corner_observations,
+                paper_width_mm=paper_width_mm,
+                paper_height_mm=paper_height_mm,
+            )
 
             self._save_paper_registration(registration)
             self.event_log.emit(
@@ -4180,24 +4034,8 @@ class PlotterBridge:
             "cannot unlock absolute drawing."
         )
 
-    def _calibration_path(self, session_id: str) -> Path:
-        if "/" in session_id or ".." in session_id:
-            raise ValueError("Invalid calibration session_id.")
-        return self.config.calibration_dir / f"{session_id}.json"
-
-    def _save_calibration_session(self, session: CalibrationSession) -> None:
-        session.save_json(self._calibration_path(session.session_id))
-        if session.status == "solved":
-            session.model.save_json(self._latest_machine_model_path())
-
     def _latest_machine_model_path(self) -> Path:
         return self.config.calibration_dir / "latest_machine_model.json"
-
-    def _load_calibration_session(self, session_id: str) -> CalibrationSession:
-        path = self._calibration_path(session_id)
-        if not path.exists():
-            raise ValueError(f"Calibration session not found: {session_id}")
-        return CalibrationSession.model_validate_json(path.read_text(encoding="utf-8"))
 
     def _paper_registration_path(self, registration_id: str) -> Path:
         if "/" in registration_id or ".." in registration_id:
@@ -4875,42 +4713,6 @@ class PlotterBridge:
     def _get_active_controller(self) -> GrblHalController | None:
         with self._state_lock:
             return self._active_controller
-
-    def _calibration_response(self, session: CalibrationSession) -> CalibrationSessionResponse:
-        return CalibrationSessionResponse(
-            session_id=session.session_id,
-            status=session.status,
-            dry_run=self.config.dry_run,
-            planned_commands=session.planned_commands,
-            waypoints=[waypoint.model_dump(mode="json") for waypoint in session.waypoints],
-            observed_count=session.observed_count,
-            model=session.model.model_dump(mode="json"),
-            session_file=str(self._calibration_path(session.session_id)),
-            latest_model_file=(
-                str(self._latest_machine_model_path())
-                if session.status == "solved" and self._latest_machine_model_path().exists()
-                else None
-            ),
-        )
-
-    def _calibration_error(self, *, session_id: str, error: str) -> CalibrationSessionResponse:
-        self.event_log.emit(
-            "calibration.session_failed",
-            command_id=session_id,
-            status="failed",
-            payload={"error": error},
-        )
-        return CalibrationSessionResponse(
-            session_id=session_id,
-            status="failed",
-            dry_run=self.config.dry_run,
-            planned_commands=[],
-            waypoints=[],
-            observed_count=0,
-            model={},
-            session_file="",
-            error=error,
-        )
 
     def _paper_registration_response(
         self,
@@ -5610,11 +5412,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.unlock_machine,
             lambda response: getattr(response, "status", "") == "completed",
         ),
-        "/calibration/start": PostRoute(
-            CalibrationStartRequest,
-            bridge.start_calibration,
-            lambda response: getattr(response, "status", "") != "failed",
-        ),
         "/calibration/preview": PostRoute(
             CalibrationMarkPlanRequest,
             bridge.preview_calibration_marks,
@@ -5624,11 +5421,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             CalibrationMarkPlanRequest,
             bridge.run_calibration_marks,
             lambda response: getattr(response, "status", "") == "completed",
-        ),
-        "/calibration/observe": PostRoute(
-            CalibrationObservationRequest,
-            bridge.add_calibration_observation,
-            lambda response: getattr(response, "status", "") != "failed",
         ),
         "/calibration/pen/observe": PostRoute(
             VisualCapObservationRequest,
@@ -5705,16 +5497,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed_url.path == "/machine/status":
                 self._write_model(HTTPStatus.OK, bridge.machine_status())
-                return
-            if parsed_url.path == "/calibration/status":
-                query = parse_qs(parsed_url.query)
-                session_id = query.get("session_id", [""])[0]
-                if not session_id:
-                    self._write_json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
-                    return
-                response = bridge.calibration_status(session_id)
-                status = HTTPStatus.OK if response.status != "failed" else HTTPStatus.NOT_FOUND
-                self._write_model(status, response)
                 return
             if parsed_url.path == "/calibration/workflow/status":
                 self._write_model(HTTPStatus.OK, bridge.visual_readiness_status())

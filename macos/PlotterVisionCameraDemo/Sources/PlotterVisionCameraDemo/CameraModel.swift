@@ -23,9 +23,6 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var minAreaRatio = 0.0008 {
         didSet { updateSettings { $0.minAreaRatio = minAreaRatio } }
     }
-    @Published var fiducialDetectionEnabled = true {
-        didSet { updateSettings { $0.redFiducialsEnabled = fiducialDetectionEnabled } }
-    }
     @Published var changeDetectionEnabled = true {
         didSet { updateSettings { $0.changeEnabled = changeDetectionEnabled } }
     }
@@ -41,10 +38,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var selectedCameraID = ""
     @Published var selectedCameraName = "Camera"
     @Published var segments: [VisionSegment] = []
-    @Published var fiducials: [FiducialMark] = []
     @Published var carriageMarker: CarriageMarker?
-    @Published var paperRegistration: PaperRegistration?
-    @Published var latestPaperObservation: PaperCalibrationObservation?
     @Published var motionTracks: [MotionTrack] = []
     @Published var changeReport = ChangeReport.idle
     @Published var stats = AnalysisStats()
@@ -88,13 +82,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             break
         case .face:
             segmentationEnabled = false
-            fiducialDetectionEnabled = false
             changeDetectionEnabled = false
             showGrid = false
             showMeasurements = false
             updateSettings {
                 $0.enabled = false
-                $0.redFiducialsEnabled = false
                 $0.greenMarkerEnabled = false
                 $0.changeEnabled = false
             }
@@ -169,10 +161,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
                 self.isReceivingFrames = false
                 self.isPaused = false
                 self.segments = []
-                self.fiducials = []
                 self.carriageMarker = nil
-                self.paperRegistration = nil
-                self.latestPaperObservation = nil
                 self.configureAndStart()
             }
         }
@@ -331,7 +320,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
         let currentFrame = recordFrame(pixelBuffer: pixelBuffer)
         let snapshot = settingsSnapshot()
-        guard (snapshot.enabled || snapshot.redFiducialsEnabled || snapshot.greenMarkerEnabled || snapshot.changeEnabled),
+        guard (snapshot.enabled || snapshot.greenMarkerEnabled || snapshot.changeEnabled),
               !snapshotPaused(),
               currentFrame % 4 == 0
         else {
@@ -481,13 +470,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
             do {
                 let start = CFAbsoluteTimeGetCurrent()
-                let visionResult = (settings.enabled || settings.redFiducialsEnabled || settings.greenMarkerEnabled)
+                let visionResult = (settings.enabled || settings.greenMarkerEnabled)
                     ? try self.analyzer.analyze(pixelBuffer: pixelBuffer, settings: settings, frameNumber: frame)
                     : VisionAnalysisResult(
                         segments: [],
-                        fiducials: [],
                         carriageMarker: nil,
-                        paperRegistration: nil,
                         elapsedMilliseconds: 0.0
                     )
                 let changeResult = try self.changeAnalyzer.ingest(
@@ -500,17 +487,12 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
 
                 DispatchQueue.main.async {
                     self.segments = visionResult.segments
-                    self.fiducials = visionResult.fiducials
                     self.carriageMarker = visionResult.carriageMarker
-                    self.paperRegistration = visionResult.paperRegistration
-                    self.latestPaperObservation = self.makePaperObservation(result: visionResult, frame: frame)
                     self.stats.frameNumber = frame
                     self.stats.segmentCount = visionResult.segments.count
-                    self.stats.fiducialCount = visionResult.fiducials.count
                     self.stats.carriageMarkerStatus = visionResult.carriageMarker.map {
                         "CAP \($0.colorName)"
                     } ?? "CAP --"
-                    self.stats.paperStatus = visionResult.paperRegistration?.status ?? "SEEK"
                     self.stats.analysisMilliseconds = elapsed
                     self.stats.cameraName = self.cameraName
                     if let changeResult {
@@ -818,30 +800,6 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         }
     }
 
-    private func makePaperObservation(
-        result: VisionAnalysisResult,
-        frame: Int
-    ) -> PaperCalibrationObservation? {
-        guard let registration = result.paperRegistration else { return nil }
-        return PaperCalibrationObservation(
-            cameraID: selectedCameraID,
-            cameraName: cameraName,
-            frameNumber: frame,
-            videoSize: NormSize(videoSize),
-            fiducials: result.fiducials.map {
-                PaperFiducialSample(
-                    id: $0.id,
-                    centerNorm: NormPoint($0.center),
-                    bboxNorm: NormRect($0.boundingBox),
-                    strength: $0.strength,
-                    pixelArea: Double($0.pixelArea)
-                )
-            },
-            paperQuadNorm: registration.quad.map(NormPoint.init),
-            confidence: registration.confidence
-        )
-    }
-
     private func buildFaceRaster(
         pixelBuffer: CVPixelBuffer,
         frame: Int,
@@ -974,9 +932,6 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         isRunning = false
         isPaused = false
         segments = []
-        fiducials = []
-        paperRegistration = nil
-        latestPaperObservation = nil
         motionTracks = []
     }
 }

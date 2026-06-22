@@ -2,7 +2,7 @@
 
 ## Goal
 
-Use a locked USB camera view, red-magnet paper fiducials, and measured plotter motion to draw
+Use a locked USB camera view, manually clicked paper fiducials, and measured plotter motion to draw
 capability-test programs and camera-derived portrait imagery as physical strokes.
 
 The endpoint is not "send image to plotter." The endpoint is:
@@ -33,7 +33,8 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 - Machine coordinates: controller coordinates used by the bridge for execution.
 - Display space: app-side fit/fill/rotation and overlay rendering; it is not motion authority.
 
-The red magnets are fiducials for camera-to-paper registration. They are not enough by themselves
+The physical paper fiducials are manually clicked in the wizard for camera-to-paper registration.
+They are not enough by themselves
 to prove machine motion. Machine motion still needs pen-tip or drawn-mark observations paired with
 commanded logical millimeter points. The cap marker provides live carriage evidence, but cap-only
 motion is still relative session evidence; absolute paper-plane drawing needs ink or pen-tip
@@ -75,7 +76,7 @@ values, but camera pose remains session-specific and must be refreshed after cam
 
 ## Safety Boundary
 
-The macOS app can select cameras, show fiducials, and send typed observations or drawing programs.
+The macOS app can select cameras, show manual wizard fiducial clicks, and send typed observations or drawing programs.
 It must not send raw G-code. Bridge endpoints own:
 
 - workspace validation,

@@ -144,7 +144,7 @@ Define a typed local protocol for:
 - status reports;
 - command log events;
 - safety state;
-- calibration sessions;
+- wizard-driven paper registration, cap/probe evidence, and visual binding solve;
 - jog requests;
 - generated test-pattern preview;
 - pen actuator config.

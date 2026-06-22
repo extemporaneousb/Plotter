@@ -36,7 +36,7 @@ struct ContentView: View {
     @State private var manualFiducials: [ManualFiducialPoint] = []
     @State private var manualPenMode = false
     @State private var manualCapColorMode = false
-    @State private var observedPenPoint: ObservedPenPoint?
+    @State private var confirmedCapPoint: ConfirmedCapPoint?
     @State private var visualMotionModel: VisualMotionModel?
     @State private var visualMotionSamples: [VisualMotionSample] = []
     @State private var visualCenterDotTaskActive = false
@@ -72,6 +72,7 @@ struct ContentView: View {
             await bridge.refreshHealth()
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
+            await bridge.refreshVisualBindingStatus()
             var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -83,6 +84,9 @@ struct ContentView: View {
                 await bridge.refreshMachineStatus()
                 if !refreshedHealth {
                     await bridge.refreshPaperStatus()
+                }
+                if pollIteration.isMultiple(of: 4) {
+                    await bridge.refreshVisualBindingStatus()
                 }
             }
         }
@@ -162,10 +166,8 @@ struct ContentView: View {
 
                     MeasurementOverlay(
                         segments: plotterCamera.segments,
-                        fiducials: plotterCamera.fiducials,
                         carriageMarker: (manualPenMode || manualCapColorMode) ? nil : plotterCamera.carriageMarker,
-                        paperRegistration: plotterCamera.paperRegistration,
-                        observedPenPoint: observedPenPoint,
+                        confirmedCapPoint: confirmedCapPoint,
                         motionTracks: plotterCamera.motionTracks,
                         expectedPathSegments: bridge.expectedPathSegments,
                         dotTestPreviewSegments: bridge.dotTestPreviewSegments,
@@ -184,7 +186,7 @@ struct ContentView: View {
 
             ManualFiducialOverlay(points: manualFiducials, isActive: manualFiducialMode)
 
-            ObservedPenOverlay(point: manualPenMode ? observedPenPoint : nil, isActive: manualPenMode)
+            ConfirmedCapOverlay(point: manualPenMode ? confirmedCapPoint : nil, isActive: manualPenMode)
             CapColorPickOverlay(isActive: manualCapColorMode)
 
             if manualCapColorMode {
@@ -197,7 +199,7 @@ struct ContentView: View {
                 ManualPenClickLayer(
                     settings: plotterViewport,
                     videoSize: plotterCamera.videoSize,
-                    onMark: recordObservedPen
+                    onMark: recordConfirmedCap
                 )
             } else if manualFiducialMode {
                 ManualFiducialClickLayer(
@@ -435,8 +437,6 @@ struct ContentView: View {
             requestXFieldMovePrompt(source: "probe_start_no_cap")
             return
         }
-
-        updateObservedPenPoint(initialObservation)
         visualMotionModel = nil
         visualMotionSamples = []
         _ = bridge.startVisualProbeEvidenceRun(prefix: "swift-probe")
@@ -494,7 +494,6 @@ struct ContentView: View {
             )
             return
         }
-        updateObservedPenPoint(initialObservation)
         calibrationStatusText = "CAL cap-marker probe sampling from probe zone"
 
         let commandDistanceMm = 25.0
@@ -724,7 +723,6 @@ struct ContentView: View {
             distanceMm,
             observedDistance
         )
-        updateObservedPenPoint(after)
         try? await Task.sleep(nanoseconds: 250_000_000)
         return sample
     }
@@ -928,13 +926,11 @@ struct ContentView: View {
                     observedDx,
                     observedDy
                 )
-                updateObservedPenPoint(after)
                 return nil
             }
 
             totalCommandedMm += commandMm
             current = after
-            updateObservedPenPoint(after)
             guard await bridge.observeVisualCapForProbe(
                 cameraPoint: after.cameraPoint,
                 paperMm: after.paperMm,
@@ -1068,7 +1064,6 @@ struct ContentView: View {
 
             try? await Task.sleep(nanoseconds: 450_000_000)
             if let observation = await waitForGreenCapPaperObservation(timeoutSeconds: 2.5) {
-                updateObservedPenPoint(observation)
                 calibrationStatusText = String(
                     format: "CAL move-X done; cap paper x%.1f y%.1f, rerun visual calibration",
                     observation.paperMm.x,
@@ -1510,21 +1505,11 @@ struct ContentView: View {
 
     private var canRunVisualCenterDot: Bool {
         bridge.isLiveMotionMode
+            && !bridge.hasBridgeContractMismatch
             && bridge.hasPaperLock
             && currentGreenCapSafeZoneReady
             && frameLearning.status == "MEASURED"
             && visualMotionModel?.isUsable == true
-            && plotterCamera.carriageMarker != nil
-            && !bridge.isRunning
-            && !bridge.isMachineBusy
-            && !bridge.isMachineAlarm
-    }
-
-    private var canRunPenCalibrationMark: Bool {
-        bridge.isLiveMotionMode
-            && bridge.hasPaperLock
-            && frameLearning.status == "MEASURED"
-            && observedPenPoint?.paperMm != nil
             && plotterCamera.carriageMarker != nil
             && !bridge.isRunning
             && !bridge.isMachineBusy
@@ -1541,15 +1526,15 @@ struct ContentView: View {
     private var visualCenterDotDetail: String {
         if visualCenterDotIsActive { return bridge.visualCenterDotStatus }
         if isTerminalVisualCenterDotStatus(bridge.visualCenterDotStatus) { return bridge.visualCenterDotStatus }
-        if visualSessionReadyToPlot { return "Visual-session ready; absolute drawing may still be blocked" }
+        if visualSessionReadyToPlot { return "VisualPositionBinding validated" }
         guard let model = visualMotionModel else { return "Run visual calibration first" }
         if !model.isUsable { return "Motion basis is degenerate" }
         if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
-        if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
-            return "Preview center dot before visual run"
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
+            return "Preview five binding marks before visual run"
         }
         if plotterCamera.carriageMarker == nil { return "Cap marker not detected" }
-        return bridge.visualCenterDotStatus
+        return bridge.visualBindingDetail
     }
 
     private func isTerminalVisualCenterDotStatus(_ status: String) -> Bool {
@@ -1566,18 +1551,8 @@ struct ContentView: View {
             || status.hasPrefix("VIS PIN")
     }
 
-    private var visualCenterDotMarked: Bool {
-        bridge.visualCenterDotStatus == "VIS MARKED"
-            || bridge.visualCenterDotStatus.hasPrefix("VIS MARK ")
-    }
-
     private var visualSessionReadyToPlot: Bool {
-        bridge.hasPaperLock
-            && currentGreenCapSafeZoneReady
-            && frameLearning.status == "MEASURED"
-            && visualMotionModel?.isUsable == true
-            && bridge.dotTestPreviewPattern == "center"
-            && !bridge.dotTestPreviewPoints.isEmpty
+        bridge.visualBindingValid
     }
 
     private var visualSessionBlockerText: String {
@@ -1586,8 +1561,11 @@ struct ContentView: View {
         if !currentGreenCapSafeZoneReady { blockers.append(greenCapSafeZoneDetail) }
         if frameLearning.status != "MEASURED" { blockers.append("adaptive probe") }
         if visualMotionModel?.isUsable != true { blockers.append("visual motion model") }
-        if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
-            blockers.append("center target preview")
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
+            blockers.append("five binding mark preview")
+        }
+        if !bridge.visualBindingValid {
+            blockers.append(bridge.visualBindingDetail)
         }
         return blockers.isEmpty ? "none" : blockers.joined(separator: ", ")
     }
@@ -1614,7 +1592,7 @@ struct ContentView: View {
     }
 
     private var confirmedCapSafeZoneReady: Bool {
-        guard let paperMm = observedPenPoint?.paperMm else { return false }
+        guard let paperMm = confirmedCapPoint?.paperMm else { return false }
         return isGreenCapInsideSafeZone(paperMm)
     }
 
@@ -1666,7 +1644,7 @@ struct ContentView: View {
 
     private var confirmedCapSafeZoneDetail: String {
         guard bridge.hasPaperLock else { return "Paper homography required" }
-        guard let paperMm = observedPenPoint?.paperMm else { return "Cap position not observed" }
+        guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap position not observed" }
         guard isGreenCapInsideSafeZone(paperMm) else {
             return String(
                 format: "Confirmed cap outside %.0fmm motion-safe inset",
@@ -1678,31 +1656,13 @@ struct ContentView: View {
 
     private var canRunWizardMotionProbe: Bool {
         bridge.isLiveMotionMode
-            && observedPenPoint?.paperMm != nil
+            && !bridge.hasBridgeContractMismatch
+            && confirmedCapPoint?.paperMm != nil
             && plotterCamera.carriageMarker != nil
             && currentGreenCapCanStartProbe
             && !bridge.isMachineBusy
             && !bridge.isRunning
             && !bridge.isMachineAlarm
-    }
-
-    private var canRunAdaptiveMotionProbe: Bool {
-        bridge.isLiveMotionMode
-            && bridge.hasPaperLock
-            && plotterCamera.carriageMarker != nil
-            && currentGreenCapCanStartProbe
-            && !bridge.isMachineBusy
-            && !bridge.isRunning
-            && !bridge.isMachineAlarm
-    }
-
-    private var canRunBridgeCenterDotMotion: Bool {
-        bridge.canRunCenterDotMotion && currentGreenCapSafeZoneReady
-    }
-
-    @MainActor
-    private func runVisualRelativeCenterDot() async {
-        await runVisualRelativeDotTest(pattern: "center")
     }
 
     @MainActor
@@ -1743,6 +1703,7 @@ struct ContentView: View {
             return
         }
 
+        let bindingCommandId = bridge.dotTestPreviewCommandId
         var visibleCount = 0
         for (index, point) in targets.enumerated() {
             bridge.visualCenterDotStatus = String(format: "VIS %@ %d/%d", point.pointId, index + 1, targets.count)
@@ -1780,6 +1741,11 @@ struct ContentView: View {
             guard parked else { return }
             let inkResult = await inspectInkAt(point)
             if inkResult?.isVisible == true {
+                guard await recordVisualBindingInkObservation(
+                    point: point,
+                    commandId: bindingCommandId,
+                    inkResult: inkResult
+                ) else { return }
                 visibleCount += 1
                 bridge.visualCenterDotStatus = String(format: "VIS %@ OK", point.pointId)
                 continue
@@ -1799,7 +1765,13 @@ struct ContentView: View {
             guard await parkAwayFromMark(markPaperPoint: point.paperMm, label: "\(point.pointId)-retry") else {
                 return
             }
-            if await inspectInkAt(point)?.isVisible == true {
+            let retryInkResult = await inspectInkAt(point)
+            if retryInkResult?.isVisible == true {
+                guard await recordVisualBindingInkObservation(
+                    point: point,
+                    commandId: bindingCommandId,
+                    inkResult: retryInkResult
+                ) else { return }
                 visibleCount += 1
                 bridge.visualCenterDotStatus = String(format: "VIS %@ OK+", point.pointId)
             } else {
@@ -1810,7 +1782,38 @@ struct ContentView: View {
         }
 
         bridge.visualCenterDotStatus = String(format: "VIS MARK %d/%d", visibleCount, targets.count)
-        calibrationStatusText = String(format: "CAL visual %@ complete; ink visible %d/%d", pattern, visibleCount, targets.count)
+        let solved = await bridge.solveVisualBinding(requestId: "wizard-binding-\(pattern)")
+        calibrationStatusText = solved
+            ? String(format: "CAL visual %@ complete; binding validated %d/%d", pattern, visibleCount, targets.count)
+            : String(format: "CAL visual %@ complete; ink visible %d/%d; %@", pattern, visibleCount, targets.count, bridge.visualBindingStatus)
+    }
+
+    @MainActor
+    private func recordVisualBindingInkObservation(
+        point: DotTestPreviewPoint,
+        commandId: String,
+        inkResult: InkInspectionResult?
+    ) async -> Bool {
+        guard !commandId.isEmpty else {
+            calibrationStatusText = "CAL binding observation blocked: preview command missing"
+            bridge.visualBindingStatus = "BIND NO CMD"
+            bridge.visualBindingDetail = "Preview expected geometry before binding observation"
+            return false
+        }
+        let confidence = min(1.0, max(0.25, inkResult?.darkFraction ?? 0.5))
+        guard await bridge.observeVisualBindingPoint(
+            commandId: commandId,
+            point: point,
+            observedPaperMm: point.paperMm,
+            observedCameraNorm: point.cameraNorm,
+            kind: "ink",
+            confidence: confidence
+        ) else {
+            calibrationStatusText = "CAL binding observation failed: \(bridge.visualBindingDetail)"
+            return false
+        }
+        calibrationStatusText = "CAL binding \(point.pointId) \(bridge.visualBindingStatus)"
+        return true
     }
 
     @MainActor
@@ -1829,8 +1832,6 @@ struct ContentView: View {
             bridge.visualCenterDotStatus = "VIS NO CAP"
             return nil
         }
-
-        updateObservedPenPoint(current)
         let targetToleranceMm = 4.0
         let maxSegments = 30
         let maxResidualRetries = 6
@@ -1977,7 +1978,6 @@ struct ContentView: View {
                 ) else {
                     bridge.visualCenterDotStatus = "VIS EVID ERR"
                     calibrationStatusText = "CAL visual target stopped: evidence persistence failed"
-                    updateObservedPenPoint(after)
                     return nil
                 }
 
@@ -1991,7 +1991,6 @@ struct ContentView: View {
                         observedDistance,
                         maxResidualRetries
                     )
-                    updateObservedPenPoint(after)
                     return nil
                 }
 
@@ -2025,12 +2024,10 @@ struct ContentView: View {
                     feedMmMin: feedMmMin
                 ) else {
                     adaptiveCommandCapMm = nextCommandCapMm
-                    updateObservedPenPoint(after)
                     return nil
                 }
                 adaptiveCommandCapMm = nextCommandCapMm
                 current = rollback
-                updateObservedPenPoint(rollback)
                 continue
             }
 
@@ -2054,7 +2051,6 @@ struct ContentView: View {
             ) else {
                 bridge.visualCenterDotStatus = "VIS EVID ERR"
                 calibrationStatusText = "CAL visual target stopped: evidence persistence failed"
-                updateObservedPenPoint(after)
                 return nil
             }
             if let updatedModel = appendAcceptedVisualMotionSample(
@@ -2072,7 +2068,6 @@ struct ContentView: View {
                 adaptiveCommandCapMm = min(maximumCommandCapMm, adaptiveCommandCapMm * 1.5)
             }
             current = after
-            updateObservedPenPoint(after)
         }
 
         guard let final = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0) else {
@@ -2080,7 +2075,6 @@ struct ContentView: View {
             calibrationStatusText = "CAL visual target stopped: no final cap observation"
             return nil
         }
-        updateObservedPenPoint(final)
         let finalDistance = paperDistance(from: final.paperMm, to: target)
         guard finalDistance <= targetToleranceMm else {
             bridge.visualCenterDotStatus = String(format: "VIS OFF %.1fmm", finalDistance)
@@ -2093,90 +2087,6 @@ struct ContentView: View {
             return nil
         }
         return final
-    }
-
-    @MainActor
-    private func runPenCalibrationMarkAtCurrentPosition(source: String) async {
-        guard canRunPenCalibrationMark else {
-            calibrationStatusText = "CAL pen mark blocked: \(penCalibrationMarkBlockerText)"
-            bridge.recordOperatorEvent(
-                "pen_calibration_mark_blocked",
-                details: [
-                    "source": source,
-                    "reason": penCalibrationMarkBlockerText
-                ]
-            )
-            return
-        }
-        guard let observation = await waitForGreenCapPaperObservation(timeoutSeconds: 2.0) else {
-            calibrationStatusText = "CAL pen mark blocked: cap not detected"
-            bridge.recordOperatorEvent(
-                "pen_calibration_mark_blocked",
-                details: [
-                    "source": source,
-                    "reason": "cap_not_detected"
-                ]
-            )
-            return
-        }
-
-        updateObservedPenPoint(observation)
-        calibrationStatusText = String(
-            format: "CAL pen mark: drawing at cap x%.1f y%.1f",
-            observation.paperMm.x,
-            observation.paperMm.y
-        )
-        bridge.recordOperatorEvent(
-            "pen_calibration_mark_started",
-            details: [
-                "source": source,
-                "cap_frame": observation.frameNumber,
-                "cap_paper_x_mm": observation.paperMm.x,
-                "cap_paper_y_mm": observation.paperMm.y,
-                "mark_size_mm": visualCalibrationMarkSizeMm
-            ]
-        )
-        let marked = await bridge.relativeMarkCurrentPosition(
-            markSizeMm: visualCalibrationMarkSizeMm,
-            drawFeedMmMin: min(120.0, bridge.shapeDrawFeedMmMin)
-        )
-        if marked {
-            calibrationStatusText = String(
-                format: "CAL pen mark drawn; inspect ink near cap x%.1f y%.1f",
-                observation.paperMm.x,
-                observation.paperMm.y
-            )
-            bridge.recordOperatorEvent(
-                "pen_calibration_mark_completed",
-                details: [
-                    "source": source,
-                    "cap_frame": observation.frameNumber,
-                    "cap_paper_x_mm": observation.paperMm.x,
-                    "cap_paper_y_mm": observation.paperMm.y,
-                    "mark_size_mm": visualCalibrationMarkSizeMm
-                ]
-            )
-        } else {
-            calibrationStatusText = "CAL pen mark failed: \(bridge.statusText)"
-            bridge.recordOperatorEvent(
-                "pen_calibration_mark_failed",
-                details: [
-                    "source": source,
-                    "reason": bridge.statusText
-                ]
-            )
-        }
-    }
-
-    private var penCalibrationMarkBlockerText: String {
-        if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
-        if !bridge.hasPaperLock { return "paper homography required" }
-        if frameLearning.status != "MEASURED" { return "visual calibration required" }
-        if observedPenPoint?.paperMm == nil { return "confirmed cap position required" }
-        if plotterCamera.carriageMarker == nil { return "cap marker not detected" }
-        if bridge.isMachineAlarm { return "machine alarm" }
-        if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
-        return "pen mark blocked"
     }
 
     private func visualTargetResidualDetails(
@@ -2337,7 +2247,6 @@ struct ContentView: View {
                 format: "CAL visual target stopped: rollback %.1fmm from verified point",
                 rollbackDistanceMm
             )
-            updateObservedPenPoint(rollback)
             return nil
         }
 
@@ -2373,9 +2282,7 @@ struct ContentView: View {
             return false
         }
         try? await Task.sleep(nanoseconds: 650_000_000)
-        if let after = await waitForGreenCapPaperObservation(afterFrame: current.frameNumber, timeoutSeconds: 3.0) {
-            updateObservedPenPoint(after)
-        }
+        _ = await waitForGreenCapPaperObservation(afterFrame: current.frameNumber, timeoutSeconds: 3.0)
         return true
     }
 
@@ -2388,14 +2295,6 @@ struct ContentView: View {
             "CAL \(point.pointId) \($0.summary)"
         } ?? "CAL \(point.pointId) ink check unavailable"
         return result
-    }
-
-    private func updateObservedPenPoint(_ observation: GreenCapPaperObservation) {
-        observedPenPoint = ObservedPenPoint(
-            point: CGPoint(x: observation.cameraPoint.x, y: 1.0 - observation.cameraPoint.y),
-            cameraPoint: observation.cameraPoint,
-            paperMm: observation.paperMm
-        )
     }
 
     private func paperDistance(from point: PaperPointMmSnapshot, to target: PaperPointMmSnapshot) -> Double {
@@ -2468,8 +2367,6 @@ struct ContentView: View {
 
                 drawingTestsMenu
 
-                calibrationMenu
-
                 controlButton(
                     systemName: "slider.horizontal.3",
                     label: "Machine",
@@ -2513,11 +2410,11 @@ struct ContentView: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
-            Text("\(calibrationStatusText)  FID auto:\(plotterCamera.stats.fiducialCount) manual:\(manualFiducials.count)/4")
+            Text("\(calibrationStatusText)  FID manual:\(manualFiducials.count)/4  BIND \(bridge.visualBindingStatus)")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.cyan.opacity(0.78))
                 .lineLimit(1)
-            Text(observedPenStatusText)
+            Text(confirmedCapStatusText)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(.green.opacity(0.78))
                 .lineLimit(1)
@@ -2645,7 +2542,7 @@ struct ContentView: View {
                         CalibrationWizardStepRow(
                             index: 4,
                             title: "Cap Position",
-                            detail: observedPenStatusText,
+                            detail: confirmedCapStatusText,
                             status: wizardObservedPenStatus
                         )
                         CalibrationWizardStepRow(
@@ -2656,8 +2553,8 @@ struct ContentView: View {
                         )
                         CalibrationWizardStepRow(
                             index: 6,
-                            title: "Ready to Plot",
-                            detail: visualCenterDotDetail,
+                            title: "Binding",
+                            detail: bridge.visualBindingDetail,
                             status: wizardDrawPreflightStatus
                         )
                     }
@@ -2748,27 +2645,26 @@ struct ContentView: View {
     }
 
     private var wizardGreenCapStatus: CalibrationWizardStepStatus {
-        if observedPenPoint?.paperMm != nil { return .done }
+        if confirmedCapPoint?.paperMm != nil { return .done }
         if plotterCamera.carriageMarker != nil { return .done }
         return bridge.hasPaperLock ? .active : .pending
     }
 
     private var wizardObservedPenStatus: CalibrationWizardStepStatus {
-        if observedPenPoint?.paperMm != nil { return .done }
+        if confirmedCapPoint?.paperMm != nil { return .done }
         return bridge.hasPaperLock ? .active : .pending
     }
 
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
         if frameLearning.status == "MEASURED" { return .done }
-        if observedPenPoint?.paperMm != nil {
+        if confirmedCapPoint?.paperMm != nil {
             return canRunWizardMotionProbe ? .active : .blocked
         }
         return .pending
     }
 
     private var wizardDrawPreflightStatus: CalibrationWizardStepStatus {
-        if visualSessionReadyToPlot || visualCenterDotMarked { return .done }
-        if canRunPenCalibrationMark { return .active }
+        if visualSessionReadyToPlot { return .done }
         if isTerminalVisualCenterDotStatus(bridge.visualCenterDotStatus) { return .blocked }
         if visualCenterDotIsActive { return .active }
         if canRunVisualCenterDot { return .active }
@@ -2782,7 +2678,7 @@ struct ContentView: View {
 
     private var wizardGreenCapDetail: String {
         guard let marker = plotterCamera.carriageMarker else {
-            if observedPenPoint?.paperMm != nil {
+            if confirmedCapPoint?.paperMm != nil {
                 return "Manual cap position accepted"
             }
             return "Waiting for bright cap marker"
@@ -2795,7 +2691,7 @@ struct ContentView: View {
         if currentGreenCapBootstrapReady { return "BOOT-X" }
         if currentGreenCapProbeStartReady { return "PROBE" }
         if confirmedCapSafeZoneReady { return "CONF-SAFE" }
-        if observedPenPoint?.paperMm != nil { return "CONF-OUT" }
+        if confirmedCapPoint?.paperMm != nil { return "CONF-OUT" }
         return "--"
     }
 
@@ -2806,7 +2702,7 @@ struct ContentView: View {
         if !bridge.hasPaperLock {
             return "Fiducials are captured. Solve paper homography to create the paper-mm frame."
         }
-        if observedPenPoint?.paperMm == nil {
+        if confirmedCapPoint?.paperMm == nil {
             if plotterCamera.carriageMarker == nil {
                 return "Cap marker is not detected. Pick the cap region or click the cap position."
             }
@@ -2825,22 +2721,19 @@ struct ContentView: View {
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
             return "Cap position is in paper mm. Run visual calibration only when the nearby path is clear."
         }
-        if canRunPenCalibrationMark && !visualCenterDotMarked {
-            return "Visual motion is measured. Calibrate the pen by drawing a mark at the current cap position."
-        }
         if visualCenterDotIsActive {
-            return "Visual center dot is running watched relative motion. Do not start another move."
+            return "Binding marks are running watched relative motion. Do not start another move."
         }
-        if bridge.dotTestPreviewPattern != "center" || bridge.dotTestPreviewPoints.isEmpty {
-            return "Adaptive probe is measured. Preview the center target overlay before visual-relative motion."
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
+            return "Adaptive probe is measured. Preview the five binding marks before visual-relative motion."
         }
         if canRunVisualCenterDot {
-            return "Run visual center dot. It approaches in watched relative segments and marks only after residuals pass."
+            return "Run binding marks. The app approaches each expected point, marks only after residuals pass, posts ink observations, and solves the binding."
         }
         if !visualSessionReadyToPlot {
             return "Ready-to-plot blocked: \(visualSessionBlockerText)."
         }
-        return "Ready to plot in this visual session. This does not verify absolute bridge-run drawing."
+        return "VisualPositionBinding is validated."
     }
 
     private var wizardPrimaryActionTitle: String {
@@ -2848,14 +2741,13 @@ struct ContentView: View {
             return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Fiducial Clicks"
         }
         if !bridge.hasPaperLock { return "Solve Homography" }
-        if observedPenPoint?.paperMm == nil {
+        if confirmedCapPoint?.paperMm == nil {
             return currentGreenCapPaperObservation() == nil ? "Click Cap Position" : "Confirm Cap"
         }
         if frameLearning.status != "MEASURED" { return "Run Visual Calibration" }
-        if canRunPenCalibrationMark && !visualCenterDotMarked { return "Calibrate Pen Mark" }
-        if visualSessionReadyToPlot || visualCenterDotMarked { return "Ready to Plot" }
-        if bridge.dotTestPreviewPlanHash.isEmpty { return "Preview Center Dot" }
-        if canRunVisualCenterDot { return "Run Visual Center Dot" }
+        if visualSessionReadyToPlot { return "Ready to Plot" }
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty { return "Preview Binding Marks" }
+        if canRunVisualCenterDot { return "Run Binding Marks" }
         return "Blocked"
     }
 
@@ -2864,16 +2756,16 @@ struct ContentView: View {
         if !bridge.hasPaperLock {
             return bridge.isOnline && manualFiducials.count >= 4 && !bridge.isCalibrating
         }
-        if observedPenPoint?.paperMm == nil {
+        if confirmedCapPoint?.paperMm == nil {
             return true
         }
         if frameLearning.status != "MEASURED" {
             return canRunWizardMotionProbe
         }
-        if !visualCenterDotMarked {
-            return canRunPenCalibrationMark
+        if visualSessionReadyToPlot {
+            return false
         }
-        if bridge.dotTestPreviewPlanHash.isEmpty {
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
             return bridge.isOnline && bridge.hasPaperLock && !bridge.isCalibrating
         }
         return canRunVisualCenterDot
@@ -2886,7 +2778,7 @@ struct ContentView: View {
             if bridge.isCalibrating { return "paper solve already running" }
             return "paper homography not locked"
         }
-        if observedPenPoint?.paperMm == nil {
+        if confirmedCapPoint?.paperMm == nil {
             return "cap position not observed"
         }
         if frameLearning.status != "MEASURED" {
@@ -2897,13 +2789,10 @@ struct ContentView: View {
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
             return "visual calibration blocked"
         }
-        if !visualCenterDotMarked {
-            return penCalibrationMarkBlockerText
-        }
-        if bridge.dotTestPreviewPlanHash.isEmpty {
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
             if !bridge.isOnline { return "bridge offline" }
             if bridge.isCalibrating { return "bridge busy" }
-            return "center preview blocked"
+            return "binding mark preview blocked"
         }
         return visualCenterDotDetail
     }
@@ -2932,7 +2821,7 @@ struct ContentView: View {
             return
         }
 
-        if observedPenPoint?.paperMm == nil {
+        if confirmedCapPoint?.paperMm == nil {
             if currentGreenCapPaperObservation() != nil {
                 useDetectedCarriageMarker()
             } else {
@@ -2956,27 +2845,25 @@ struct ContentView: View {
             return
         }
 
-        if canRunPenCalibrationMark && !visualCenterDotMarked {
-            calibrationStatusText = "WIZ pen calibration mark"
-            Task {
-                await runPenCalibrationMarkAtCurrentPosition(source: "wizard_primary")
-            }
+        if visualSessionReadyToPlot {
+            calibrationStatusText = "WIZ \(bridge.visualBindingStatus)"
             return
         }
 
-        if bridge.dotTestPreviewPlanHash.isEmpty {
-            calibrationStatusText = "WIZ preview center dot"
+        if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
+            calibrationStatusText = "WIZ preview binding marks"
             Task {
-                _ = await bridge.previewDotTestOverlay(pattern: "center")
+                _ = await bridge.previewDotTestOverlay(pattern: "five")
+                await bridge.refreshVisualBindingStatus()
                 calibrationStatusText = "WIZ \(bridge.dotTestPreviewStatus)"
             }
             return
         }
 
         if canRunVisualCenterDot {
-            calibrationStatusText = "WIZ visual center dot"
+            calibrationStatusText = "WIZ binding marks"
             Task {
-                await runVisualRelativeCenterDot()
+                await runVisualRelativeFivePointTest()
             }
         }
     }
@@ -2985,7 +2872,6 @@ struct ContentView: View {
         showCalibrationWizard = true
         cameraLayout = .plotter
         showLiveVideo = true
-        plotterCamera.fiducialDetectionEnabled = true
         startVisibleCameras()
 
         if manualFiducials.count < 4 {
@@ -3042,7 +2928,7 @@ struct ContentView: View {
         manualPenMode = false
         manualCapColorMode = false
         manualFiducials = []
-        observedPenPoint = nil
+        confirmedCapPoint = nil
         visualMotionModel = nil
         visualMotionSamples = []
         visualCenterDotTaskActive = false
@@ -3068,9 +2954,9 @@ struct ContentView: View {
             )
             StatusLamp(
                 title: "FID",
-                value: "\(plotterCamera.stats.fiducialCount)+\(manualFiducials.count)",
+                value: "\(manualFiducials.count)/4",
                 color: fiducialLampColor,
-                help: "Detected fiducials plus manually clicked fiducials"
+                help: "Manual wizard fiducials"
             )
             StatusLamp(
                 title: "PAPER",
@@ -3082,7 +2968,7 @@ struct ContentView: View {
                 title: "CAP",
                 value: penLampValue,
                 color: penLampColor,
-                help: observedPenStatusText
+                help: confirmedCapStatusText
             )
             StatusLamp(
                 title: "STATE",
@@ -3116,13 +3002,7 @@ struct ContentView: View {
     }
 
     private var fiducialLampColor: Color {
-        if plotterCamera.stats.fiducialCount >= 4 || manualFiducials.count >= 4 {
-            return .green
-        }
-        if plotterCamera.stats.fiducialCount + manualFiducials.count >= 4 {
-            return .yellow
-        }
-        return .red
+        manualFiducials.count >= 4 ? .green : .red
     }
 
     private var paperLampValue: String {
@@ -3133,23 +3013,23 @@ struct ContentView: View {
     }
 
     private var penLampValue: String {
-        guard let observedPenPoint else { return "--" }
-        return observedPenPoint.paperMm == nil ? "CAM" : "MM"
+        guard let confirmedCapPoint else { return "--" }
+        return confirmedCapPoint.paperMm == nil ? "CAM" : "MM"
     }
 
     private var penLampColor: Color {
-        guard let observedPenPoint else { return .white.opacity(0.45) }
-        guard let paperMm = observedPenPoint.paperMm else { return .yellow }
+        guard let confirmedCapPoint else { return .white.opacity(0.45) }
+        guard let paperMm = confirmedCapPoint.paperMm else { return .yellow }
         return isGreenCapInsideSafeZone(paperMm) ? .green : .red
     }
 
-    private var observedPenStatusText: String {
-        guard let observedPenPoint else { return "Cap position not observed" }
-        if let paperMm = observedPenPoint.paperMm {
+    private var confirmedCapStatusText: String {
+        guard let confirmedCapPoint else { return "Cap position not observed" }
+        if let paperMm = confirmedCapPoint.paperMm {
             return String(
                 format: "CAP cam x%.3f y%.3f paper x%.1f y%.1f mm %@",
-                observedPenPoint.cameraPoint.x,
-                observedPenPoint.cameraPoint.y,
+                confirmedCapPoint.cameraPoint.x,
+                confirmedCapPoint.cameraPoint.y,
                 paperMm.x,
                 paperMm.y,
                 isGreenCapInsideSafeZone(paperMm) ? "SAFE" : "OUTSIDE"
@@ -3157,8 +3037,8 @@ struct ContentView: View {
         }
         return String(
             format: "CAP cam x%.3f y%.3f, no paper homography",
-            observedPenPoint.cameraPoint.x,
-            observedPenPoint.cameraPoint.y
+            confirmedCapPoint.cameraPoint.x,
+            confirmedCapPoint.cameraPoint.y
         )
     }
 
@@ -3174,7 +3054,6 @@ struct ContentView: View {
             Section("Overlays") {
                 Toggle("Calibrated Grid", isOn: $plotterCamera.showGrid)
                 Toggle("Measurements", isOn: $plotterCamera.showMeasurements)
-                Toggle("Fiducials", isOn: $plotterCamera.fiducialDetectionEnabled)
                 Toggle("Segmentation", isOn: $plotterCamera.segmentationEnabled)
                 Toggle("Motion Detection", isOn: $plotterCamera.changeDetectionEnabled)
                 MenuSliderControl(
@@ -3223,42 +3102,6 @@ struct ContentView: View {
 
     private var drawingTestsMenu: some View {
         Menu {
-            Section("Advanced Mark Tests") {
-                Button("Preview Center Mark") {
-                    calibrationStatusText = "TEST center mark preview"
-                    Task {
-                        _ = await bridge.previewDotTestOverlay(pattern: "center")
-                        calibrationStatusText = "TEST \(bridge.dotTestPreviewStatus)"
-                    }
-                }
-                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
-
-                Button("Run Visual Center Mark") {
-                    calibrationStatusText = "TEST visual center mark"
-                    Task {
-                        await runVisualRelativeCenterDot()
-                    }
-                }
-                .disabled(!canRunVisualCenterDot)
-
-                Button("Preview 5-Point Marks") {
-                    calibrationStatusText = "TEST five-point preview"
-                    Task {
-                        _ = await bridge.previewDotTestOverlay(pattern: "five")
-                        calibrationStatusText = "TEST \(bridge.dotTestPreviewStatus)"
-                    }
-                }
-                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
-
-                Button("Run Visual 5-Point Marks") {
-                    calibrationStatusText = "TEST visual five-point marks"
-                    Task {
-                        await runVisualRelativeFivePointTest()
-                    }
-                }
-                .disabled(!canRunVisualCenterDot)
-            }
-
             Section("Advanced Shape Previews") {
                 Button("Preview Triangle Overlay") {
                     calibrationStatusText = "TEST triangle preview"
@@ -3293,21 +3136,6 @@ struct ContentView: View {
                     }
                 }
                 .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning || bridge.isMachineBusy)
-            }
-
-            Section("Advanced Shape Residuals") {
-                Button("Triangle Residual Runner Pending") {
-                    calibrationStatusText = "TEST triangle residual runner needs visual-relative execution"
-                }
-                .disabled(true)
-                Button("Square Residual Runner Pending") {
-                    calibrationStatusText = "TEST square residual runner needs visual-relative execution"
-                }
-                .disabled(true)
-                Button("Circle Residual Runner Pending") {
-                    calibrationStatusText = "TEST circle planner is not implemented yet"
-                }
-                .disabled(true)
             }
 
             Section("Overlay") {
@@ -3346,221 +3174,6 @@ struct ContentView: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .help("Drawing previews and visual mark tests")
-    }
-
-    private var calibrationMenu: some View {
-        Menu {
-            Section("Wizard") {
-                Button("Open Calibration Wizard") {
-                    startCalibrationWizard()
-                }
-            }
-
-            Section("Advanced Observation") {
-                Button("Scan Plotter Frame") {
-                    calibrationStatusText = "CAL scan: analyzing plotter frame"
-                    plotterCamera.scanCurrentFrame()
-                }
-                Button("Reset Change Baseline") {
-                    calibrationStatusText = "CAL baseline reset"
-                    plotterCamera.resetChangeBaseline()
-                }
-                Button(plotterCamera.fiducialDetectionEnabled ? "Hide Fiducials" : "Show Fiducials") {
-                    plotterCamera.fiducialDetectionEnabled.toggle()
-                    calibrationStatusText = plotterCamera.fiducialDetectionEnabled ? "CAL auto fiducials enabled" : "CAL auto fiducials hidden"
-                }
-            }
-
-            Section("Advanced Fiducials") {
-                Button(manualFiducialMode ? "Stop Clicking Fiducials" : "Click Fiducials") {
-                    manualFiducialMode.toggle()
-                    if manualFiducialMode {
-                        manualPenMode = false
-                        manualCapColorMode = false
-                        calibrationStatusText = "CAL click visible fiducials on plotter view"
-                    } else {
-                        calibrationStatusText = "CAL manual fiducials stopped"
-                    }
-                }
-                Button("Clear Manual Fiducials") {
-                    manualFiducials = []
-                    calibrationStatusText = "CAL manual fiducials cleared"
-                }
-                Button("Register Paper Homography") {
-                    calibrationStatusText = "CAL paper homography solving"
-                    Task {
-                        if await bridge.registerPaperHomography(
-                            fiducials: manualFiducials,
-                            paperWidthMm: bridge.workspaceXMm,
-                            paperHeightMm: bridge.workspaceYMm
-                        ) != nil {
-                            calibrationStatusText = bridge.paperTransformStatus
-                        } else {
-                            calibrationStatusText = bridge.paperTransformStatus
-                        }
-                    }
-                }
-                .disabled(!bridge.isOnline || manualFiducials.count < 4 || bridge.isCalibrating)
-            }
-
-            Section("Advanced Cap/Pen") {
-                Button(manualPenMode ? "Stop Clicking Cap/Pen" : "Click Cap/Pen Position") {
-                    manualPenMode.toggle()
-                    if manualPenMode {
-                        manualFiducialMode = false
-                        manualCapColorMode = false
-                        observedPenPoint = nil
-                        calibrationStatusText = bridge.hasPaperLock
-                            ? "CAL click cap/pen position on plotter view"
-                            : "CAL click cap/pen position; paper homography not locked"
-                    } else {
-                        calibrationStatusText = "CAL cap/pen click stopped"
-                    }
-                }
-                Button(manualCapColorMode ? "Stop Cap Color Pick" : "Pick Cap Color") {
-                    if manualCapColorMode {
-                        manualCapColorMode = false
-                        calibrationStatusText = "CAL cap color pick stopped"
-                    } else {
-                        startCapColorPick()
-                    }
-                }
-                Button("Default Green Cap") {
-                    manualCapColorMode = false
-                    manualPenMode = false
-                    observedPenPoint = nil
-                    plotterCamera.resetCapMarkerColorTarget()
-                    calibrationStatusText = "CAL cap marker reset to default green"
-                }
-                Button("Clear Cap Position") {
-                    observedPenPoint = nil
-                    calibrationStatusText = "CAL cap position cleared"
-                }
-                .disabled(observedPenPoint == nil)
-            }
-
-            Section("Visual Calibration") {
-                Button("Move X Into Camera Field") {
-                    requestXFieldMovePrompt(source: "calibration_menu")
-                }
-                .disabled(!canMoveXIntoCameraFieldForProbe)
-                .help("Live +X recovery jog for startup cases where the cap is outside the camera field")
-
-                Button("Run Visual Calibration") {
-                    calibrationStatusText = "CAL visual calibration requested"
-                    Task {
-                        await runFrameLearning()
-                    }
-                }
-                .disabled(!canRunAdaptiveMotionProbe)
-                .help(greenCapProbeReadinessDetail)
-            }
-
-            Section("Calibration Marks") {
-                Button("Calibrate Pen: Mark Current Cap") {
-                    calibrationStatusText = "CAL pen calibration mark"
-                    Task {
-                        await runPenCalibrationMarkAtCurrentPosition(source: "calibration_menu")
-                    }
-                }
-                .disabled(!canRunPenCalibrationMark)
-                .help("Draws a small relative mark at the current cap position after visual calibration")
-                Button("Preview Center Dot Overlay") {
-                    calibrationStatusText = "CAL center dot preview"
-                    Task {
-                        if await bridge.previewDotTestOverlay(pattern: "center") != nil {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        } else {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        }
-                    }
-                }
-                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
-                Button("Run Center Dot Motion") {
-                    calibrationStatusText = "CAL center dot motion"
-                    Task {
-                        if await bridge.runCenterDotTestMotion() {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        } else {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        }
-                    }
-                }
-                .disabled(!canRunBridgeCenterDotMotion)
-                Button("Run Visual Center Mark") {
-                    calibrationStatusText = "CAL visual center dot"
-                    Task {
-                        await runVisualRelativeCenterDot()
-                    }
-                }
-                .disabled(!canRunVisualCenterDot)
-                Button("Preview 5-Point Dot Overlay") {
-                    calibrationStatusText = "CAL five-point dot preview"
-                    Task {
-                        if await bridge.previewDotTestOverlay(pattern: "five") != nil {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        } else {
-                            calibrationStatusText = bridge.dotTestPreviewStatus
-                        }
-                    }
-                }
-                .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating)
-                Button("Run Visual 5-Point Marks") {
-                    calibrationStatusText = "CAL visual five-point marks"
-                    Task {
-                        await runVisualRelativeFivePointTest()
-                    }
-                }
-                .disabled(!canRunVisualCenterDot)
-                Button("Clear Dot Test Overlay") {
-                    bridge.clearDotTestOverlay()
-                    calibrationStatusText = "CAL dot-test overlay cleared"
-                }
-                .disabled(bridge.dotTestPreviewPoints.isEmpty && bridge.dotTestPreviewSegments.isEmpty)
-            }
-
-            Section("Bridge") {
-                Button("Reconnect Bridge") {
-                    calibrationStatusText = "CAL bridge reconnecting"
-                    Task {
-                        await bridge.refreshHealth()
-                        await bridge.reconnectMachine()
-                        calibrationStatusText = "CAL bridge \(bridge.shortStatus) \(bridge.statusText)"
-                    }
-                }
-                Button("Start Model Session") {
-                    calibrationStatusText = "CAL model session starting"
-                    Task {
-                        await bridge.startMachineModelCalibration()
-                        calibrationStatusText = "CAL \(bridge.modelStatus) \(bridge.statusText)"
-                    }
-                }
-                .disabled(!bridge.isOnline || bridge.isRunning || bridge.isMachineBusy)
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: "scope")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.9))
-                    .frame(width: 32, height: 32)
-                    .background(Color.white.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                    )
-                Text("CAL")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .frame(width: 58)
-            }
-            .frame(width: 60)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .help("Calibration options and diagnostic actions")
     }
 
     private func recordManualFiducial(viewPoint: CGPoint, cameraPoint: CGPoint) {
@@ -3608,7 +3221,7 @@ struct ContentView: View {
         manualPenMode = true
         manualFiducialMode = false
         manualCapColorMode = false
-        observedPenPoint = nil
+        confirmedCapPoint = nil
         calibrationStatusText = bridge.hasPaperLock
             ? "WIZ click cap position on plotter view"
             : "WIZ paper homography required before cap click"
@@ -3618,7 +3231,7 @@ struct ContentView: View {
         manualCapColorMode = true
         manualPenMode = false
         manualFiducialMode = false
-        observedPenPoint = nil
+        confirmedCapPoint = nil
         plotterCamera.clearCarriageMarkerObservation()
         calibrationStatusText = "CAL click the cap color on the plotter view"
     }
@@ -3637,7 +3250,7 @@ struct ContentView: View {
             y: 1.0 - cameraPoint.y
         )
         let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint)
-        observedPenPoint = ObservedPenPoint(
+        confirmedCapPoint = ConfirmedCapPoint(
             point: approximateViewPoint,
             cameraPoint: cameraPoint,
             paperMm: paperMm
@@ -3663,7 +3276,7 @@ struct ContentView: View {
         }
     }
 
-    private func recordObservedPen(viewPoint: CGPoint, cameraPoint: CGPoint) {
+    private func recordConfirmedCap(viewPoint: CGPoint, cameraPoint: CGPoint) {
         let normalizedView = CGPoint(
             x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
@@ -3673,7 +3286,7 @@ struct ContentView: View {
             y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
         )
         let paperMm = bridge.paperPointMm(cameraPoint: normalizedCamera)
-        observedPenPoint = ObservedPenPoint(
+        confirmedCapPoint = ConfirmedCapPoint(
             point: normalizedView,
             cameraPoint: normalizedCamera,
             paperMm: paperMm
@@ -3704,7 +3317,7 @@ struct ContentView: View {
             x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
         )
-        observedPenPoint = nil
+        confirmedCapPoint = nil
         plotterCamera.clearCarriageMarkerObservation()
         if let target = plotterCamera.pickCapMarkerColor(cameraPoint: normalizedCamera) {
             calibrationStatusText = String(
@@ -3737,7 +3350,6 @@ struct ContentView: View {
         plotterOverlay.opacity = 0.38
         plotterCamera.showGrid = true
         plotterCamera.showMeasurements = true
-        plotterCamera.fiducialDetectionEnabled = true
         plotterCamera.segmentationEnabled = true
         plotterCamera.changeDetectionEnabled = true
         faceCamera.segmentationEnabled = true
@@ -4010,8 +3622,8 @@ private struct ManualFiducialOverlay: View {
     }
 }
 
-private struct ObservedPenOverlay: View {
-    let point: ObservedPenPoint?
+private struct ConfirmedCapOverlay: View {
+    let point: ConfirmedCapPoint?
     let isActive: Bool
 
     var body: some View {

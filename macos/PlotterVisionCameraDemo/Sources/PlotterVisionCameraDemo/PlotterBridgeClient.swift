@@ -403,32 +403,6 @@ struct BridgeCapabilityTestResponse: Decodable {
     let error: String?
 }
 
-struct CalibrationStartRequest: Encodable {
-    let marginMm: Double
-    let travelFeedMmMin: Double
-    let includeHoming: Bool
-    let simulateObservations: Bool
-    let syntheticNoiseNorm: Double
-}
-
-struct CalibrationSessionResponse: Decodable {
-    let sessionId: String
-    let status: String
-    let dryRun: Bool
-    let plannedCommands: [String]
-    let observedCount: Int
-    let model: CalibrationModelSnapshot
-    let sessionFile: String
-    let error: String?
-}
-
-struct CalibrationModelSnapshot: Decodable {
-    let observationCount: Int?
-    let rmsErrorNorm: Double?
-    let maxErrorNorm: Double?
-    let drawingSurfaceNorm: [String: Double]?
-}
-
 struct PaperRegistrationCornerRequest: Encodable {
     let corner: String
     let observedNorm: NormPoint
@@ -937,10 +911,6 @@ final class PlotterBridgeClient {
         try await post(path: "capabilities/tests/run", request: request)
     }
 
-    func startCalibration(_ request: CalibrationStartRequest) async throws -> CalibrationSessionResponse {
-        try await post(path: "calibration/start", request: request)
-    }
-
     func registerPaper(_ request: PaperRegistrationRequest) async throws -> PaperRegistrationResponse {
         try await post(path: "paper/register", request: request)
     }
@@ -1106,10 +1076,6 @@ final class PlotterBridgeClient {
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
-            if let failure = try? decoder.decode(CalibrationSessionResponse.self, from: data),
-               let error = failure.error {
-                throw BridgeClientError.server(error)
-            }
             if let failure = try? decoder.decode(PaperRegistrationResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
@@ -1163,7 +1129,6 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var armPen = false
     @Published var armHoming = false
     @Published var armUnlock = false
-    @Published var modelStatus = "MODEL --"
     @Published var paperTransformStatus = "PAPER --"
     @Published var paperRegistrationSnapshot: PaperRegistrationSnapshot?
     @Published var isCalibrating = false
@@ -1184,10 +1149,15 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var dotTestPreviewStatus = "DOT --"
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var visualCenterDotStatus = "VIS --"
+    @Published var visualBindingStatus = "BIND --"
+    @Published var visualBindingDetail = "No binding observations"
+    @Published var visualBindingObservationCount = 0
+    @Published var visualBindingValid = false
     @Published var latestAdaptiveProbePlan: BridgeAdaptiveVisualProbePlan?
     @Published var visualProbeEvidenceRunId = "swift-probe-\(UUID().uuidString.lowercased())"
     @Published var dotTestPreviewPoints: [DotTestPreviewPoint] = []
     @Published var dotTestPreviewSegments: [DotTestPreviewSegment] = []
+    @Published var dotTestPreviewCommandId = ""
     @Published var dotTestPreviewPlanHash = ""
     @Published var dotTestPreviewPattern = ""
     @Published var workspaceXMm = 533.4
@@ -1276,12 +1246,16 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     var hasBridgeApiMismatch: Bool {
-        guard isOnline,
-              let rawVersion = cleanBridgeMetadata(bridgeApiVersion),
+        guard isOnline else { return false }
+        guard let rawVersion = cleanBridgeMetadata(bridgeApiVersion),
               let apiVersion = Int(rawVersion) else {
-            return false
+            return true
         }
         return apiVersion < requiredBridgeApiVersion
+    }
+
+    var hasBridgeContractMismatch: Bool {
+        hasBridgeApiMismatch || hasLifecycleBuildMismatch
     }
 
     var bridgeLifecycleStatusLine: String {
@@ -1333,11 +1307,11 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     var canArmHardware: Bool {
-        isOnline && !hasBridgeApiMismatch && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
+        isOnline && !hasBridgeContractMismatch && !isMockBridge && isDryRun && !isRunning && !isMachineBusy
     }
 
     var canUsePlotterConnectionControl: Bool {
-        isLiveMotionMode || canArmHardware
+        isLiveMotionMode || canArmHardware || canDisarmHardware
     }
 
     var canDisarmHardware: Bool {
@@ -1391,7 +1365,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var canRunAbsoluteDrawing: Bool {
         isLiveMotionMode
-            && !hasBridgeApiMismatch
+            && !hasBridgeContractMismatch
             && hasPaperLock
             && machineAxisModelTrusted
             && machineHomingTrusted
@@ -1409,7 +1383,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     var canRunVisualRelativeMotion: Bool {
         isLiveMotionMode
-            && !hasBridgeApiMismatch
+            && !hasBridgeContractMismatch
             && hasPaperLock
             && dotTestPreviewPattern == "center"
             && !dotTestPreviewPoints.isEmpty
@@ -1442,6 +1416,7 @@ final class PlotterBridgeModel: ObservableObject {
     var motionGateMessage: String {
         if !isOnline { return "Motion blocked: bridge offline" }
         if hasBridgeApiMismatch { return "Motion blocked: bridge API mismatch; restart safe bridge" }
+        if hasLifecycleBuildMismatch { return "Motion blocked: app/bridge build mismatch; restart both from the same checkout" }
         if isMockBridge { return "Preview bridge only; start hardware standby to connect" }
         if !hasControllerPort { return "Controller not connected; connect or arm to auto-detect" }
         if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
@@ -1456,6 +1431,7 @@ final class PlotterBridgeModel: ObservableObject {
     var drawPreflightMessage: String {
         if !isOnline { return "Bridge offline" }
         if hasBridgeApiMismatch { return "Bridge API mismatch" }
+        if hasLifecycleBuildMismatch { return "App/bridge build mismatch" }
         if isDryRun { return "Bridge-run dry-run only" }
         if !hasPaperLock { return "Paper homography missing" }
         if !machineAxisModelTrusted { return "Axis geometry not trusted" }
@@ -1584,6 +1560,9 @@ final class PlotterBridgeModel: ObservableObject {
                 "dot_segments": dotTestPreviewSegments.count,
                 "adaptive_probe": adaptiveProbeStatus,
                 "visual_center_dot": visualCenterDotStatus,
+                "visual_binding": visualBindingStatus,
+                "visual_binding_valid": visualBindingValid,
+                "visual_binding_observations": visualBindingObservationCount,
                 "path_animation": pathAnimationStatus,
                 "path_reveal_progress": pathRevealProgress
             ],
@@ -1689,6 +1668,32 @@ final class PlotterBridgeModel: ObservableObject {
             ],
             snapshot: true
         )
+    }
+
+    private func applyVisualBindingStatus(_ response: BridgeVisualPositionBindingResponse) {
+        if let binding = response.binding {
+            let observationCount = binding.residuals.observationCount
+            visualBindingObservationCount = observationCount
+            visualBindingValid = binding.validationStatus == "validated" && binding.blockers.isEmpty
+            visualBindingStatus = visualBindingValid
+                ? "BIND READY"
+                : String(format: "BIND %@ %d", binding.validationStatus.uppercased(), observationCount)
+            if visualBindingValid {
+                let rms = binding.residuals.rmsResidualMm.map { String(format: "rms %.2f", $0) } ?? "rms --"
+                let maxResidual = binding.residuals.maxResidualMm.map { String(format: "max %.2f", $0) } ?? "max --"
+                visualBindingDetail = "Binding validated \(rms) \(maxResidual)"
+            } else if let blocker = binding.blockers.first {
+                visualBindingDetail = blocker
+            } else {
+                visualBindingDetail = "Need ink or pen-tip observations"
+            }
+            return
+        }
+
+        visualBindingObservationCount = 0
+        visualBindingValid = false
+        visualBindingStatus = response.status == "missing" ? "BIND --" : "BIND ERR"
+        visualBindingDetail = response.error ?? "No binding observations"
     }
 
     private func commandPayload(_ response: MachineCommandResponse) -> [String: Any] {
@@ -2935,58 +2940,6 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func startMachineModelCalibration() async {
-        guard !isCalibrating else { return }
-        isCalibrating = true
-        isMachineBusy = true
-        activeAction = "model"
-        modelStatus = "MODEL RUN"
-        diagnosticsEvent("machine_model_calibration_started", snapshot: true)
-        defer {
-            isCalibrating = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.startCalibration(
-                CalibrationStartRequest(
-                    marginMm: 25.0,
-                    travelFeedMmMin: 500.0,
-                    includeHoming: false,
-                    simulateObservations: isDryRun,
-                    syntheticNoiseNorm: 0.0
-                )
-            )
-            isOnline = true
-            if response.status == "solved" {
-                let rms = response.model.rmsErrorNorm ?? 0.0
-                modelStatus = String(format: "MODEL %.4f", rms)
-            } else {
-                modelStatus = "MODEL \(response.observedCount)/5"
-            }
-            statusText = "\(response.sessionId) \(response.status)"
-            await refreshMachineStatus()
-            diagnosticsEvent(
-                "machine_model_calibration_completed",
-                [
-                    "session_id": response.sessionId,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "observed_count": response.observedCount,
-                    "rms_error_norm": response.model.rmsErrorNorm ?? 0.0,
-                    "max_error_norm": response.model.maxErrorNorm ?? 0.0
-                ],
-                snapshot: true
-            )
-        } catch {
-            modelStatus = "MODEL ERR"
-            statusText = error.localizedDescription
-            isMachineBusy = false
-            isMachineAlarm = true
-            diagnosticsEvent("machine_model_calibration_failed", errorPayload(error), snapshot: true)
-        }
-    }
-
     func registerPaperHomography(
         fiducials: [ManualFiducialPoint],
         paperWidthMm: Double,
@@ -3107,6 +3060,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             dotTestPreviewPoints = response.points
             dotTestPreviewSegments = response.cameraSegments
+            dotTestPreviewCommandId = response.commandId
             dotTestPreviewPlanHash = response.planHash
             dotTestPreviewPattern = response.pattern
             expectedPathSegments = []
@@ -3135,6 +3089,7 @@ final class PlotterBridgeModel: ObservableObject {
         } catch {
             dotTestPreviewPoints = []
             dotTestPreviewSegments = []
+            dotTestPreviewCommandId = ""
             dotTestPreviewPlanHash = ""
             dotTestPreviewPattern = ""
             dotTestPreviewStatus = "DOT ERR"
@@ -3147,10 +3102,125 @@ final class PlotterBridgeModel: ObservableObject {
     func clearDotTestOverlay() {
         dotTestPreviewPoints = []
         dotTestPreviewSegments = []
+        dotTestPreviewCommandId = ""
         dotTestPreviewPlanHash = ""
         dotTestPreviewPattern = ""
         dotTestPreviewStatus = "DOT --"
         diagnosticsEvent("dot_preview_cleared", snapshot: true)
+    }
+
+    func refreshVisualBindingStatus() async {
+        guard isOnline else {
+            visualBindingStatus = "BIND OFF"
+            visualBindingDetail = "Bridge offline"
+            visualBindingValid = false
+            return
+        }
+        do {
+            let response = try await client.visualPositionBindingStatus()
+            applyVisualBindingStatus(response)
+            diagnosticsEvent(
+                "visual_binding_status_refreshed",
+                [
+                    "status": response.status,
+                    "observation_count": response.binding?.residuals.observationCount ?? 0,
+                    "validation_status": response.binding?.validationStatus ?? "",
+                    "valid": visualBindingValid
+                ],
+                snapshot: true
+            )
+        } catch {
+            visualBindingStatus = "BIND ERR"
+            visualBindingDetail = error.localizedDescription
+            visualBindingValid = false
+            diagnosticsEvent("visual_binding_status_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func observeVisualBindingPoint(
+        commandId: String,
+        point: DotTestPreviewPoint,
+        observedPaperMm: PaperPointMmSnapshot,
+        observedCameraNorm: NormPoint?,
+        kind: String,
+        confidence: Double
+    ) async -> Bool {
+        guard isOnline else {
+            visualBindingStatus = "BIND OFF"
+            visualBindingDetail = "Bridge offline"
+            return false
+        }
+        guard !commandId.isEmpty else {
+            visualBindingStatus = "BIND NO CMD"
+            visualBindingDetail = "Preview expected geometry before binding observation"
+            return false
+        }
+
+        do {
+            let response = try await client.observeVisualBinding(
+                BridgeVisualBindingObservationRequest(
+                    commandId: commandId,
+                    pointId: point.pointId,
+                    kind: kind,
+                    observedNorm: observedCameraNorm,
+                    observedPaperMm: observedPaperMm,
+                    expectedPaperMm: point.paperMm,
+                    cameraId: "plotter-camera",
+                    cameraName: "Plotter Camera",
+                    confidence: confidence
+                )
+            )
+            applyVisualBindingStatus(response)
+            diagnosticsEvent(
+                "visual_binding_observation_added",
+                [
+                    "command_id": commandId,
+                    "point_id": point.pointId,
+                    "kind": kind,
+                    "status": response.status,
+                    "observation_id": response.observationId ?? "",
+                    "validation_status": response.binding?.validationStatus ?? "",
+                    "observation_count": response.binding?.residuals.observationCount ?? 0
+                ],
+                snapshot: true
+            )
+            return response.status != "failed"
+        } catch {
+            visualBindingStatus = "BIND ERR"
+            visualBindingDetail = error.localizedDescription
+            diagnosticsEvent("visual_binding_observation_failed", errorPayload(error), snapshot: true)
+            return false
+        }
+    }
+
+    func solveVisualBinding(requestId: String? = nil) async -> Bool {
+        guard isOnline else {
+            visualBindingStatus = "BIND OFF"
+            visualBindingDetail = "Bridge offline"
+            return false
+        }
+        do {
+            let response = try await client.solveVisualBinding(
+                BridgeVisualBindingSolveRequest(requestId: requestId)
+            )
+            applyVisualBindingStatus(response)
+            diagnosticsEvent(
+                "visual_binding_solved",
+                [
+                    "status": response.status,
+                    "validation_status": response.binding?.validationStatus ?? "",
+                    "valid": visualBindingValid,
+                    "observation_count": response.binding?.residuals.observationCount ?? 0
+                ],
+                snapshot: true
+            )
+            return visualBindingValid
+        } catch {
+            visualBindingStatus = "BIND ERR"
+            visualBindingDetail = error.localizedDescription
+            diagnosticsEvent("visual_binding_solve_failed", errorPayload(error), snapshot: true)
+            return false
+        }
     }
 
     func paperPointMm(cameraPoint: CGPoint) -> PaperPointMmSnapshot? {

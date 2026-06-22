@@ -310,7 +310,7 @@ Use FastAPI only after core services exist. Create typed request/response models
 - no-motion command;
 - jog request;
 - test pattern generation;
-- calibration session creation;
+- binding preview, observation, and solve flow;
 - calibration measurement entry;
 - calibration solve/validate;
 - pen actuator configuration/trial.

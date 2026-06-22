@@ -11,8 +11,6 @@ from plotter_vision.bridge.server import (
     AxisModelTrustSample,
     BridgeRuntimeConfig,
     CalibrationMarkPlanRequest,
-    CalibrationObservationRequest,
-    CalibrationStartRequest,
     ImageShapePreviewRequest,
     MachineArmRequest,
     DotTestPreviewRequest,
@@ -33,8 +31,7 @@ from plotter_vision.bridge.server import (
     PlotterBridge,
     _motion_idle_timeout_s,
 )
-from plotter_vision.calibration.synthetic import synthetic_observations
-from plotter_vision.calibration.vision_model import CameraPointNorm, LogicalPointMM
+from plotter_vision.calibration.vision_model import CameraPointNorm
 from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.controller.grbl import GrblHalController
 from plotter_vision.controller.mock import MockTransport
@@ -238,35 +235,6 @@ def test_bridge_mock_live_run_writes_transcript(tmp_path: Path) -> None:
     assert '"payload":"M3 S720"' in text
 
 
-def test_bridge_calibration_start_persists_planned_session(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
-
-    response = bridge.start_calibration(CalibrationStartRequest(simulate_observations=False))
-
-    assert response.status == "awaiting_observations"
-    assert response.observed_count == 0
-    assert response.planned_commands[0] == "G21"
-    assert "$H" not in response.planned_commands
-    assert "G53 G1 X-266.7 Y-107.95" in response.planned_commands
-    assert Path(response.session_file).exists()
-
-
-def test_bridge_calibration_can_solve_with_synthetic_observations(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
-
-    response = bridge.start_calibration(CalibrationStartRequest(simulate_observations=True))
-
-    assert response.status == "solved"
-    assert response.observed_count == 5
-    assert response.model["transform"] is not None
-    assert response.model["residuals"]
-    assert response.model["rms_error_norm"] == pytest.approx(0.0, abs=1e-12)
-    assert response.latest_model_file is not None
-    assert (tmp_path / "calibration" / "latest_machine_model.json").exists()
-
-
 def test_bridge_calibration_mark_preview_is_preview_only(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
@@ -345,52 +313,6 @@ def test_bridge_mock_live_calibration_marks_write_transcript_without_homing(tmp_
     text = Path(response.controller_transcript).read_text(encoding="utf-8")
     assert '"payload":"$H"' not in text
     assert '"payload":"M3 S720"' in text
-
-
-def test_bridge_calibration_observations_can_resume_session(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
-    response = bridge.start_calibration(CalibrationStartRequest(simulate_observations=False))
-    waypoints = response.waypoints
-    machine = _machine_with_pen()
-    synthetic = synthetic_observations(
-        machine=machine,
-        logical_points=[
-            _logical_from_waypoint(waypoint)
-            for waypoint in waypoints[:3]
-        ],
-        command_id=response.session_id,
-    )
-
-    for observation in synthetic[:2]:
-        response = bridge.add_calibration_observation(
-            CalibrationObservationRequest(
-                session_id=response.session_id,
-                point_id=observation.point_id,
-                observed_norm=observation.observed_norm,
-            )
-        )
-
-    assert response.status == "awaiting_observations"
-    assert response.observed_count == 2
-
-    response = bridge.add_calibration_observation(
-        CalibrationObservationRequest(
-            session_id=response.session_id,
-            point_id=synthetic[2].point_id,
-            observed_norm=synthetic[2].observed_norm,
-        )
-    )
-
-    assert response.status == "solved"
-    assert response.observed_count == 3
-    assert response.model["transform"] is not None
-
-    reloaded = _bridge(tmp_path=tmp_path, config_path=config_path)
-    loaded = reloaded.calibration_status(response.session_id)
-    assert loaded.status == "solved"
-    assert loaded.observed_count == 3
-    assert loaded.model["transform"] is not None
 
 
 def test_bridge_paper_registration_solves_and_persists_homography(tmp_path: Path) -> None:
@@ -1254,8 +1176,6 @@ def _live_bridge(*, tmp_path: Path, config_path: Path) -> PlotterBridge:
     )
 
 
-def _logical_from_waypoint(waypoint: dict[str, object]) -> LogicalPointMM:
-    return LogicalPointMM.model_validate(waypoint["logical_mm"])
 
 
 def _project_paper_to_camera(x_norm: float, y_norm: float) -> tuple[float, float]:

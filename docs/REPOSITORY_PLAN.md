@@ -78,11 +78,10 @@ The fixed-camera workflow is:
 5. Run or rerun the motion probe from the current cap location. BOOT-X is the positive-X-only
    bootstrap path for near-X-min starts; normal adaptive probing follows once the cap is in the probe
    zone.
-6. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat
-   until residuals are acceptable.
-7. Persist learned parameters as future initialization values for coordinate-system setup and
-   shape-language parametrization.
-8. Draw either capabilities tests or portrait/image-derived programs.
+6. Preview expected binding marks, draw the watched visual-relative marks, collect ink observations,
+   post them through `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
+7. Use the validated `VisualPositionBinding` as the drawing unlock.
+8. Draw either capabilities tests or portrait/image-derived programs after bridge preview.
 
 Both post-calibration drawing lanes use the same pipeline:
 
@@ -169,9 +168,8 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: partially implemented. Calibration session/model scaffolding and paper homography
-registration exist; the remaining work is to converge those into a trusted fixed-camera visual
-position binding used for paper-plane drawing.
+Status: implemented around the app wizard. Paper homography, cap/probe evidence, binding
+observations, and binding solving are owned by the bridge; the Swift app is the operator surface.
 
 - Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
   artifact JSON.

@@ -87,7 +87,7 @@ def bridge_server(
     ] = Path("artifacts/bridge_transcripts"),
     calibration_dir: Annotated[
         Path,
-        typer.Option(help="Directory for persisted calibration sessions and machine models"),
+        typer.Option(help="Directory for persisted calibration artifacts and machine models"),
     ] = Path("artifacts/calibration_sessions"),
     workspace_x_max: Annotated[
         float | None,

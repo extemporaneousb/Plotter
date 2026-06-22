@@ -66,9 +66,6 @@ final class VisionAnalyzer {
             }
         }
 
-        let fiducials = settings.redFiducialsEnabled
-            ? detectRedFiducials(pixelBuffer: pixelBuffer, frameNumber: frameNumber)
-            : []
         let carriageMarker = settings.greenMarkerEnabled
             ? detectCarriageMarker(
                 pixelBuffer: pixelBuffer,
@@ -76,17 +73,11 @@ final class VisionAnalyzer {
                 frameNumber: frameNumber
             )
             : nil
-        let paperRegistration = buildPaperRegistration(
-            fiducials: fiducials,
-            frameNumber: frameNumber
-        )
 
         let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
         return VisionAnalysisResult(
             segments: segments,
-            fiducials: fiducials,
             carriageMarker: carriageMarker,
-            paperRegistration: paperRegistration,
             elapsedMilliseconds: elapsed
         )
     }
@@ -107,133 +98,6 @@ final class VisionAnalyzer {
         }
 
         return .contour
-    }
-
-    private func detectRedFiducials(
-        pixelBuffer: CVPixelBuffer,
-        frameNumber: Int
-    ) -> [FiducialMark] {
-        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
-            return []
-        }
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return [] }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        let stride = max(2, min(6, width / 320))
-        let gridWidth = max(1, (width + stride - 1) / stride)
-        let gridHeight = max(1, (height + stride - 1) / stride)
-        var redMask = [UInt8](repeating: 0, count: gridWidth * gridHeight)
-
-        for gy in 0..<gridHeight {
-            let py = min(height - 1, gy * stride)
-            let row = baseAddress.advanced(by: py * bytesPerRow).assumingMemoryBound(to: UInt8.self)
-            for gx in 0..<gridWidth {
-                let px = min(width - 1, gx * stride)
-                let offset = px * 4
-                let blue = Int(row[offset])
-                let green = Int(row[offset + 1])
-                let red = Int(row[offset + 2])
-                if isFiducialRed(red: red, green: green, blue: blue) {
-                    redMask[gy * gridWidth + gx] = 1
-                }
-            }
-        }
-
-        var components: [ColorComponent] = []
-        var stack: [Int] = []
-        let minSamples = 6
-        let maxSamples = max(minSamples, gridWidth * gridHeight / 18)
-
-        for index in redMask.indices where redMask[index] == 1 {
-            redMask[index] = 0
-            stack.removeAll(keepingCapacity: true)
-            stack.append(index)
-
-            var component = ColorComponent(index: index, gridWidth: gridWidth)
-            while let current = stack.popLast() {
-                let gx = current % gridWidth
-                let gy = current / gridWidth
-                component.add(gx: gx, gy: gy)
-
-                if gx > 0 {
-                    enqueueMask(index: current - 1, mask: &redMask, stack: &stack)
-                }
-                if gx + 1 < gridWidth {
-                    enqueueMask(index: current + 1, mask: &redMask, stack: &stack)
-                }
-                if gy > 0 {
-                    enqueueMask(index: current - gridWidth, mask: &redMask, stack: &stack)
-                }
-                if gy + 1 < gridHeight {
-                    enqueueMask(index: current + gridWidth, mask: &redMask, stack: &stack)
-                }
-            }
-
-            guard component.count >= minSamples, component.count <= maxSamples else { continue }
-            components.append(component)
-        }
-
-        let imageArea = CGFloat(width * height)
-        let marks = components.compactMap { component -> FiducialMark? in
-            let minX = CGFloat(component.minGX * stride)
-            let maxX = CGFloat(min(width, (component.maxGX + 1) * stride))
-            let minY = CGFloat(component.minGY * stride)
-            let maxY = CGFloat(min(height, (component.maxGY + 1) * stride))
-            let pixelWidth = maxX - minX
-            let pixelHeight = maxY - minY
-            let pixelArea = CGFloat(component.count * stride * stride)
-            let areaRatio = pixelArea / max(imageArea, 1)
-            let aspect = pixelWidth / max(pixelHeight, 1)
-
-            guard pixelWidth >= 8, pixelHeight >= 8 else { return nil }
-            guard areaRatio >= 0.00004, areaRatio <= 0.035 else { return nil }
-            guard aspect >= 0.32, aspect <= 3.1 else { return nil }
-
-            let rect = CGRect(
-                x: minX / CGFloat(width),
-                y: 1.0 - maxY / CGFloat(height),
-                width: pixelWidth / CGFloat(width),
-                height: pixelHeight / CGFloat(height)
-            )
-            let center = CGPoint(
-                x: (minX + pixelWidth / 2) / CGFloat(width),
-                y: 1.0 - (minY + pixelHeight / 2) / CGFloat(height)
-            )
-            let strength = min(1.0, Double(areaRatio / 0.003))
-            return FiducialMark(
-                id: frameNumber * 100 + component.count,
-                boundingBox: rect,
-                center: center,
-                pixelArea: pixelArea,
-                strength: strength
-            )
-        }
-
-        return marks
-            .sorted { $0.pixelArea > $1.pixelArea }
-            .prefix(8)
-            .enumerated()
-            .map { offset, mark in
-                FiducialMark(
-                    id: offset + 1,
-                    boundingBox: mark.boundingBox,
-                    center: mark.center,
-                    pixelArea: mark.pixelArea,
-                    strength: mark.strength
-                )
-            }
-    }
-
-    private func isFiducialRed(red: Int, green: Int, blue: Int) -> Bool {
-        guard red >= 115 else { return false }
-        let strongestNonRed = max(green, blue)
-        guard red - strongestNonRed >= 42 else { return false }
-        guard Double(red) / Double(max(strongestNonRed, 1)) >= 1.42 else { return false }
-        return green <= 175 && blue <= 175
     }
 
     private func detectCarriageMarker(
@@ -401,48 +265,6 @@ final class VisionAnalyzer {
         stack.append(index)
     }
 
-    private func buildPaperRegistration(
-        fiducials: [FiducialMark],
-        frameNumber: Int
-    ) -> PaperRegistration? {
-        guard fiducials.count >= 3 else { return nil }
-
-        let selectedMarks = Array(fiducials.prefix(4))
-        let orderedQuad = orderPaperQuad(selectedMarks.map(\.center))
-        guard let bounds = orderedQuad.normalizedBounds, bounds.isUsable else { return nil }
-
-        let averageStrength = selectedMarks.reduce(0.0) { $0 + $1.strength } / Double(selectedMarks.count)
-        let countConfidence = min(1.0, Double(selectedMarks.count) / 4.0)
-        return PaperRegistration(
-            id: frameNumber,
-            frameNumber: frameNumber,
-            fiducialCount: fiducials.count,
-            quad: orderedQuad,
-            boundingBox: bounds,
-            confidence: min(1.0, averageStrength * countConfidence)
-        )
-    }
-
-    private func orderPaperQuad(_ points: [CGPoint]) -> [CGPoint] {
-        guard points.count > 2 else { return points }
-        let center = points.reduce(CGPoint.zero) { partial, point in
-            CGPoint(x: partial.x + point.x, y: partial.y + point.y)
-        }
-        let centroid = CGPoint(
-            x: center.x / CGFloat(points.count),
-            y: center.y / CGFloat(points.count)
-        )
-        let sorted = points.sorted {
-            atan2($0.y - centroid.y, $0.x - centroid.x)
-                < atan2($1.y - centroid.y, $1.x - centroid.x)
-        }
-        guard let startIndex = sorted.indices.min(by: {
-            (sorted[$0].x + sorted[$0].y) < (sorted[$1].x + sorted[$1].y)
-        }) else {
-            return sorted
-        }
-        return Array(sorted[startIndex...]) + Array(sorted[..<startIndex])
-    }
 }
 
 private struct ColorComponent {

@@ -23,9 +23,10 @@ List important files and their purpose.
 
 # test
 
-# mock/demo
+# preview bridge
 
-# real hardware, if applicable
+# hardware bridge, if applicable
+
 ```
 
 ## Safety gates implemented

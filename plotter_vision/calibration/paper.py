@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -28,13 +27,6 @@ class PaperSizeMM(BaseModel):
     height: float
 
 
-class PaperFiducialDetection(BaseModel):
-    observed_norm: CameraPointNorm
-    strength: float = 1.0
-    label: str | None = None
-    pixel_area: float | None = None
-
-
 class PaperCornerObservation(BaseModel):
     schema_version: int = 1
     created_at: str = Field(default_factory=utc_now_iso)
@@ -42,7 +34,7 @@ class PaperCornerObservation(BaseModel):
     expected_paper_norm: PaperPointNorm
     observed_norm: CameraPointNorm
     strength: float = 1.0
-    observation_source: Literal["manual_click", "red_fiducial", "synthetic"] = "manual_click"
+    observation_source: Literal["manual_click", "synthetic"] = "manual_click"
     camera_id: str | None = None
     camera_name: str | None = None
 
@@ -77,7 +69,7 @@ class PaperFrameRegistration(BaseModel):
     registration_id: str = Field(default_factory=lambda: f"paper-{uuid.uuid4().hex[:12]}")
     created_at: str = Field(default_factory=utc_now_iso)
     status: Literal["locked"] = "locked"
-    method: Literal["manual_or_fiducial_homography"] = "manual_or_fiducial_homography"
+    method: Literal["manual_corner_homography"] = "manual_corner_homography"
     paper_size_mm: PaperSizeMM
     corner_observations: list[PaperCornerObservation]
     paper_to_camera: Homography2D
@@ -112,55 +104,6 @@ class PaperFrameRegistration(BaseModel):
     def save_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.model_dump_json(indent=2) + "\n", encoding="utf-8")
-
-
-def build_paper_registration_from_red_fiducials(
-    detections: list[PaperFiducialDetection],
-    *,
-    paper_width_mm: float,
-    paper_height_mm: float,
-) -> PaperFrameRegistration:
-    observations = build_corner_observations_from_red_fiducials(detections)
-    return build_paper_frame_registration(
-        observations,
-        paper_width_mm=paper_width_mm,
-        paper_height_mm=paper_height_mm,
-    )
-
-
-def build_corner_observations_from_red_fiducials(
-    detections: list[PaperFiducialDetection],
-) -> list[PaperCornerObservation]:
-    if len(detections) < 4:
-        raise ValueError("At least four red paper fiducials are required for paper registration.")
-
-    selected = sorted(detections, key=lambda detection: detection.strength, reverse=True)[:4]
-    center_x = sum(detection.observed_norm.x for detection in selected) / 4.0
-    center_y = sum(detection.observed_norm.y for detection in selected) / 4.0
-    ordered = sorted(
-        selected,
-        key=lambda detection: math.atan2(
-            detection.observed_norm.y - center_y,
-            detection.observed_norm.x - center_x,
-        ),
-    )
-    start_index = min(
-        range(4),
-        key=lambda index: ordered[index].observed_norm.x + ordered[index].observed_norm.y,
-    )
-    ordered = ordered[start_index:] + ordered[:start_index]
-
-    corners: list[PaperCorner] = ["bottom_left", "bottom_right", "top_right", "top_left"]
-    return [
-        PaperCornerObservation(
-            corner=corner,
-            expected_paper_norm=paper_corner_norm(corner),
-            observed_norm=detection.observed_norm,
-            strength=detection.strength,
-            observation_source="red_fiducial",
-        )
-        for corner, detection in zip(corners, ordered)
-    ]
 
 
 def build_paper_frame_registration(

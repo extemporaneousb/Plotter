@@ -27,7 +27,7 @@ Implemented vertical slices now include:
 
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
-- paper homography registration from manual or detected fiducials;
+- paper homography registration from wizard-clicked manual fiducials;
 - preview-safe shape, raster, and dot-test planning with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible.
 
@@ -44,8 +44,11 @@ The normal development target is the fixed-camera drawing loop:
    not promote axis trust.
 5. Run or rerun the motion probe from the current cap location. When the cap is visible near the
    X-min side, the probe may run a +X-only BOOT-X bootstrap before sampling X/Y motion.
-6. Calibrate by drawing small marks, measuring the result in the plotter camera video, adjusting the
-   model, and drawing again.
+6. Preview the expected binding marks on the video stream, draw the watched visual-relative marks,
+   collect ink observations, post them to `/calibration/binding/observe`, and solve
+   `/calibration/binding/solve`.
+7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability tests and
+   drawing programs still require bridge preview before execution.
 7. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
 8. Draw through one of two lanes:
@@ -302,11 +305,12 @@ Interpretation rules:
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.
 
-In the app, use the calibration wizard as the main operator path: paper fiducials establish the paper
-plane, the cap marker provides live carriage observations, and ink marks bind the observed motion to
-the pen tip. Bridge previews simulate the exact command stream and project the expected path into the
-camera view before any real drawing action is enabled. If simulated or observed geometry fails its
-gate, the bridge returns a failed response and does not send the command stream.
+In the app, use the calibration wizard as the only calibration path: manually clicked paper fiducials
+establish the paper plane, the cap marker provides live carriage observations, and binding ink marks
+validate the durable `VisualPositionBinding`. Bridge previews simulate the exact command stream and
+project the expected path into the camera view before any real drawing action is enabled. If simulated
+or observed geometry fails its gate, the bridge returns a failed response and does not send the command
+stream.
 Stop the background preview bridge with:
 
 ```bash

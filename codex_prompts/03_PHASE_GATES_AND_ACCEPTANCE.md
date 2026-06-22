@@ -91,7 +91,7 @@ Required tests:
 
 Required behavior:
 
-- calibration session can be created without hardware;
+- wizard-owned paper registration and binding previews can be created without hardware;
 - measured displacement records can be entered manually;
 - scale and affine solvers work on synthetic data;
 - calibration artifact is saved as JSON;
@@ -116,7 +116,7 @@ Required behavior:
 - controller probe through API works against mock;
 - safety state is visible;
 - command log is visible;
-- calibration session can be run through API;
+- binding observations can be posted and solved through API;
 - WebSocket emits status/log/safety events;
 - API cannot bypass safety gates.
 
@@ -126,7 +126,7 @@ Required tests:
 - mock probe endpoint;
 - safety arm/disarm endpoint;
 - jog request rejected unless gates satisfied;
-- calibration session endpoint.
+- binding status, observe, and solve endpoints.
 
 ## Phase 5 acceptance — camera observation
 
@@ -135,7 +135,7 @@ Required behavior:
 - camera absence is not fatal;
 - synthetic point calibration tests pass without a camera;
 - frame capture is optional;
-- image point to machine point observations save into calibration sessions;
+- ink or pen-tip observations save into `VisualPositionBinding`;
 - transform residuals are reported.
 
 Required tests:

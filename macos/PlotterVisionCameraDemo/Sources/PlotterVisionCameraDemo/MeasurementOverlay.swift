@@ -2,10 +2,8 @@ import SwiftUI
 
 struct MeasurementOverlay: View {
     let segments: [VisionSegment]
-    let fiducials: [FiducialMark]
     let carriageMarker: CarriageMarker?
-    let paperRegistration: PaperRegistration?
-    let observedPenPoint: ObservedPenPoint?
+    let confirmedCapPoint: ConfirmedCapPoint?
     let motionTracks: [MotionTrack]
     let expectedPathSegments: [ExpectedPathSegment]
     let dotTestPreviewSegments: [DotTestPreviewSegment]
@@ -30,22 +28,14 @@ struct MeasurementOverlay: View {
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
             }
 
-            if let paperRegistration {
-                draw(paperRegistration: paperRegistration, mapper: mapper, in: &context)
-            }
-
             drawDotTestPreview(mapper: mapper, in: &context)
-
-            for fiducial in fiducials {
-                draw(fiducial: fiducial, mapper: mapper, in: &context)
-            }
 
             if let carriageMarker {
                 draw(carriageMarker: carriageMarker, mapper: mapper, in: &context)
             }
 
-            if let observedPenPoint {
-                draw(observedPenPoint: observedPenPoint, mapper: mapper, in: &context)
+            if let confirmedCapPoint {
+                draw(confirmedCapPoint: confirmedCapPoint, mapper: mapper, in: &context)
             }
 
             for (index, segment) in segments.enumerated() {
@@ -371,75 +361,6 @@ struct MeasurementOverlay: View {
         context.draw(label, at: labelPoint, anchor: .leading)
     }
 
-    private func draw(
-        paperRegistration: PaperRegistration,
-        mapper: OverlayMapper,
-        in context: inout GraphicsContext
-    ) {
-        guard paperRegistration.quad.count >= 3 else { return }
-
-        var paperPath = Path()
-        paperPath.move(to: mapper.point(paperRegistration.quad[0]))
-        for point in paperRegistration.quad.dropFirst() {
-            paperPath.addLine(to: mapper.point(point))
-        }
-        paperPath.closeSubpath()
-
-        let color = Color(red: 1.0, green: 0.10, blue: 0.08)
-        context.fill(paperPath, with: .color(color.opacity(0.06)))
-        context.stroke(
-            paperPath,
-            with: .color(color.opacity(paperRegistration.status == "LOCK" ? 0.95 : 0.68)),
-            style: StrokeStyle(lineWidth: 2.1, dash: paperRegistration.status == "LOCK" ? [] : [7, 5])
-        )
-
-        guard showMeasurements else { return }
-
-        let label = Text(
-            String(format: "PAPER %@  FID:%d  %.0f%%",
-                   paperRegistration.status,
-                   paperRegistration.fiducialCount,
-                   paperRegistration.confidence * 100)
-        )
-        .font(.system(size: 10, weight: .bold, design: .monospaced))
-        .foregroundStyle(color.opacity(0.95))
-        context.draw(
-            label,
-            at: mapper.point(CGPoint(x: paperRegistration.boundingBox.minX, y: paperRegistration.boundingBox.maxY)),
-            anchor: .bottomLeading
-        )
-    }
-
-    private func draw(fiducial: FiducialMark, mapper: OverlayMapper, in context: inout GraphicsContext) {
-        let rect = mapper.rect(fiducial.boundingBox).insetBy(dx: -4, dy: -4)
-        let center = mapper.point(fiducial.center)
-        let color = Color(red: 1.0, green: 0.08, blue: 0.07)
-
-        context.stroke(
-            Path(ellipseIn: rect),
-            with: .color(color.opacity(0.96)),
-            lineWidth: 2.0
-        )
-        context.fill(
-            Path(ellipseIn: CGRect(x: center.x - 3, y: center.y - 3, width: 6, height: 6)),
-            with: .color(color.opacity(0.98))
-        )
-
-        var cross = Path()
-        cross.move(to: CGPoint(x: center.x - 10, y: center.y))
-        cross.addLine(to: CGPoint(x: center.x + 10, y: center.y))
-        cross.move(to: CGPoint(x: center.x, y: center.y - 10))
-        cross.addLine(to: CGPoint(x: center.x, y: center.y + 10))
-        context.stroke(cross, with: .color(.white.opacity(0.78)), lineWidth: 1.0)
-
-        guard showMeasurements else { return }
-
-        let label = Text(fiducial.label)
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
-            .foregroundStyle(color)
-        context.draw(label, at: CGPoint(x: rect.maxX + 4, y: rect.midY), anchor: .leading)
-    }
-
     private func draw(carriageMarker: CarriageMarker, mapper: OverlayMapper, in context: inout GraphicsContext) {
         let rect = mapper.rect(carriageMarker.boundingBox).insetBy(dx: -8, dy: -8)
         let center = mapper.point(carriageMarker.center)
@@ -471,8 +392,8 @@ struct MeasurementOverlay: View {
         context.draw(label, at: CGPoint(x: center.x + 14, y: center.y + 12), anchor: .leading)
     }
 
-    private func draw(observedPenPoint: ObservedPenPoint, mapper: OverlayMapper, in context: inout GraphicsContext) {
-        let center = mapper.point(observedPenPoint.cameraPoint)
+    private func draw(confirmedCapPoint: ConfirmedCapPoint, mapper: OverlayMapper, in context: inout GraphicsContext) {
+        let center = mapper.point(confirmedCapPoint.cameraPoint)
         let color = Color(red: 0.62, green: 1.0, blue: 0.30)
         let outer = CGRect(x: center.x - 26, y: center.y - 26, width: 52, height: 52)
         let middle = CGRect(x: center.x - 16, y: center.y - 16, width: 32, height: 32)
@@ -490,7 +411,7 @@ struct MeasurementOverlay: View {
 
         guard showMeasurements else { return }
 
-        let label = Text(observedPenPoint.label)
+        let label = Text(confirmedCapPoint.label)
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(color.opacity(0.98))
         context.draw(label, at: CGPoint(x: center.x + 15, y: center.y - 16), anchor: .leading)

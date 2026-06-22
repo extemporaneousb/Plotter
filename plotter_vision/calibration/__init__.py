@@ -4,9 +4,7 @@ from plotter_vision.calibration.binding import (
     solve_visual_position_binding,
 )
 from plotter_vision.calibration.paper import (
-    PaperFiducialDetection,
     PaperFrameRegistration,
-    build_paper_registration_from_red_fiducials,
     paper_corner_norm,
 )
 from plotter_vision.calibration.probe_evidence import (
@@ -32,7 +30,6 @@ __all__ = [
     "AdaptiveVisualProbePlan",
     "DrawingSafeZone",
     "ObservedGeometrySample",
-    "PaperFiducialDetection",
     "PaperFrameRegistration",
     "SafeZoneEvaluation",
     "SafeZoneMarginsMM",
@@ -44,7 +41,6 @@ __all__ = [
     "VisualProbeSample",
     "VisualProbeSummary",
     "VisualReadinessState",
-    "build_paper_registration_from_red_fiducials",
     "build_scale_observation",
     "build_visual_readiness_state",
     "evaluate_cap_inside_safe_zone",
