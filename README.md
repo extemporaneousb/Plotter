@@ -14,7 +14,7 @@ The active system has three canonical surfaces:
 
 - `plotterctl`: the root CLI for passive probes, guarded setup operations, and launching the bridge.
 - `plotter_vision.bridge`: the local HTTP bridge that owns machine actions, dry-run/live gates,
-  paper registration, dot-test previews, and drawing execution.
+  visual-field registration, durable probe observations, binding solves, and drawing execution.
 - the native operator app in `macos/PlotterVision`: the bridge client and visual surface,
   not a serial controller owner.
 
@@ -28,7 +28,7 @@ Implemented vertical slices now include:
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
 - visual field setup from operator-clicked manual fiducials, backed internally by paper homography;
-- preview-safe shape, raster, and dot-test planning with command-stream simulation;
+- preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible.
 
 ## Canonical Operator Flow
@@ -91,9 +91,9 @@ The operator sequence should stay explicit:
 
 Swift may collect and display probe samples, center-mark residuals, and operator events, but Python
 must own durable readiness, `VisualPositionBinding`, trust promotion, planning, persistence, and
-execution routing. The remaining persistence hardening is to add a Python-owned probe-sample artifact
-or route that stores raw before/after cap observations and commanded moves instead of relying only on
-Swift-local motion samples plus summary readiness fields.
+execution routing. Visual-Machine Calibration persists raw before/after cap observations and
+commanded moves through `/calibration/probe/observe`; the bridge no longer exposes a separate
+preview/run adaptive-probe motion route.
 
 The original passive probe remains the safest first hardware contact:
 

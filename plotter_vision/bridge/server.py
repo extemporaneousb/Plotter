@@ -46,14 +46,12 @@ from plotter_vision.calibration.probe_evidence import (
     summarize_visual_probe_samples,
 )
 from plotter_vision.calibration.readiness import (
-    AdaptiveVisualProbePlan,
     DrawingSafeZone,
     SafeZoneMarginsMM,
     VisualCapObservation,
     VisualReadinessState,
     build_visual_readiness_state,
     evaluate_cap_inside_safe_zone,
-    plan_adaptive_visual_probe,
 )
 from plotter_vision.calibration.session import build_calibration_session
 from plotter_vision.calibration.vision_model import (
@@ -356,40 +354,6 @@ class VisualPositionBindingResponse(BaseModel):
     binding: VisualPositionBinding | None = None
     binding_file: str = ""
     observation_id: str | None = None
-    error: str | None = None
-
-
-class AdaptiveProbePreviewRequest(BaseModel):
-    request_id: str | None = None
-    safe_zone_inset_x_mm: float = 10.0
-    safe_zone_inset_y_mm: float = 10.0
-    max_x_probe_mm: float = 200.0
-    max_y_probe_mm: float = 50.0
-    min_probe_mm: float = 10.0
-    clearance_mm: float = 2.0
-    bootstrap_only: bool = False
-    bootstrap_target_x_mm: float | None = None
-    bootstrap_bottom_allowance_mm: float = 50.0
-    bootstrap_top_allowance_mm: float = 12.0
-    feed_mm_min: float = 300.0
-
-
-class AdaptiveProbeRunRequest(AdaptiveProbePreviewRequest):
-    expected_plan_id: str | None = None
-
-
-class AdaptiveProbeResponse(BaseModel):
-    command_id: str
-    status: str
-    dry_run: bool
-    preview_only: bool
-    plan: dict[str, Any] | None = None
-    readiness: dict[str, Any] | None = None
-    readiness_file: str = ""
-    planned_commands: list[str] = Field(default_factory=list)
-    event_log: str
-    controller_transcript: str | None = None
-    machine_status: MachineStatusResponse | None = None
     error: str | None = None
 
 
@@ -2406,138 +2370,6 @@ class PlotterBridge:
                 error=str(exc),
             )
 
-    def preview_adaptive_probe(
-        self,
-        request: AdaptiveProbePreviewRequest,
-    ) -> AdaptiveProbeResponse:
-        command_id = request.request_id or f"probe-preview-{uuid.uuid4().hex[:12]}"
-        try:
-            plan, state = self._build_adaptive_probe_plan_from_request(
-                request=request,
-                dry_run=True,
-            )
-            state.latest_probe_plan = plan
-            self._save_visual_readiness(state)
-            planned_commands = self._adaptive_probe_commands(plan, dry_run=True)
-            requested_total_x_mm = sum(move.relative_x_mm for move in plan.moves)
-            requested_total_y_mm = sum(move.relative_y_mm for move in plan.moves)
-            self.event_log.emit(
-                "calibration.probe_preview_ready",
-                command_id=command_id,
-                status="ready",
-                payload={
-                    "preview_only": True,
-                    "move_count": len(plan.moves),
-                    "command_count": len(planned_commands),
-                    "requested_total_x_mm": requested_total_x_mm,
-                    "requested_total_y_mm": requested_total_y_mm,
-                },
-            )
-            return AdaptiveProbeResponse(
-                command_id=command_id,
-                status="ready",
-                dry_run=True,
-                preview_only=True,
-                plan=plan.model_dump(mode="json"),
-                readiness=state.model_dump(mode="json"),
-                readiness_file=str(self._latest_visual_readiness_path()),
-                planned_commands=[planned.command for planned in planned_commands],
-                event_log=str(self.config.event_log_path),
-                controller_transcript=None,
-            )
-        except Exception as exc:
-            self.event_log.emit(
-                "calibration.probe_preview_failed",
-                command_id=command_id,
-                status="failed",
-                payload={"error": str(exc), "preview_only": True},
-            )
-            return AdaptiveProbeResponse(
-                command_id=command_id,
-                status="failed",
-                dry_run=True,
-                preview_only=True,
-                readiness_file=str(self._latest_visual_readiness_path()),
-                planned_commands=[],
-                event_log=str(self.config.event_log_path),
-                controller_transcript=None,
-                error=str(exc),
-            )
-
-    def run_adaptive_probe(self, request: AdaptiveProbeRunRequest) -> AdaptiveProbeResponse:
-        command_id = request.request_id or f"probe-run-{uuid.uuid4().hex[:12]}"
-        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
-        try:
-            plan, state = self._build_adaptive_probe_plan_from_request(
-                request=request,
-                dry_run=self.config.dry_run,
-            )
-            expected_plan = state.latest_probe_plan
-            if (
-                request.expected_plan_id
-                and (expected_plan is None or request.expected_plan_id != expected_plan.plan_id)
-            ):
-                raise MotionSafetyError(
-                    "Adaptive probe plan changed after preview; preview the probe again."
-                )
-            planned_commands = self._adaptive_probe_commands(plan, dry_run=self.config.dry_run)
-            machine_response = self._run_machine_action(
-                action="adaptive_probe",
-                command_id=command_id,
-                planned_commands=planned_commands,
-                transcript_path=transcript_path,
-            )
-            state.latest_probe_plan = plan
-            self._save_visual_readiness(state)
-            requested_total_x_mm = sum(move.relative_x_mm for move in plan.moves)
-            requested_total_y_mm = sum(move.relative_y_mm for move in plan.moves)
-            self.event_log.emit(
-                (
-                    "calibration.probe_run_completed"
-                    if machine_response.status == "completed"
-                    else "calibration.probe_run_failed"
-                ),
-                command_id=command_id,
-                status=machine_response.status,
-                payload={
-                    "move_count": len(plan.moves),
-                    "command_count": len(planned_commands),
-                    "requested_total_x_mm": requested_total_x_mm,
-                    "requested_total_y_mm": requested_total_y_mm,
-                    "dry_run": machine_response.dry_run,
-                    "transcript": machine_response.controller_transcript,
-                    "visual_ready_to_plot": state.visual_ready_to_plot,
-                    "error": machine_response.error,
-                },
-            )
-            return AdaptiveProbeResponse(
-                command_id=command_id,
-                status=machine_response.status,
-                dry_run=machine_response.dry_run,
-                preview_only=False,
-                plan=plan.model_dump(mode="json"),
-                readiness=state.model_dump(mode="json"),
-                readiness_file=str(self._latest_visual_readiness_path()),
-                planned_commands=[planned.command for planned in planned_commands],
-                event_log=str(self.config.event_log_path),
-                controller_transcript=machine_response.controller_transcript,
-                machine_status=machine_response.machine_status,
-                error=machine_response.error,
-            )
-        except Exception as exc:
-            return AdaptiveProbeResponse(
-                command_id=command_id,
-                status="failed",
-                dry_run=self.config.dry_run,
-                preview_only=False,
-                readiness_file=str(self._latest_visual_readiness_path()),
-                planned_commands=[],
-                event_log=str(self.config.event_log_path),
-                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
-                machine_status=self._machine_error_status(error=str(exc)),
-                error=str(exc),
-            )
-
     def preview_dot_test(self, request: DotTestPreviewRequest) -> DotTestPreviewResponse:
         command_id = request.request_id or f"dot-preview-{uuid.uuid4().hex[:12]}"
         try:
@@ -4385,7 +4217,6 @@ class PlotterBridge:
             rejected_sample_count=summary.rejected_sample_count,
             stale_sample_count=summary.stale_sample_count,
             axes_represented=summary.axes_represented,
-            bootstrap_sample_count=summary.bootstrap_sample_count,
             adaptive_sample_count=summary.adaptive_sample_count,
             center_target_sample_count=summary.center_target_sample_count,
             x_field_recovery_sample_count=summary.x_field_recovery_sample_count,
@@ -4453,84 +4284,6 @@ class PlotterBridge:
             ),
         )
 
-    def _build_adaptive_probe_plan_from_request(
-        self,
-        *,
-        request: AdaptiveProbePreviewRequest,
-        dry_run: bool,
-    ) -> tuple[AdaptiveVisualProbePlan, VisualReadinessState]:
-        machine = self._load_machine_config()
-        state = self._load_latest_visual_readiness()
-        if state.latest_cap_observation is None:
-            raise MotionSafetyError("Adaptive probe requires a localized green cap/carriage marker.")
-        safe_zone = self._drawing_safe_zone(
-            machine=machine,
-            inset_x_mm=request.safe_zone_inset_x_mm,
-            inset_y_mm=request.safe_zone_inset_y_mm,
-        )
-        plan = plan_adaptive_visual_probe(
-            observation=state.latest_cap_observation,
-            safe_zone=safe_zone,
-            feed_mm_min=request.feed_mm_min,
-            x_probe_max_mm=request.max_x_probe_mm,
-            y_probe_max_mm=request.max_y_probe_mm,
-            min_probe_mm=request.min_probe_mm,
-            bootstrap_only=request.bootstrap_only,
-            bootstrap_target_x_mm=(
-                request.bootstrap_target_x_mm
-                if request.bootstrap_target_x_mm is not None
-                else request.max_x_probe_mm
-            ),
-            bootstrap_bottom_allowance_mm=request.bootstrap_bottom_allowance_mm,
-            bootstrap_top_allowance_mm=request.bootstrap_top_allowance_mm,
-        )
-        if plan.status == "blocked":
-            raise MotionSafetyError("; ".join(plan.blockers))
-        state = self._visual_state_from_evidence(
-            cap=state.latest_cap_observation,
-            safe_zone_evaluation=plan.safe_zone_evaluation,
-            previous=state,
-        )
-        return plan, state
-
-    def _adaptive_probe_commands(
-        self,
-        plan: AdaptiveVisualProbePlan,
-        *,
-        dry_run: bool,
-    ) -> list[PlannedCommand]:
-        machine = self._load_machine_config()
-        safety = self._safety_state().model_copy(update={"dry_run": dry_run})
-        planned_commands: list[PlannedCommand] = []
-        for move in plan.moves:
-            move_distance = move.relative_x_mm if move.axis == "X" else move.relative_y_mm
-            remaining = move_distance
-            while abs(remaining) > 1e-9:
-                step = math.copysign(min(abs(remaining), machine.max_jog_mm), remaining)
-                remaining -= step
-                x_mm = step if move.axis == "X" else 0.0
-                y_mm = step if move.axis == "Y" else 0.0
-                validate_relative_xy_move_request(
-                    x_mm=x_mm,
-                    y_mm=y_mm,
-                    feed_mm_min=plan.feed_mm_min,
-                    machine=machine,
-                    safety=safety,
-                )
-                planned_commands.extend(
-                    PlannedCommand(
-                        command=command,
-                        kind="motion",
-                        description=f"Adaptive visual probe {move.axis}",
-                    )
-                    for command in build_relative_xy_move_commands(
-                        x_mm=x_mm,
-                        y_mm=y_mm,
-                        feed_mm_min=plan.feed_mm_min,
-                    )
-                )
-        return planned_commands
-
     def _visual_state_from_evidence(
         self,
         *,
@@ -4542,7 +4295,6 @@ class PlotterBridge:
         rejected_sample_count: int | None = None,
         stale_sample_count: int | None = None,
         axes_represented: list[Literal["X", "Y"]] | None = None,
-        bootstrap_sample_count: int | None = None,
         adaptive_sample_count: int | None = None,
         center_target_sample_count: int | None = None,
         x_field_recovery_sample_count: int | None = None,
@@ -4580,11 +4332,6 @@ class PlotterBridge:
             ),
             probe_axes_represented=(
                 axes_represented if axes_represented is not None else None
-            ),
-            probe_bootstrap_sample_count=(
-                bootstrap_sample_count
-                if bootstrap_sample_count is not None
-                else (previous.probe_bootstrap_sample_count if previous is not None else 0)
             ),
             probe_adaptive_sample_count=(
                 adaptive_sample_count
@@ -4634,7 +4381,6 @@ class PlotterBridge:
         )
         if previous is not None:
             state.state_id = previous.state_id
-            state.latest_probe_plan = previous.latest_probe_plan
             state.paper_registration_id = previous.paper_registration_id
             if axes_represented is None:
                 state.probe_axes_represented = previous.probe_axes_represented
@@ -5585,16 +5331,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             VisualBindingSolveRequest,
             bridge.solve_visual_binding,
             lambda response: getattr(response, "status", "") in {"ready", "validated", "collecting", "blocked"},
-        ),
-        "/calibration/probe/preview": PostRoute(
-            AdaptiveProbePreviewRequest,
-            bridge.preview_adaptive_probe,
-            lambda response: getattr(response, "status", "") == "ready",
-        ),
-        "/calibration/probe/run": PostRoute(
-            AdaptiveProbeRunRequest,
-            bridge.run_adaptive_probe,
-            lambda response: getattr(response, "status", "") == "completed",
         ),
         "/calibration/probe/observe": PostRoute(
             VisualProbeSampleObservationRequest,

@@ -55,184 +55,24 @@ def test_visual_workflow_routes_register_paper_observe_cap_and_report_blockers(
         assert status["readiness"]["latest_cap_observation"]["paper_norm"] == {"x": 0.5, "y": 0.5}
 
 
-def test_visual_probe_preview_is_dry_run_without_transcript_and_bounded_commands(
-    tmp_path: Path,
-) -> None:
+def test_visual_probe_preview_and_run_routes_are_removed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-
         status_code, preview = client.post(
             "/calibration/probe/preview",
-            {
-                "request_id": "probe-preview",
-                "max_x_probe_mm": 200.0,
-                "max_y_probe_mm": 50.0,
-                "feed_mm_min": 300.0,
-            },
+            {"request_id": "probe-preview"},
         )
+        assert status_code == 404
+        assert preview["error"] == "not found"
 
-        assert status_code == 200
-        assert preview["status"] == "ready"
-        assert preview["dry_run"] is True
-        assert preview["preview_only"] is True
-        assert preview["controller_transcript"] is None
-        assert preview["plan"]["requires_homing"] is False
-        assert "$H" not in preview["planned_commands"]
-        assert not (tmp_path / "transcripts" / "probe-preview.jsonl").exists()
-        assert _max_xy_command_distance(preview["planned_commands"]) <= 50.0
-
-
-def test_visual_probe_preview_allows_x_min_bootstrap_without_transcript(
-    tmp_path: Path,
-) -> None:
-    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
-
-    with _running_bridge(bridge) as client:
-        status_code, _ = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-        status_code, observed = client.post(
-            "/calibration/pen/observe",
-            _cap_observation_payload(
-                paper_x=0.0,
-                paper_y=0.0,
-                logical_x=0.0,
-                logical_y=-32.0,
-            ),
-        )
-        assert status_code == 200
-        assert observed["readiness"]["cap_inside_safe_zone"] is False
-
-        status_code, preview = client.post(
-            "/calibration/probe/preview",
-            {
-                "request_id": "probe-bootstrap-preview",
-                "bootstrap_only": True,
-                "bootstrap_target_x_mm": 200.0,
-                "max_x_probe_mm": 100.0,
-                "max_y_probe_mm": 50.0,
-                "min_probe_mm": 10.0,
-                "feed_mm_min": 300.0,
-            },
-        )
-
-        assert status_code == 200
-        assert preview["status"] == "ready"
-        assert preview["dry_run"] is True
-        assert preview["preview_only"] is True
-        assert preview["controller_transcript"] is None
-        assert preview["plan"]["plan_mode"] == "x_min_bootstrap"
-        assert preview["plan"]["requires_homing"] is False
-        assert len(preview["plan"]["moves"]) == 1
-        move = preview["plan"]["moves"][0]
-        assert move["axis"] == "X"
-        assert move["direction"] == 1
-        assert move["relative_x_mm"] > 0
-        assert move["relative_y_mm"] == 0.0
-        assert "$H" not in preview["planned_commands"]
-        assert not (tmp_path / "transcripts" / "probe-bootstrap-preview.jsonl").exists()
-        assert _max_xy_command_distance(preview["planned_commands"]) <= 50.0
-
-
-def test_visual_probe_mock_run_writes_transcript_without_homing(
-    tmp_path: Path,
-) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=config_path,
-        dry_run=False,
-        arm_motion=True,
-    )
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        _, preview = client.post(
-            "/calibration/probe/preview",
-            {"request_id": "probe-preview", "feed_mm_min": 300.0},
-        )
-
-        status_code, response = client.post(
+        status_code, run = client.post(
             "/calibration/probe/run",
-            {
-                "request_id": "probe-run",
-                "expected_plan_id": preview["plan"]["plan_id"],
-                "feed_mm_min": 300.0,
-            },
+            {"request_id": "probe-run"},
         )
-
-        assert status_code == 200
-        assert response["status"] == "completed"
-        assert response["dry_run"] is False
-        assert response["controller_transcript"] is not None
-        assert "$H" not in response["planned_commands"]
-        transcript = Path(response["controller_transcript"])
-        assert transcript.exists()
-        text = transcript.read_text(encoding="utf-8")
-        assert '"payload":"$H"' not in text
-        assert '"payload":"G91"' in text
-
-
-def test_visual_probe_mock_run_executes_x_min_bootstrap_without_homing(
-    tmp_path: Path,
-) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=config_path,
-        dry_run=False,
-        arm_motion=True,
-    )
-
-    with _running_bridge(bridge) as client:
-        status_code, _ = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-        status_code, _ = client.post(
-            "/calibration/pen/observe",
-            _cap_observation_payload(
-                paper_x=0.0,
-                paper_y=0.0,
-                logical_x=0.0,
-                logical_y=-32.0,
-            ),
-        )
-        assert status_code == 200
-        _, preview = client.post(
-            "/calibration/probe/preview",
-            {
-                "request_id": "probe-bootstrap-preview",
-                "bootstrap_only": True,
-                "bootstrap_target_x_mm": 200.0,
-                "max_x_probe_mm": 100.0,
-                "feed_mm_min": 300.0,
-            },
-        )
-
-        status_code, response = client.post(
-            "/calibration/probe/run",
-            {
-                "request_id": "probe-bootstrap-run",
-                "expected_plan_id": preview["plan"]["plan_id"],
-                "bootstrap_only": True,
-                "bootstrap_target_x_mm": 200.0,
-                "max_x_probe_mm": 100.0,
-                "feed_mm_min": 300.0,
-            },
-        )
-
-        assert status_code == 200
-        assert response["status"] == "completed"
-        assert response["dry_run"] is False
-        assert response["controller_transcript"] is not None
-        assert response["plan"]["plan_mode"] == "x_min_bootstrap"
-        assert "$H" not in response["planned_commands"]
-        assert all("Y" not in command for command in response["planned_commands"] if "G0" in command)
-        transcript = Path(response["controller_transcript"])
-        assert transcript.exists()
-        text = transcript.read_text(encoding="utf-8")
-        assert '"payload":"$H"' not in text
-        assert '"payload":"G91"' in text
+        assert status_code == 404
+        assert run["error"] == "not found"
+        assert not (tmp_path / "transcripts" / "probe-run.jsonl").exists()
 
 
 def test_visual_probe_observe_persists_samples_and_updates_readiness(
@@ -288,7 +128,7 @@ def test_persisted_visual_probe_samples_survive_bridge_reload(tmp_path: Path) ->
     assert readiness["probe_rms_residual_mm"] == pytest.approx(0.0)
 
 
-def test_x_min_bootstrap_sample_persists_without_satisfying_full_probe_readiness(
+def test_legacy_bootstrap_sample_decodes_without_bootstrap_readiness_path(
     tmp_path: Path,
 ) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
@@ -312,7 +152,7 @@ def test_x_min_bootstrap_sample_persists_without_satisfying_full_probe_readiness
         assert status_code == 200
         assert response["status"] == "accepted"
         readiness = response["readiness"]
-        assert readiness["probe_bootstrap_sample_count"] == 1
+        assert "probe_bootstrap_sample_count" not in readiness
         assert readiness["probe_observation_count"] == 1
         assert readiness["visual_ready_to_plot"] is False
         assert any("at least 2 observations" in blocker for blocker in readiness["blockers"])
@@ -399,48 +239,6 @@ def test_durable_cap_probe_evidence_does_not_unlock_absolute_drawing(
         machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
         assert machine.homing_trusted is False
         assert machine.axis_model_trusted is False
-
-
-def test_visual_probe_run_aborts_when_projection_outside_bootstrap_band(tmp_path: Path) -> None:
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=_write_machine_config(tmp_path),
-        dry_run=False,
-        arm_motion=True,
-    )
-
-    with _running_bridge(bridge) as client:
-        status_code, _ = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-        status_code, observed = client.post(
-            "/calibration/pen/observe",
-            _cap_observation_payload(
-                paper_x=0.0,
-                paper_y=0.0,
-                logical_x=0.0,
-                logical_y=-90.0,
-            ),
-        )
-        assert status_code == 200
-        assert observed["status"] == "blocked"
-        assert observed["readiness"]["cap_inside_safe_zone"] is False
-
-        status_code, response = client.post(
-            "/calibration/probe/run",
-            {
-                "request_id": "probe-outside",
-                "bootstrap_only": True,
-                "bootstrap_target_x_mm": 200.0,
-                "feed_mm_min": 300.0,
-            },
-        )
-
-        assert status_code == 400
-        assert response["status"] == "failed"
-        assert response["controller_transcript"] is None
-        assert response["error"] is not None
-        assert "bootstrap band" in response["error"]
-        assert not (tmp_path / "transcripts" / "probe-outside.jsonl").exists()
 
 
 def test_cap_only_visual_readiness_does_not_unlock_absolute_drawing(

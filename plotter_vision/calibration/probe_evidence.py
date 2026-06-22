@@ -17,6 +17,8 @@ from plotter_vision.controller.base import utc_now_iso
 
 VisualProbeSource = Literal[
     "motion_probe",
+    # Legacy persisted samples may still contain this source. The active app path no longer
+    # creates bootstrap samples; keep decoding tolerant so old artifacts do not break startup.
     "x_min_bootstrap",
     "center_target_residual",
     "center_target_segment",
@@ -240,7 +242,7 @@ def summarize_visual_probe_samples(
         rejected_sample_count=len(rejected),
         stale_sample_count=stale_count,
         axes_represented=axes,
-        bootstrap_sample_count=sum(1 for sample in accepted if sample.source == "x_min_bootstrap"),
+        bootstrap_sample_count=0,
         adaptive_sample_count=sum(1 for sample in accepted if sample.source == "motion_probe"),
         center_target_sample_count=sum(
             1

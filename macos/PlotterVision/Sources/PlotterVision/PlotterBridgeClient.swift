@@ -729,37 +729,6 @@ struct BridgeVisualCapObservationRequest: Encodable {
     let safeZoneInsetYMm: Double
 }
 
-struct BridgeAdaptiveProbePreviewRequest: Encodable {
-    let requestId: String?
-    let safeZoneInsetXMm: Double
-    let safeZoneInsetYMm: Double
-    let maxXProbeMm: Double
-    let maxYProbeMm: Double
-    let minProbeMm: Double
-    let clearanceMm: Double
-    let bootstrapOnly: Bool
-    let bootstrapTargetXMm: Double?
-    let bootstrapBottomAllowanceMm: Double
-    let bootstrapTopAllowanceMm: Double
-    let feedMmMin: Double
-}
-
-struct BridgeAdaptiveProbeRunRequest: Encodable {
-    let requestId: String?
-    let safeZoneInsetXMm: Double
-    let safeZoneInsetYMm: Double
-    let maxXProbeMm: Double
-    let maxYProbeMm: Double
-    let minProbeMm: Double
-    let clearanceMm: Double
-    let bootstrapOnly: Bool
-    let bootstrapTargetXMm: Double?
-    let bootstrapBottomAllowanceMm: Double
-    let bootstrapTopAllowanceMm: Double
-    let feedMmMin: Double
-    let expectedPlanId: String?
-}
-
 struct BridgeVisualProbeCapSnapshotRequest: Encodable {
     let cameraNorm: NormPoint
     let paperNorm: NormPoint
@@ -873,21 +842,6 @@ struct BridgeBindingResidualSummary: Decodable {
     let nonCollinear: Bool
 }
 
-struct BridgeAdaptiveProbeResponse: Decodable {
-    let commandId: String
-    let status: String
-    let dryRun: Bool
-    let previewOnly: Bool
-    let plan: BridgeAdaptiveVisualProbePlan?
-    let readiness: BridgeVisualReadinessState?
-    let readinessFile: String
-    let plannedCommands: [String]
-    let eventLog: String
-    let controllerTranscript: String?
-    let machineStatus: MachineStatusResponse?
-    let error: String?
-}
-
 struct BridgeVisualProbeSampleResponse: Decodable {
     let status: String
     let dryRun: Bool
@@ -907,7 +861,6 @@ struct BridgeVisualReadinessState: Decodable, Equatable {
     let capInsideSafeZone: Bool
     let latestCapObservation: BridgeVisualCapObservation?
     let safeZoneEvaluation: BridgeSafeZoneEvaluation?
-    let latestProbePlan: BridgeAdaptiveVisualProbePlan?
     let probeObservationCount: Int
     let probeRmsResidualMm: Double?
     let probeMaxResidualMm: Double?
@@ -941,33 +894,6 @@ struct BridgeSafeZoneEvaluation: Decodable, Equatable {
 struct BridgeSafeZoneAbortReason: Decodable, Equatable {
     let code: String
     let message: String
-}
-
-struct BridgeAdaptiveVisualProbePlan: Decodable, Equatable {
-    let schemaVersion: Int
-    let artifactType: String
-    let planMode: String?
-    let planId: String
-    let target: String
-    let status: String
-    let previewOnly: Bool
-    let requiresHoming: Bool
-    let capObservationId: String
-    let safeZoneEvaluation: BridgeSafeZoneEvaluation
-    let moves: [BridgeVisualProbeMove]
-    let blockers: [String]
-    let feedMmMin: Double
-}
-
-struct BridgeVisualProbeMove: Decodable, Equatable {
-    let axis: String
-    let direction: Int
-    let stepMm: Double
-    let relativeXMm: Double
-    let relativeYMm: Double
-    let availableNegativeMm: Double
-    let availablePositiveMm: Double
-    let maxStepMm: Double
 }
 
 struct MachineCommandResponse: Decodable {
@@ -1146,14 +1072,6 @@ final class PlotterBridgeClient {
         try await post(path: "calibration/binding/solve", request: request)
     }
 
-    func previewAdaptiveProbe(_ request: BridgeAdaptiveProbePreviewRequest) async throws -> BridgeAdaptiveProbeResponse {
-        try await post(path: "calibration/probe/preview", request: request)
-    }
-
-    func runAdaptiveProbe(_ request: BridgeAdaptiveProbeRunRequest) async throws -> BridgeAdaptiveProbeResponse {
-        try await post(path: "calibration/probe/run", request: request)
-    }
-
     func observeVisualProbeSample(_ request: BridgeVisualProbeSampleRequest) async throws -> BridgeVisualProbeSampleResponse {
         try await post(path: "calibration/probe/observe", request: request)
     }
@@ -1231,10 +1149,6 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(BridgeVisualPositionBindingResponse.self, from: data),
-               let error = failure.error {
-                throw BridgeClientError.server(error)
-            }
-            if let failure = try? decoder.decode(BridgeAdaptiveProbeResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }

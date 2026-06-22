@@ -14,7 +14,6 @@ from plotter_vision.calibration.probe_evidence import (
     VisualProbeSummary,
 )
 from plotter_vision.calibration.readiness import (
-    AdaptiveVisualProbePlan,
     DrawingSafeZone,
     SafeZoneEvaluation,
     SafeZoneMarginsMM,
@@ -22,12 +21,10 @@ from plotter_vision.calibration.readiness import (
     VisualReadinessState,
     build_visual_readiness_state,
     evaluate_cap_inside_safe_zone,
-    plan_adaptive_visual_probe,
 )
 from plotter_vision.calibration.scale import ScaleObservation, build_scale_observation
 
 __all__ = [
-    "AdaptiveVisualProbePlan",
     "DrawingSafeZone",
     "ObservedGeometrySample",
     "PaperFrameRegistration",
@@ -45,6 +42,5 @@ __all__ = [
     "build_visual_readiness_state",
     "evaluate_cap_inside_safe_zone",
     "paper_corner_norm",
-    "plan_adaptive_visual_probe",
     "solve_visual_position_binding",
 ]

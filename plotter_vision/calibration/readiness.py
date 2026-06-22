@@ -23,15 +23,8 @@ VisualCapObservationSource = Literal[
 ]
 
 ProbeAxis = Literal["X", "Y"]
-ProbePlanStatus = Literal["planned", "blocked"]
 
 GREEN_CAP_TARGET = "green_cap_carriage_marker"
-X_PROBE_MAX_MM = 200.0
-Y_PROBE_MAX_MM = 50.0
-X_MIN_BOOTSTRAP_TARGET_MM = 200.0
-X_MIN_BOOTSTRAP_BOTTOM_ALLOWANCE_MM = 180.0
-X_MIN_BOOTSTRAP_TOP_ALLOWANCE_MM = 12.0
-DEFAULT_PROBE_STEP_FRACTION = 0.60
 DEFAULT_MIN_PROBE_OBSERVATIONS = 2
 DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM = 10.0
 DEFAULT_MAX_PROBE_P95_RESIDUAL_MM = 20.0
@@ -180,63 +173,6 @@ class SafeZoneEvaluation(BaseModel):
     abort_reasons: list[SafeZoneAbortReason] = Field(default_factory=list)
 
 
-class VisualProbeMove(BaseModel):
-    axis: ProbeAxis
-    direction: Literal[-1, 1]
-    step_mm: float
-    relative_x_mm: float
-    relative_y_mm: float
-    available_negative_mm: float
-    available_positive_mm: float
-    max_step_mm: float
-
-    @field_validator("step_mm", "available_negative_mm", "available_positive_mm", "max_step_mm")
-    @classmethod
-    def _validate_non_negative_finite(cls, value: float) -> float:
-        value = _finite(value, label="probe move")
-        if value < 0.0:
-            raise ValueError("probe move distances must be non-negative.")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_relative_move(self) -> VisualProbeMove:
-        if self.step_mm <= 0.0:
-            raise ValueError("probe step_mm must be positive.")
-        if self.step_mm > self.max_step_mm + 1e-9:
-            raise ValueError("probe step_mm exceeds max_step_mm.")
-        expected_x = self.direction * self.step_mm if self.axis == "X" else 0.0
-        expected_y = self.direction * self.step_mm if self.axis == "Y" else 0.0
-        if abs(self.relative_x_mm - expected_x) > 1e-9:
-            raise ValueError("relative_x_mm does not match axis, direction, and step.")
-        if abs(self.relative_y_mm - expected_y) > 1e-9:
-            raise ValueError("relative_y_mm does not match axis, direction, and step.")
-        return self
-
-
-class AdaptiveVisualProbePlan(BaseModel):
-    schema_version: int = 1
-    artifact_type: Literal["adaptive_visual_probe_plan"] = "adaptive_visual_probe_plan"
-    plan_mode: Literal["adaptive_probe", "x_min_bootstrap"] = "adaptive_probe"
-    plan_id: str = Field(default_factory=lambda: f"probe-{uuid.uuid4().hex[:12]}")
-    target: Literal["green_cap_carriage_marker"] = GREEN_CAP_TARGET
-    status: ProbePlanStatus
-    preview_only: Literal[True] = True
-    requires_homing: Literal[False] = False
-    cap_observation_id: str
-    safe_zone_evaluation: SafeZoneEvaluation
-    moves: list[VisualProbeMove] = Field(default_factory=list)
-    blockers: list[str] = Field(default_factory=list)
-    feed_mm_min: float = 300.0
-
-    @model_validator(mode="after")
-    def _validate_status(self) -> AdaptiveVisualProbePlan:
-        if self.status == "planned" and not self.moves:
-            raise ValueError("planned visual probe requires at least one move.")
-        if self.status == "blocked" and not self.blockers:
-            raise ValueError("blocked visual probe requires blockers.")
-        return self
-
-
 class VisualReadinessState(BaseModel):
     schema_version: int = 1
     artifact_type: Literal["visual_readiness_state"] = "visual_readiness_state"
@@ -250,7 +186,6 @@ class VisualReadinessState(BaseModel):
     safe_zone: DrawingSafeZone | None = None
     safe_zone_evaluation: SafeZoneEvaluation | None = None
     zone_check: SafeZoneEvaluation | None = None
-    latest_probe_plan: AdaptiveVisualProbePlan | None = None
     latest_visual_probe_run_id: str | None = None
     latest_visual_probe_sample_id: str | None = None
     latest_visual_probe_run_file: str | None = None
@@ -259,7 +194,6 @@ class VisualReadinessState(BaseModel):
     probe_rejected_sample_count: int = 0
     probe_stale_sample_count: int = 0
     probe_axes_represented: list[ProbeAxis] = Field(default_factory=list)
-    probe_bootstrap_sample_count: int = 0
     probe_adaptive_sample_count: int = 0
     probe_center_target_sample_count: int = 0
     probe_x_field_recovery_sample_count: int = 0
@@ -274,7 +208,6 @@ class VisualReadinessState(BaseModel):
         "probe_observation_count",
         "probe_rejected_sample_count",
         "probe_stale_sample_count",
-        "probe_bootstrap_sample_count",
         "probe_adaptive_sample_count",
         "probe_center_target_sample_count",
         "probe_x_field_recovery_sample_count",
@@ -324,7 +257,6 @@ class VisualReadinessState(BaseModel):
             probe_rejected_sample_count=self.probe_rejected_sample_count,
             probe_stale_sample_count=self.probe_stale_sample_count,
             probe_axes_represented=self.probe_axes_represented,
-            probe_bootstrap_sample_count=self.probe_bootstrap_sample_count,
             probe_adaptive_sample_count=self.probe_adaptive_sample_count,
             probe_center_target_sample_count=self.probe_center_target_sample_count,
             probe_x_field_recovery_sample_count=self.probe_x_field_recovery_sample_count,
@@ -400,152 +332,6 @@ def evaluate_cap_inside_safe_zone(
     )
 
 
-def plan_adaptive_visual_probe(
-    *,
-    observation: VisualCapObservation,
-    safe_zone: DrawingSafeZone,
-    step_fraction: float = DEFAULT_PROBE_STEP_FRACTION,
-    x_probe_max_mm: float = X_PROBE_MAX_MM,
-    y_probe_max_mm: float = Y_PROBE_MAX_MM,
-    min_probe_mm: float = 10.0,
-    bootstrap_only: bool = False,
-    bootstrap_target_x_mm: float = X_MIN_BOOTSTRAP_TARGET_MM,
-    bootstrap_bottom_allowance_mm: float = X_MIN_BOOTSTRAP_BOTTOM_ALLOWANCE_MM,
-    bootstrap_top_allowance_mm: float = X_MIN_BOOTSTRAP_TOP_ALLOWANCE_MM,
-    feed_mm_min: float = 300.0,
-) -> AdaptiveVisualProbePlan:
-    step_fraction = _finite(step_fraction, label="probe step fraction")
-    if step_fraction <= 0.0 or step_fraction > 1.0:
-        raise ValueError("probe step_fraction must be in (0, 1].")
-    x_probe_max_mm = _finite(x_probe_max_mm, label="X probe max")
-    y_probe_max_mm = _finite(y_probe_max_mm, label="Y probe max")
-    min_probe_mm = _finite(min_probe_mm, label="minimum probe")
-    bootstrap_target_x_mm = _finite(bootstrap_target_x_mm, label="bootstrap target X")
-    bootstrap_bottom_allowance_mm = _finite(
-        bootstrap_bottom_allowance_mm,
-        label="bootstrap bottom allowance",
-    )
-    bootstrap_top_allowance_mm = _finite(
-        bootstrap_top_allowance_mm,
-        label="bootstrap top allowance",
-    )
-    feed_mm_min = _finite(feed_mm_min, label="probe feed")
-    if x_probe_max_mm <= 0.0 or y_probe_max_mm <= 0.0:
-        raise ValueError("probe axis maxima must be positive.")
-    if min_probe_mm < 0.0:
-        raise ValueError("minimum probe must be non-negative.")
-    if bootstrap_target_x_mm <= 0.0:
-        raise ValueError("bootstrap target X must be positive.")
-    if bootstrap_bottom_allowance_mm < 0.0 or bootstrap_top_allowance_mm < 0.0:
-        raise ValueError("bootstrap projection allowances must be non-negative.")
-    if feed_mm_min <= 0.0:
-        raise ValueError("probe feed must be positive.")
-
-    evaluation = evaluate_cap_inside_safe_zone(observation=observation, safe_zone=safe_zone)
-    bootstrap_move = _plan_x_min_bootstrap_move(
-        safe_zone=safe_zone,
-        logical=evaluation.logical_mm,
-        x_probe_max_mm=x_probe_max_mm,
-        min_probe_mm=min_probe_mm,
-        target_x_mm=bootstrap_target_x_mm,
-        bottom_allowance_mm=bootstrap_bottom_allowance_mm,
-        top_allowance_mm=bootstrap_top_allowance_mm,
-    )
-    if bootstrap_only:
-        if bootstrap_move is None:
-            return AdaptiveVisualProbePlan(
-                plan_mode="x_min_bootstrap",
-                status="blocked",
-                cap_observation_id=observation.observation_id,
-                safe_zone_evaluation=evaluation,
-                blockers=[
-                    _x_min_bootstrap_blocker(
-                        safe_zone=safe_zone,
-                        logical=evaluation.logical_mm,
-                        target_x_mm=bootstrap_target_x_mm,
-                        bottom_allowance_mm=bootstrap_bottom_allowance_mm,
-                        top_allowance_mm=bootstrap_top_allowance_mm,
-                    )
-                ],
-                feed_mm_min=feed_mm_min,
-            )
-        return AdaptiveVisualProbePlan(
-            plan_mode="x_min_bootstrap",
-            status="planned",
-            cap_observation_id=observation.observation_id,
-            safe_zone_evaluation=evaluation,
-            moves=[bootstrap_move],
-            feed_mm_min=feed_mm_min,
-        )
-
-    if not evaluation.inside:
-        if bootstrap_move is not None:
-            return AdaptiveVisualProbePlan(
-                plan_mode="x_min_bootstrap",
-                status="planned",
-                cap_observation_id=observation.observation_id,
-                safe_zone_evaluation=evaluation,
-                moves=[bootstrap_move],
-                feed_mm_min=feed_mm_min,
-            )
-        return AdaptiveVisualProbePlan(
-            status="blocked",
-            cap_observation_id=observation.observation_id,
-            safe_zone_evaluation=evaluation,
-            blockers=[reason.message for reason in evaluation.abort_reasons],
-            feed_mm_min=feed_mm_min,
-        )
-
-    logical = evaluation.logical_mm
-    moves: list[VisualProbeMove] = []
-    blockers: list[str] = []
-    for axis, lower, upper, coordinate, axis_max_step in [
-        (
-            "X",
-            safe_zone.logical_min_x_mm,
-            safe_zone.logical_max_x_mm,
-            logical.x,
-            x_probe_max_mm,
-        ),
-        (
-            "Y",
-            safe_zone.logical_min_y_mm,
-            safe_zone.logical_max_y_mm,
-            logical.y,
-            y_probe_max_mm,
-        ),
-    ]:
-        move = _plan_axis_probe_move(
-            axis=axis,
-            lower=lower,
-            upper=upper,
-            coordinate=coordinate,
-            max_step=axis_max_step,
-            step_fraction=step_fraction,
-        )
-        if move is None:
-            blockers.append(f"{axis} probe has no usable safe-zone margin.")
-        else:
-            moves.append(move)
-
-    if blockers:
-        return AdaptiveVisualProbePlan(
-            status="blocked",
-            cap_observation_id=observation.observation_id,
-            safe_zone_evaluation=evaluation,
-            blockers=blockers,
-            feed_mm_min=feed_mm_min,
-        )
-
-    return AdaptiveVisualProbePlan(
-        status="planned",
-        cap_observation_id=observation.observation_id,
-        safe_zone_evaluation=evaluation,
-        moves=moves,
-        feed_mm_min=feed_mm_min,
-    )
-
-
 def build_visual_readiness_state(
     *,
     paper_registered: bool,
@@ -556,7 +342,6 @@ def build_visual_readiness_state(
     probe_rejected_sample_count: int = 0,
     probe_stale_sample_count: int = 0,
     probe_axes_represented: list[ProbeAxis] | None = None,
-    probe_bootstrap_sample_count: int = 0,
     probe_adaptive_sample_count: int = 0,
     probe_center_target_sample_count: int = 0,
     probe_x_field_recovery_sample_count: int = 0,
@@ -655,7 +440,6 @@ def build_visual_readiness_state(
         probe_rejected_sample_count=probe_rejected_sample_count,
         probe_stale_sample_count=probe_stale_sample_count,
         probe_axes_represented=probe_axes_represented or [],
-        probe_bootstrap_sample_count=probe_bootstrap_sample_count,
         probe_adaptive_sample_count=probe_adaptive_sample_count,
         probe_center_target_sample_count=probe_center_target_sample_count,
         probe_x_field_recovery_sample_count=probe_x_field_recovery_sample_count,
@@ -665,114 +449,6 @@ def build_visual_readiness_state(
         visual_ready_to_plot=not blockers,
         blockers=blockers,
     )
-
-
-def _plan_axis_probe_move(
-    *,
-    axis: ProbeAxis,
-    lower: float,
-    upper: float,
-    coordinate: float,
-    max_step: float,
-    step_fraction: float,
-) -> VisualProbeMove | None:
-    available_negative = max(0.0, coordinate - lower)
-    available_positive = max(0.0, upper - coordinate)
-    if available_negative <= 1e-9 and available_positive <= 1e-9:
-        return None
-
-    direction: Literal[-1, 1]
-    if available_positive >= available_negative:
-        direction = 1
-        chosen_margin = available_positive
-    else:
-        direction = -1
-        chosen_margin = available_negative
-
-    if chosen_margin <= 1e-9:
-        if direction == 1 and available_negative > 1e-9:
-            direction = -1
-            chosen_margin = available_negative
-        elif direction == -1 and available_positive > 1e-9:
-            direction = 1
-            chosen_margin = available_positive
-        else:
-            return None
-
-    step = min(max_step, chosen_margin * step_fraction)
-    if step <= 1e-9:
-        return None
-
-    return VisualProbeMove(
-        axis=axis,
-        direction=direction,
-        step_mm=step,
-        relative_x_mm=direction * step if axis == "X" else 0.0,
-        relative_y_mm=direction * step if axis == "Y" else 0.0,
-        available_negative_mm=available_negative,
-        available_positive_mm=available_positive,
-        max_step_mm=max_step,
-    )
-
-
-def _plan_x_min_bootstrap_move(
-    *,
-    safe_zone: DrawingSafeZone,
-    logical: LogicalPointMM,
-    x_probe_max_mm: float,
-    min_probe_mm: float,
-    target_x_mm: float,
-    bottom_allowance_mm: float,
-    top_allowance_mm: float,
-) -> VisualProbeMove | None:
-    frame = safe_zone.drawing_frame
-    projection_min_y = frame.origin_y_mm - bottom_allowance_mm
-    projection_max_y = frame.origin_y_mm + frame.height_mm + top_allowance_mm
-    if logical.y < projection_min_y or logical.y > projection_max_y:
-        return None
-
-    target_x = min(target_x_mm, safe_zone.logical_max_x_mm)
-    available_positive = max(0.0, safe_zone.logical_max_x_mm - logical.x)
-    available_negative = max(0.0, logical.x - safe_zone.logical_min_x_mm)
-    step = min(x_probe_max_mm, target_x - logical.x, available_positive)
-    if step < max(min_probe_mm, 1e-9):
-        return None
-
-    return VisualProbeMove(
-        axis="X",
-        direction=1,
-        step_mm=step,
-        relative_x_mm=step,
-        relative_y_mm=0.0,
-        available_negative_mm=available_negative,
-        available_positive_mm=available_positive,
-        max_step_mm=x_probe_max_mm,
-    )
-
-
-def _x_min_bootstrap_blocker(
-    *,
-    safe_zone: DrawingSafeZone,
-    logical: LogicalPointMM,
-    target_x_mm: float,
-    bottom_allowance_mm: float,
-    top_allowance_mm: float,
-) -> str:
-    frame = safe_zone.drawing_frame
-    projection_min_y = frame.origin_y_mm - bottom_allowance_mm
-    projection_max_y = frame.origin_y_mm + frame.height_mm + top_allowance_mm
-    if logical.y < projection_min_y or logical.y > projection_max_y:
-        return (
-            f"Green cap projection Y {logical.y:.3f} mm is outside "
-            f"X-min bootstrap band [{projection_min_y:.3f}, {projection_max_y:.3f}] mm."
-        )
-    target_x = min(target_x_mm, safe_zone.logical_max_x_mm)
-    if logical.x >= target_x:
-        return (
-            f"Green cap logical X {logical.x:.3f} mm is already at or beyond "
-            f"X-min bootstrap target {target_x:.3f} mm."
-        )
-    return "X-min bootstrap has no usable positive-X clearance."
 
 
 def _append_range_reason(

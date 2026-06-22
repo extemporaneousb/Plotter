@@ -45,7 +45,8 @@ The app-first drawing flow is:
 3. Click or confirm paper fiducials and confirm or localize the cap marker. The bridge still owns the
    internal paper homography artifact, but operator-facing setup treats it as a locked visual field.
 4. Run Visual-Machine Calibration to measure relative cap motion with bounded moves chosen from
-   current machine clearance; do not assume a fixed +X bootstrap.
+   current machine clearance; do not assume or reintroduce a fixed +X bootstrap or bridge-planned
+   adaptive-probe motion route.
 5. Preview binding marks, run watched binding marks, post observations to
    `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
 6. Treat the validated `VisualPositionBinding` as the current drawing unlock.

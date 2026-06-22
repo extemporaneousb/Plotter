@@ -48,10 +48,10 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
 
 ## Canonical Interfaces
 
-- SwiftUI is the operator surface and bridge client. It may render camera observations, paper locks,
-  expected paths, dot-test previews, and controller status, but it must not own serial transport or
-  hardware command semantics. Plotter-camera FOV zoom is Swift display state for operator inspection;
-  it is not calibration authority.
+- SwiftUI is the operator surface and bridge client. It may render camera observations, visual-field
+  locks, expected paths, durable probe evidence, and controller status, but it must not own serial
+  transport or hardware command semantics. Plotter-camera FOV zoom is Swift display state for
+  operator inspection; it is not calibration authority.
 - `plotter_vision.bridge` is the local process boundary. It accepts typed request/response models,
   publishes current controller/runtime state, and routes every machine action through the Python
   safety and controller layers.
@@ -131,11 +131,11 @@ motion in the registered paper plane; cap-only motion is not enough to set durab
 position binding backed by paper homography, cap localization, ink or pen-tip observations,
 residuals, camera identity, and freshness.
 
-Motion-probe evidence should not remain only in Swift state. The durable target is a Python-owned
-probe-sample artifact or route that stores each commanded move, before/after cap observation, observed
-delta, residual, camera identity, paper registration id, transcript pointer, and timestamp. Until
-that artifact exists, app diagnostics must record enough per-sample and per-residual evidence to
-reconstruct failed attempts.
+Motion-probe evidence must not remain only in Swift state. The canonical persistence path is
+`/calibration/probe/observe`, which stores each commanded move, before/after cap observation,
+observed delta, residual, camera identity, paper registration id, transcript pointer, and timestamp.
+The bridge does not expose a separate adaptive-probe preview/run motion route; Visual-Machine
+Calibration chooses bounded motion in the app from live machine clearance and submits the evidence.
 
 Only Python may promote persisted bindings or trust flags. Swift can collect and display evidence,
 but it does not decide that `axis_model_trusted`, `homing_trusted`, or

@@ -234,6 +234,8 @@ def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
     assert "availableMachineTravelMm" in model
     assert "previewBootstrapAdaptiveProbe(" not in content
     assert "runBootstrapAdaptiveProbe(" not in content
+    assert "previewBootstrapAdaptiveProbe(" not in model
+    assert "runBootstrapAdaptiveProbe(" not in model
 
 
 def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
@@ -354,12 +356,19 @@ def test_removed_bridge_routes_and_red_detection_support_are_absent() -> None:
         "/calibration/start",
         "/calibration/observe",
         "/calibration/status",
+        "/calibration/probe/preview",
+        "/calibration/probe/run",
         "CalibrationStartRequest",
         "CalibrationObservationRequest",
         "CalibrationSessionResponse",
+        "AdaptiveProbePreviewRequest",
+        "AdaptiveProbeRunRequest",
+        "AdaptiveProbeResponse",
         "start_calibration",
         "add_calibration_observation",
         "calibration_status",
+        "preview_adaptive_probe",
+        "run_adaptive_probe",
         "PaperFiducialDetection",
         "build_paper_registration_from_red_fiducials",
         "red_fiducial",

@@ -6,15 +6,12 @@ from typing import Literal
 import pytest
 
 from plotter_vision.calibration.readiness import (
-    X_PROBE_MAX_MM,
-    Y_PROBE_MAX_MM,
     DrawingSafeZone,
     SafeZoneMarginsMM,
     VisualCapObservation,
     VisualReadinessState,
     build_visual_readiness_state,
     evaluate_cap_inside_safe_zone,
-    plan_adaptive_visual_probe,
 )
 from plotter_vision.calibration.probe_evidence import (
     VisualProbeCapSnapshot,
@@ -55,96 +52,6 @@ def test_visual_cap_outside_safe_zone_has_explicit_abort_reasons() -> None:
     ]
     assert "below safe zone minimum" in evaluation.abort_reasons[0].message
     assert "above safe zone maximum" in evaluation.abort_reasons[-1].message
-
-
-def test_adaptive_probe_prefers_positive_x_near_low_edge_and_scales_y_smaller() -> None:
-    safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.10, paper_y=0.50, logical_x=50.0, logical_y=100.0)
-
-    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
-
-    assert plan.status == "planned"
-    assert plan.preview_only is True
-    assert plan.requires_homing is False
-    assert len(plan.moves) == 2
-    x_move = plan.moves[0]
-    y_move = plan.moves[1]
-    assert x_move.axis == "X"
-    assert x_move.direction == 1
-    assert x_move.relative_x_mm > 0
-    assert x_move.step_mm == pytest.approx(200.0)
-    assert y_move.axis == "Y"
-    assert abs(y_move.step_mm) < x_move.step_mm
-
-
-def test_adaptive_probe_respects_x_and_y_maximum_steps() -> None:
-    safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.50, paper_y=0.50, logical_x=250.0, logical_y=100.0)
-
-    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
-
-    x_move, y_move = plan.moves
-    assert x_move.step_mm <= X_PROBE_MAX_MM
-    assert y_move.step_mm <= Y_PROBE_MAX_MM
-    assert x_move.step_mm == pytest.approx(138.0)
-    assert y_move.step_mm == pytest.approx(50.0)
-
-
-def test_probe_plan_uses_positive_x_bootstrap_outside_low_x_safe_zone() -> None:
-    safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.02, paper_y=0.50, logical_x=10.0, logical_y=100.0)
-
-    plan = plan_adaptive_visual_probe(observation=observation, safe_zone=safe_zone)
-
-    assert plan.status == "planned"
-    assert plan.plan_mode == "x_min_bootstrap"
-    assert plan.preview_only is True
-    assert plan.requires_homing is False
-    assert len(plan.moves) == 1
-    move = plan.moves[0]
-    assert move.axis == "X"
-    assert move.direction == 1
-    assert move.relative_x_mm > 0
-    assert move.relative_y_mm == 0.0
-    assert move.step_mm <= X_PROBE_MAX_MM
-    assert plan.safe_zone_evaluation.inside is False
-
-
-def test_probe_plan_uses_positive_x_bootstrap_for_low_y_cap_projection() -> None:
-    safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-35.0)
-
-    plan = plan_adaptive_visual_probe(
-        observation=observation,
-        safe_zone=safe_zone,
-        bootstrap_only=True,
-    )
-
-    assert plan.status == "planned"
-    assert plan.plan_mode == "x_min_bootstrap"
-    assert len(plan.moves) == 1
-    move = plan.moves[0]
-    assert move.axis == "X"
-    assert move.direction == 1
-    assert move.relative_x_mm == pytest.approx(200.0)
-    assert move.relative_y_mm == 0.0
-    assert plan.safe_zone_evaluation.inside is False
-
-
-def test_probe_plan_blocks_projection_too_far_outside_bootstrap_band() -> None:
-    safe_zone = _safe_zone()
-    observation = _cap(paper_x=0.0, paper_y=0.0, logical_x=0.0, logical_y=-220.0)
-
-    plan = plan_adaptive_visual_probe(
-        observation=observation,
-        safe_zone=safe_zone,
-        bootstrap_only=True,
-    )
-
-    assert plan.status == "blocked"
-    assert plan.plan_mode == "x_min_bootstrap"
-    assert plan.moves == []
-    assert any("outside X-min bootstrap band" in blocker for blocker in plan.blockers)
 
 
 def test_visual_readiness_serialization_round_trip(tmp_path: Path) -> None:
