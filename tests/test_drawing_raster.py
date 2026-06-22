@@ -4,8 +4,10 @@ import pytest
 
 from plotter_vision.drawing import (
     LuminanceRaster,
+    PortraitContourOptions,
     RasterContourOptions,
     RasterPolygonOptions,
+    build_portrait_contour_program_from_luminance_raster,
     build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
 )
@@ -86,6 +88,68 @@ def test_auto_contrast_stretches_face_luminance_range() -> None:
     assert max(polygon.shade for polygon in contrasted.polygons) > max(
         polygon.shade for polygon in direct.polygons
     )
+
+
+def test_portrait_contours_trace_synthetic_relief_without_hatching() -> None:
+    size = 24
+    center = (size - 1) / 2
+    samples = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            distance = ((x - center) ** 2 + (y - center) ** 2) ** 0.5 / center
+            darkness = max(0.0, 1.0 - distance)
+            row.append(1.0 - 0.72 * darkness)
+        samples.append(row)
+
+    program, summary = build_portrait_contour_program_from_luminance_raster(
+        raster=LuminanceRaster(samples=samples),
+        options=PortraitContourOptions(
+            auto_contrast=False,
+            illumination_radius=0,
+            smoothing_radius=0,
+            contour_levels=5,
+            min_contour_length_norm=0.02,
+        ),
+    )
+
+    assert summary.contour_count >= 3
+    assert summary.raw_point_count > summary.kept_point_count >= 6
+    assert program.polygons == []
+    assert all(polyline.role == "contour" for polyline in program.polylines)
+    assert any(polyline.closed for polyline in program.polylines)
+
+
+def test_portrait_normalization_keeps_features_under_uneven_illumination() -> None:
+    width = 28
+    height = 36
+    samples = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            gradient = 0.20 * (x / (width - 1))
+            eye_shadow = 0.22 if 8 <= y <= 12 and x in range(8, 21) else 0.0
+            nose_shadow = 0.18 if 14 <= y <= 24 and 12 <= x <= 15 else 0.0
+            mouth_shadow = 0.20 if 25 <= y <= 28 and 9 <= x <= 19 else 0.0
+            luminance = 0.74 + gradient - eye_shadow - nose_shadow - mouth_shadow
+            row.append(max(0.0, min(1.0, luminance)))
+        samples.append(row)
+
+    program, summary = build_portrait_contour_program_from_luminance_raster(
+        raster=LuminanceRaster(samples=samples),
+        options=PortraitContourOptions(
+            contour_levels=6,
+            illumination_radius=5,
+            illumination_strength=0.8,
+            smoothing_radius=1,
+            min_contour_length_norm=0.025,
+        ),
+    )
+
+    assert summary.contour_count > 0
+    assert summary.max_normalized_value > 0.85
+    assert summary.min_normalized_value < 0.15
+    assert len(program.polylines) == summary.contour_count
 
 
 def test_raster_rejects_non_rectangular_samples() -> None:

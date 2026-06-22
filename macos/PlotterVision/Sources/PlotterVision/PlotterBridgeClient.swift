@@ -337,6 +337,21 @@ struct BridgeRasterContourOptionsRequest: Encodable {
     let maxContours: Int
 }
 
+struct BridgePortraitContourOptionsRequest: Encodable {
+    let contourLevels: Int
+    let lowQuantile: Double
+    let highQuantile: Double
+    let autoContrast: Bool
+    let illuminationRadius: Int
+    let illuminationStrength: Double
+    let smoothingRadius: Int
+    let simplificationEpsilonNorm: Double
+    let minContourLengthNorm: Double
+    let minPointsPerContour: Int
+    let maxContours: Int
+    let maxPoints: Int
+}
+
 struct BridgeFaceRasterDrawRequest: Encodable {
     let raster: BridgeLuminanceRasterRequest
     let frame: BridgeDrawingFrameRequest
@@ -351,6 +366,15 @@ struct BridgeImageShapePreviewRequest: Encodable {
     let raster: BridgeLuminanceRasterRequest
     let frame: BridgeDrawingFrameRequest
     let options: BridgeRasterContourOptionsRequest
+    let drawFeedMmMin: Double
+    let travelFeedMmMin: Double
+    let maxSegmentMm: Double
+}
+
+struct BridgePortraitContourPreviewRequest: Encodable {
+    let raster: BridgeLuminanceRasterRequest
+    let frame: BridgeDrawingFrameRequest
+    let options: BridgePortraitContourOptionsRequest
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
@@ -387,6 +411,25 @@ struct BridgeRasterContourSummary: Decodable {
     let contourCount: Int
     let minLuminance: Double
     let maxLuminance: Double
+}
+
+struct BridgePortraitContourSummary: Decodable {
+    let rasterWidth: Int
+    let rasterHeight: Int
+    let cellCount: Int
+    let contourCount: Int
+    let rawContourCount: Int
+    let rawPointCount: Int
+    let keptPointCount: Int
+    let minLuminance: Double
+    let maxLuminance: Double
+    let minNormalizedValue: Double
+    let maxNormalizedValue: Double
+    let levels: [Double]
+    let illuminationRadius: Int
+    let illuminationStrength: Double
+    let smoothingRadius: Int
+    let simplificationEpsilonNorm: Double
 }
 
 struct BridgeFaceRasterDrawResponse: Decodable {
@@ -428,6 +471,22 @@ struct BridgeImageShapePreviewResponse: Decodable {
     let simulation: BridgeShapeSimulation?
     let summary: BridgePolygonDrawSummary?
     let rasterSummary: BridgeRasterContourSummary?
+    let previewOverlay: BridgePreviewOverlay?
+    let eventLog: String
+    let controllerTranscript: String?
+    let error: String?
+}
+
+struct BridgePortraitContourPreviewResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let previewOnly: Bool
+    let eligibleForBridgePreview: Bool
+    let plannedCommands: [String]
+    let simulation: BridgeShapeSimulation?
+    let summary: BridgePolygonDrawSummary?
+    let portraitSummary: BridgePortraitContourSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
@@ -968,6 +1027,12 @@ final class PlotterBridgeClient {
         return try decoder.decode(BridgeImageShapePreviewResponse.self, from: data)
     }
 
+    func previewPortraitContours(
+        _ request: BridgePortraitContourPreviewRequest
+    ) async throws -> BridgePortraitContourPreviewResponse {
+        try await post(path: "draw/portrait/preview", request: request)
+    }
+
     func previewCapabilityTest(_ request: BridgeCapabilityTestRequest) async throws -> BridgeCapabilityTestResponse {
         try await post(path: "capabilities/tests/preview", request: request)
     }
@@ -1134,6 +1199,10 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(BridgeImageShapePreviewResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgePortraitContourPreviewResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }

@@ -191,6 +191,8 @@ struct FaceRasterSample: Equatable {
     let faceBounds: CGRect
     let frameNumber: Int
     let confidence: Double
+    let captureFrameCount: Int
+    let luminanceStdDev: Double
 }
 
 struct NormPoint: Codable, Equatable {

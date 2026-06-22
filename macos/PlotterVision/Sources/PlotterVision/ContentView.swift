@@ -311,10 +311,10 @@ struct ContentView: View {
 
     @MainActor
     private func previewImageFromCurrentFrame() async {
-        bridge.recordOperatorEvent("image_preview_capture_started")
+        bridge.recordOperatorEvent("portrait_preview_capture_started")
         do {
             faceCamera.segmentationEnabled = true
-            let raster = try await faceCamera.captureFaceRaster(columns: 16, rows: 20)
+            let raster = try await faceCamera.captureFaceRasterBurst(columns: 28, rows: 36)
             let rect = drawingFrame.rect(
                 workspaceXMm: bridge.workspaceXMm,
                 workspaceYMm: bridge.workspaceYMm
@@ -326,7 +326,7 @@ struct ContentView: View {
                 heightMm: Double(rect.height) * bridge.workspaceYMm,
                 flipY: false
             )
-            let completed = await bridge.previewImageContours(raster, frame: frame)
+            let completed = await bridge.previewPortraitContours(raster, frame: frame)
             calibrationStatusText = completed
                 ? "VERIFY \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
                 : "VERIFY \(bridge.imagePreviewStatus)"
@@ -337,7 +337,7 @@ struct ContentView: View {
             bridge.imagePreviewDetail = "VISUAL ONLY"
             bridge.previewStatus = "SIM ERR"
             bridge.recordOperatorEvent(
-                "image_preview_capture_failed",
+                "portrait_preview_capture_failed",
                 details: ["error": error.localizedDescription]
             )
         }

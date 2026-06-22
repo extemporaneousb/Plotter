@@ -1462,7 +1462,7 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func previewImageContours(
+    func previewPortraitContours(
         _ raster: FaceRasterSample,
         frame: BridgeDrawingFrameRequest
     ) async -> Bool {
@@ -1471,20 +1471,22 @@ final class PlotterBridgeModel: ObservableObject {
             imagePreviewStatus = "IMG OFF"
             imagePreviewDetail = "BRIDGE OFFLINE"
             statusText = "Bridge offline"
-            diagnosticsEvent("image_preview_blocked", ["reason": "bridge_offline"], snapshot: true)
+            diagnosticsEvent("portrait_preview_blocked", ["reason": "bridge_offline"], snapshot: true)
             return false
         }
 
         isCalibrating = true
-        activeAction = "image-preview"
+        activeAction = "portrait-preview"
         imagePreviewStatus = "IMG PREVIEW"
-        imagePreviewDetail = "BRIDGE PREVIEW"
-        statusText = "Previewing image contours"
+        imagePreviewDetail = "BURST PREVIEW"
+        statusText = "Previewing portrait contours"
         diagnosticsEvent(
-            "image_preview_started",
+            "portrait_preview_started",
             [
                 "raster_rows": raster.samples.count,
                 "raster_columns": raster.samples.first?.count ?? 0,
+                "capture_frames": raster.captureFrameCount,
+                "luminance_stddev": raster.luminanceStdDev,
                 "frame_width_mm": frame.widthMm,
                 "frame_height_mm": frame.heightMm
             ],
@@ -1496,14 +1498,23 @@ final class PlotterBridgeModel: ObservableObject {
         }
 
         do {
-            let response = try await client.previewImageShape(
-                BridgeImageShapePreviewRequest(
+            let response = try await client.previewPortraitContours(
+                BridgePortraitContourPreviewRequest(
                     raster: BridgeLuminanceRasterRequest(samples: raster.samples),
                     frame: frame,
-                    options: BridgeRasterContourOptionsRequest(
-                        darknessThreshold: 0.38,
+                    options: BridgePortraitContourOptionsRequest(
+                        contourLevels: 8,
+                        lowQuantile: 0.18,
+                        highQuantile: 0.92,
                         autoContrast: true,
-                        maxContours: 900
+                        illuminationRadius: 5,
+                        illuminationStrength: 0.72,
+                        smoothingRadius: 1,
+                        simplificationEpsilonNorm: 0.004,
+                        minContourLengthNorm: 0.035,
+                        minPointsPerContour: 4,
+                        maxContours: 700,
+                        maxPoints: 8000
                     ),
                     drawFeedMmMin: shapeDrawFeedMmMin,
                     travelFeedMmMin: fastTravelFeedMmMin,
@@ -1511,7 +1522,8 @@ final class PlotterBridgeModel: ObservableObject {
                 )
             )
             expectedPathSegments = response.simulation?.previewSegments ?? []
-            let contours = response.rasterSummary?.contourCount ?? 0
+            let contours = response.portraitSummary?.contourCount ?? 0
+            let keptPoints = response.portraitSummary?.keptPointCount ?? 0
             let segments = response.summary?.drawSegmentCount ?? 0
             imagePreviewContourCount = contours
             imagePreviewEligibleForBridgePreview = response.eligibleForBridgePreview
@@ -1520,15 +1532,16 @@ final class PlotterBridgeModel: ObservableObject {
             previewStatus = "SIM IMAGE \(response.status.uppercased())"
             let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
             animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
-            statusText = "\(response.commandId) image contour preview"
+            statusText = "\(response.commandId) portrait contour preview"
             diagnosticsEvent(
-                "image_preview_completed",
+                "portrait_preview_completed",
                 [
                     "command_id": response.commandId,
                     "status": response.status,
                     "preview_only": response.previewOnly,
                     "eligible_for_bridge_preview": response.eligibleForBridgePreview,
                     "contours": contours,
+                    "kept_points": keptPoints,
                     "segments": segments,
                     "preview_segments": expectedPathSegments.count,
                     "drawn_length_mm": drawnLength
@@ -1544,7 +1557,7 @@ final class PlotterBridgeModel: ObservableObject {
             imagePreviewDetail = "VISUAL ONLY"
             previewStatus = "SIM ERR"
             statusText = error.localizedDescription
-            diagnosticsEvent("image_preview_failed", errorPayload(error), snapshot: true)
+            diagnosticsEvent("portrait_preview_failed", errorPayload(error), snapshot: true)
             return false
         }
     }

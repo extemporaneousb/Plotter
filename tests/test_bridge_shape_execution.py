@@ -29,6 +29,7 @@ from plotter_vision.bridge.server import (
     PaperRegistrationCornerRequest,
     PaperRegistrationRequest,
     PlotterBridge,
+    PortraitContourPreviewRequest,
     _motion_idle_timeout_s,
 )
 from plotter_vision.calibration.vision_model import CameraPointNorm
@@ -36,7 +37,7 @@ from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.controller.grbl import GrblHalController
 from plotter_vision.controller.mock import MockTransport
 from plotter_vision.controller.serial_transport import SerialPortInfo
-from plotter_vision.drawing import LuminanceRaster
+from plotter_vision.drawing import LuminanceRaster, PortraitContourOptions
 
 
 def test_shape_plan_builds_homing_center_triangle_and_park() -> None:
@@ -280,6 +281,69 @@ def test_bridge_image_contour_preview_is_preview_only_without_hatching(tmp_path:
     assert response.summary.contour_polyline_count == 1
     assert response.summary.hatch_polyline_count == 0
     assert not (tmp_path / "transcripts" / "image-preview.jsonl").exists()
+
+
+def test_bridge_portrait_contour_preview_is_preview_only_and_projected(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+    registration = bridge.register_paper(
+        PaperRegistrationRequest(
+            paper_width_mm=533.4,
+            paper_height_mm=215.9,
+            corners=[
+                PaperRegistrationCornerRequest(
+                    corner=corner,  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
+                )
+                for corner, observed in [
+                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
+                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
+                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
+                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
+                ]
+            ],
+        )
+    )
+
+    width = 28
+    height = 36
+    samples = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            gradient = 0.18 * (x / (width - 1))
+            eye_shadow = 0.24 if 8 <= y <= 13 and 7 <= x <= 20 else 0.0
+            nose_shadow = 0.16 if 15 <= y <= 25 and 12 <= x <= 15 else 0.0
+            mouth_shadow = 0.22 if 26 <= y <= 29 and 9 <= x <= 19 else 0.0
+            row.append(max(0.0, min(1.0, 0.76 + gradient - eye_shadow - nose_shadow - mouth_shadow)))
+        samples.append(row)
+
+    response = bridge.preview_portrait_contours(
+        PortraitContourPreviewRequest(
+            raster=LuminanceRaster(samples=samples),
+            options=PortraitContourOptions(
+                contour_levels=5,
+                illumination_radius=5,
+                min_contour_length_norm=0.03,
+                max_contours=200,
+            ),
+            request_id="portrait-preview",
+        )
+    )
+
+    assert response.status == "ready"
+    assert response.preview_only is True
+    assert response.dry_run is True
+    assert response.controller_transcript is None
+    assert response.portrait_summary is not None
+    assert response.portrait_summary.contour_count > 0
+    assert response.summary is not None
+    assert response.summary.contour_polyline_count == response.portrait_summary.contour_count
+    assert response.summary.hatch_polyline_count == 0
+    assert response.preview_overlay is not None
+    assert response.preview_overlay.projected is True
+    assert response.preview_overlay.paper_registration_id == registration.registration["registration_id"]
+    assert not (tmp_path / "transcripts" / "portrait-preview.jsonl").exists()
 
 
 def test_bridge_mock_live_calibration_marks_write_transcript_without_homing(tmp_path: Path) -> None:

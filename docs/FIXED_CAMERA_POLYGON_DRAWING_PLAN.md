@@ -58,11 +58,13 @@ continuity, closure, scale, and residual measurement.
 
 Current implementation:
 
-- the macOS app detects the largest face in the latest camera frame,
-- crops and downsamples it to a small top-to-bottom luminance raster,
-- submits contour previews to `POST /draw/image/preview`,
-- the bridge converts selected dark regions into contour polylines and returns projected preview
-  overlay primitives,
+- the macOS app detects the largest face across a bounded burst from the portrait camera,
+- crops, downsamples, and averages the burst into a top-to-bottom luminance raster,
+- submits normalized portrait contour previews to `POST /draw/portrait/preview`,
+- the bridge removes low-frequency illumination, builds topographic-style contour polylines, and
+  returns projected preview overlay primitives,
+- the older `POST /draw/image/preview` threshold contour route remains available for baseline image
+  raster checks,
 - the optional shaded face route remains available through `POST /draw/face`, but hatch expansion is
   not the baseline portrait representation,
 - capabilities tests, image contours, calibration marks, and shape execution all run through the

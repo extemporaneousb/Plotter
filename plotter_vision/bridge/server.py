@@ -84,10 +84,13 @@ from plotter_vision.drawing import (
     PaperPointNorm as DrawingPaperPointNorm,
     PlannedPolyline,
     PointMarkPrimitive,
+    PortraitContourOptions,
+    PortraitContourSummary,
     RasterContourOptions,
     RasterContourSummary,
     RasterPolygonOptions,
     RasterPolygonSummary,
+    build_portrait_contour_program_from_luminance_raster,
     build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
     build_capability_test_definition,
@@ -574,6 +577,32 @@ class ImageShapePreviewResponse(BaseModel):
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
     raster_summary: RasterContourSummary | None = None
+    preview_overlay: PreviewOverlay | None = None
+    event_log: str
+    controller_transcript: str | None = None
+    error: str | None = None
+
+
+class PortraitContourPreviewRequest(BaseModel):
+    raster: LuminanceRaster
+    frame: DrawingFrameMM | None = None
+    options: PortraitContourOptions = Field(default_factory=PortraitContourOptions)
+    draw_feed_mm_min: float = 180.0
+    travel_feed_mm_min: float = 500.0
+    max_segment_mm: float = 25.0
+    request_id: str | None = None
+
+
+class PortraitContourPreviewResponse(BaseModel):
+    command_id: str
+    status: str
+    dry_run: bool = True
+    preview_only: bool = True
+    eligible_for_bridge_preview: bool = False
+    planned_commands: list[str] = Field(default_factory=list)
+    simulation: SimulatedPath | None = None
+    summary: PolygonDrawPlanSummary | None = None
+    portrait_summary: PortraitContourSummary | None = None
     preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
@@ -1501,6 +1530,88 @@ class PlotterBridge:
                 preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=str(transcript_path) if transcript_path.exists() else None,
+                error=str(exc),
+            )
+
+    def preview_portrait_contours(
+        self,
+        request: PortraitContourPreviewRequest,
+    ) -> PortraitContourPreviewResponse:
+        command_id = request.request_id or f"portrait-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            program, portrait_summary = build_portrait_contour_program_from_luminance_raster(
+                raster=request.raster,
+                options=request.options,
+            )
+            if not program.polylines:
+                raise MotionSafetyError("Portrait normalization produced no preview contours.")
+
+            machine = self._load_machine_config()
+            plan = build_polygon_draw_plan(
+                request=PolygonDrawRequest(
+                    program=program,
+                    frame=request.frame,
+                    include_homing=False,
+                    draw_feed_mm_min=request.draw_feed_mm_min,
+                    travel_feed_mm_min=request.travel_feed_mm_min,
+                    max_segment_mm=request.max_segment_mm,
+                    max_polyline_count=request.options.max_contours,
+                    request_id=command_id,
+                ),
+                machine=machine,
+                safety=SafetyState(dry_run=True),
+                command_id=command_id,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
+            self.event_log.emit(
+                "draw.portrait_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "contour_count": portrait_summary.contour_count,
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "dry_run": True,
+                    "preview_only": True,
+                },
+            )
+            return PortraitContourPreviewResponse(
+                command_id=command_id,
+                status="ready",
+                dry_run=True,
+                preview_only=True,
+                eligible_for_bridge_preview=True,
+                planned_commands=plan.command_strings,
+                simulation=plan.simulation,
+                summary=plan.summary,
+                portrait_summary=portrait_summary,
+                preview_overlay=preview_overlay,
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "draw.portrait_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return PortraitContourPreviewResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                preview_only=True,
+                eligible_for_bridge_preview=False,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                portrait_summary=locals().get("portrait_summary"),
+                preview_overlay=locals().get("preview_overlay"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
                 error=str(exc),
             )
 
@@ -5348,6 +5459,11 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
         "/draw/image/preview": PostRoute(
             ImageShapePreviewRequest,
             bridge.preview_image_contours,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/draw/portrait/preview": PostRoute(
+            PortraitContourPreviewRequest,
+            bridge.preview_portrait_contours,
             lambda response: getattr(response, "status", "") == "ready",
         ),
         "/draw/face": PostRoute(

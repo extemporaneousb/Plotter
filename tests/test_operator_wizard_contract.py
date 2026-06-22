@@ -87,6 +87,24 @@ def test_draw_verify_operator_surface_replaces_tests_menu() -> None:
     assert "TEST " not in swift_text
 
 
+def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_route() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+
+    assert "Preview Portrait Contours" in draw_verify
+    assert "captureFaceRasterBurst(columns: 28, rows: 36)" in content
+    assert "func captureFaceRasterBurst" in camera_model
+    assert "targetFrames: Int = 24" in camera_model
+    assert "previewPortraitContours(raster, frame: frame)" in content
+    assert "func previewPortraitContours" in model
+    assert "BridgePortraitContourPreviewRequest" in client
+    assert 'post(path: "draw/portrait/preview"' in client
+    assert "BridgePortraitContourOptionsRequest" in model
+
+
 def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")

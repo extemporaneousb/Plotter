@@ -300,6 +300,65 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         return sample
     }
 
+    func captureFaceRasterBurst(
+        columns: Int = 28,
+        rows: Int = 36,
+        targetFrames: Int = 24,
+        minimumFrames: Int = 4,
+        maxDurationSeconds: Double = 1.25
+    ) async throws -> FaceRasterSample {
+        guard columns >= 4, rows >= 4, columns <= 40, rows <= 40 else {
+            throw CameraError.invalidRasterSize
+        }
+
+        var collected: [FaceRasterSample] = []
+        var lastSampledFrame = -1
+        var sawFrame = false
+        let deadline = CACurrentMediaTime() + maxDurationSeconds
+
+        while collected.count < targetFrames && CACurrentMediaTime() < deadline {
+            let frame = snapshotFrameNumber()
+            if frame == lastSampledFrame {
+                try await Task.sleep(nanoseconds: 25_000_000)
+                continue
+            }
+            lastSampledFrame = frame
+
+            guard let buffer = snapshotLastBuffer() else {
+                try await Task.sleep(nanoseconds: 25_000_000)
+                continue
+            }
+            sawFrame = true
+            if let sample = try? buildFaceRaster(
+                pixelBuffer: buffer,
+                frame: frame,
+                columns: columns,
+                rows: rows
+            ) {
+                collected.append(sample)
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        guard sawFrame else {
+            throw CameraError.noFrame
+        }
+        guard collected.count >= minimumFrames else {
+            throw collected.isEmpty ? CameraError.noFace : CameraError.insufficientBurstFrames
+        }
+
+        let sample = averageFaceRasterSamples(collected, columns: columns, rows: rows)
+        statusText = String(
+            format: "%@ portrait burst %df %dx%d %.0f%%",
+            role.statusPrefix,
+            sample.captureFrameCount,
+            columns,
+            rows,
+            sample.confidence * 100
+        )
+        return sample
+    }
+
     func resetChangeBaseline() {
         resetChangeBaseline(updateStatus: true)
     }
@@ -932,7 +991,50 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             samples: samples,
             faceBounds: crop,
             frameNumber: frame,
-            confidence: Double(face.confidence)
+            confidence: Double(face.confidence),
+            captureFrameCount: 1,
+            luminanceStdDev: luminanceStdDev(samples)
+        )
+    }
+
+    private func averageFaceRasterSamples(
+        _ samples: [FaceRasterSample],
+        columns: Int,
+        rows: Int
+    ) -> FaceRasterSample {
+        var totals = Array(repeating: Array(repeating: 0.0, count: columns), count: rows)
+        var bounds = CGRect.zero
+        var confidence = 0.0
+
+        for sample in samples {
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    totals[row][column] += sample.samples[row][column]
+                }
+            }
+            bounds.origin.x += sample.faceBounds.origin.x
+            bounds.origin.y += sample.faceBounds.origin.y
+            bounds.size.width += sample.faceBounds.size.width
+            bounds.size.height += sample.faceBounds.size.height
+            confidence += sample.confidence
+        }
+
+        let count = Double(samples.count)
+        let averaged = totals.map { row in row.map { $0 / count } }
+        bounds.origin.x /= count
+        bounds.origin.y /= count
+        bounds.size.width /= count
+        bounds.size.height /= count
+
+        return FaceRasterSample(
+            columns: columns,
+            rows: rows,
+            samples: averaged,
+            faceBounds: bounds,
+            frameNumber: samples.last?.frameNumber ?? 0,
+            confidence: confidence / count,
+            captureFrameCount: samples.count,
+            luminanceStdDev: luminanceStdDev(averaged)
         )
     }
 
@@ -1018,6 +1120,17 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         return raster
     }
 
+    private func luminanceStdDev(_ samples: [[Double]]) -> Double {
+        let values = samples.flatMap { $0 }
+        guard !values.isEmpty else { return 0.0 }
+        let mean = values.reduce(0.0, +) / Double(values.count)
+        let variance = values.reduce(0.0) { partial, value in
+            let delta = value - mean
+            return partial + delta * delta
+        } / Double(values.count)
+        return sqrt(variance)
+    }
+
     private func markCameraDenied() {
         statusText = "\(role.statusPrefix) camera access denied"
         isRunning = false
@@ -1036,6 +1149,7 @@ private enum CameraError: LocalizedError {
     case noFace
     case invalidRasterSize
     case cannotReadFrame
+    case insufficientBurstFrames
 
     var errorDescription: String? {
         switch self {
@@ -1053,6 +1167,8 @@ private enum CameraError: LocalizedError {
             return "Face raster size must be between 4x4 and 40x40."
         case .cannotReadFrame:
             return "The latest camera frame could not be sampled."
+        case .insufficientBurstFrames:
+            return "Not enough stable face frames were captured for portrait preview."
         }
     }
 }

@@ -65,8 +65,8 @@ struct DrawVerifyMenu: View {
                 }
                 .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating || bridge.isRunning)
 
-                Button("Preview Image Contours") {
-                    workflowStatusText = "VERIFY image contour preview"
+                Button("Preview Portrait Contours") {
+                    workflowStatusText = "VERIFY portrait contour preview"
                     previewImageContours()
                 }
                 .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning || bridge.isMachineBusy)

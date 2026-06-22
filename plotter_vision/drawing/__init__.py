@@ -22,10 +22,13 @@ from plotter_vision.drawing.polygons import (
 )
 from plotter_vision.drawing.raster import (
     LuminanceRaster,
+    PortraitContourOptions,
+    PortraitContourSummary,
     RasterContourOptions,
     RasterContourSummary,
     RasterPolygonOptions,
     RasterPolygonSummary,
+    build_portrait_contour_program_from_luminance_raster,
     build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
 )
@@ -48,6 +51,9 @@ __all__ = [
     "RasterPolygonSummary",
     "RasterContourOptions",
     "RasterContourSummary",
+    "PortraitContourOptions",
+    "PortraitContourSummary",
+    "build_portrait_contour_program_from_luminance_raster",
     "build_paper_contour_program_from_luminance_raster",
     "build_paper_program_from_luminance_raster",
     "build_capability_test_definition",
