@@ -159,7 +159,7 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert "drawVisualBindingBoundsFrame(points: targets)" in content
     assert "VIS READY" in content
     assert "waitForFreshGreenCapPaperObservation" in content.split("func parkAwayFromMark", 1)[1]
-    assert "visualCalibrationTravelFeedMmMin = 600.0" in runner
+    assert "visualCalibrationTravelFeedMmMin = 1200.0" in runner
 
     assert "horizontalDarkFraction" in models
     assert "verticalDarkFraction" in models
@@ -174,7 +174,8 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert '"visual_binding_bounds_frame_started"' in model
     assert '"visual_binding_bounds_frame_completed"' in model
     assert "shapeDrawFeedMmMin = 240.0" in model
-    assert "manualFeedMmMin = 600.0" in model
+    assert "machineMaxFeedMmMin = 1200.0" in model
+    assert "manualFeedMmMin = 1200.0" in model
 
 
 def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
@@ -186,8 +187,10 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     assert "confirmSetup: confirmWizardSetupFromExistingRegistration" in content
     assert "private func confirmWizardSetupFromExistingRegistration" in content
     assert '"wizard_setup_confirmed"' in content
-    assert "Stored paper homography in use" in content
-    assert "WIZ paper lock ready; confirm setup if grid aligns" in content
+    assert "Visual Field Setup" in wizard
+    assert "Paper Homography" not in wizard
+    assert "Stored visual field in use" in content
+    assert "FIELD visual field ready; confirm setup if grid aligns" in content
 
     primary_title = content.split("private var wizardPrimaryActionTitle", 1)[1].split(
         "private var wizardPrimaryActionEnabled",
@@ -199,6 +202,20 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     )[0]
     assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Fiducial Clicks")
     assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
+
+
+def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+
+    assert "visualMachineCalibrationProbeDistances" in content
+    assert "visualMachineCalibrationBoundedDistance" in content
+    assert "visualFieldRecoveryCommandMm" in content
+    assert "No safe X/Y calibration travel from current machine position" in content
+    assert "boundedMachineTravelDistance" in model
+    assert "availableMachineTravelMm" in model
+    assert "previewBootstrapAdaptiveProbe(" not in content
+    assert "runBootstrapAdaptiveProbe(" not in content
 
 
 def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
@@ -260,7 +277,7 @@ def test_visual_move_intent_is_projected_on_video() -> None:
     assert "visualMoveIntent: visualMoveIntent" in content
     assert '"visual_move_intent_set"' in viewport_intent
     assert '"visual_move_intent_cleared"' in viewport_intent
-    assert "BOOT-X" in content
+    assert "CAL-BAND" in content
     assert "MOVE \\(label)" in content
     assert "drawVisualMoveIntent" in overlay
     assert "drawArrowHead" in overlay

@@ -170,12 +170,12 @@ struct MachineControlPanel: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.cyan)
                     .frame(width: 18)
-                Slider(value: $bridge.manualFeedMmMin, in: 60.0...600.0, step: 10.0)
+                Slider(value: $bridge.manualFeedMmMin, in: 60.0...bridge.machineMaxFeedMmMin, step: 10.0)
                     .tint(.cyan)
                 Text(String(format: "%.0f", bridge.manualFeedMmMin))
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.78))
-                    .frame(width: 34, alignment: .trailing)
+                    .frame(width: 44, alignment: .trailing)
             }
         }
     }

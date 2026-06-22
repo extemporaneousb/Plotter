@@ -207,6 +207,8 @@ class BridgeHealthResponse(BaseModel):
     event_log: str
     workspace_x_mm: float | None = None
     workspace_y_mm: float | None = None
+    max_feed_mm_min: float | None = None
+    max_jog_mm: float | None = None
 
 
 class AppDiagnosticStateRequest(BaseModel):
@@ -783,6 +785,8 @@ class PlotterBridge:
             event_log=str(self.config.event_log_path),
             workspace_x_mm=machine.axes.x.travel_mm,
             workspace_y_mm=machine.axes.y.travel_mm,
+            max_feed_mm_min=machine.max_feed_mm_min,
+            max_jog_mm=machine.max_jog_mm,
         )
 
     def record_app_state(

@@ -47,7 +47,7 @@ def test_real_jog_requires_motion_arm() -> None:
         ("Z", 1.0, 60, "Only X and Y"),
         ("X", 0.0, 60, "non-zero"),
         ("X", 60.0, 60, "exceeds max_jog"),
-        ("X", 1.0, 601, "exceeds max_feed"),
+        ("X", 1.0, 1201, "exceeds max_feed"),
     ],
 )
 def test_jog_rejects_unsafe_parameters(

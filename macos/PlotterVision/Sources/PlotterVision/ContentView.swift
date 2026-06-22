@@ -2,17 +2,13 @@ import SwiftUI
 
 private let visualProbeMinimumObservedMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
-private let visualProbeBootstrapStepXMm = 100.0
-private let visualProbeBootstrapMaxTotalXMm = 300.0
-private let visualProbeBootstrapMinStepXMm = 15.0
-private let visualProbeBootstrapTargetXMm = 200.0
-private let visualProbeBootstrapMinProgressXMm = 4.0
 private let visualProbeFieldRecoveryStepXMm = 50.0
 private let visualProbeFieldRecoveryMaxTotalXMm = 150.0
 private let visualCapReacquireStepXMm = 25.0
 private let visualCapReacquireMaxTotalXMm = 150.0
 private let visualCapReacquireMaxAttempts = 2
 private let visualCapFreshFrameAdvance = 3
+private let visualCapProjectionSideAllowanceMm = 80.0
 private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
 
@@ -115,7 +111,7 @@ struct ContentView: View {
             faceCamera.stop()
         }
         .alert("Move X into camera field?", isPresented: $showXFieldMovePrompt) {
-            Button(String(format: "Move +X up to %.0fmm", visualProbeFieldRecoveryMaxTotalXMm)) {
+            Button(String(format: "Move X up to %.0fmm", visualProbeFieldRecoveryMaxTotalXMm)) {
                 Task {
                     await moveXIntoCameraFieldForProbe(source: "prompt")
                 }
@@ -126,7 +122,7 @@ struct ContentView: View {
                 calibrationStatusText = "CAL visual calibration startup canceled"
             }
         } message: {
-            Text("Use this only when the carriage path is clear and power-off gravity left X outside the camera view. This is a live +X jog for visibility; it does not home or trust axes.")
+            Text("Use this only when the carriage path is clear. The app will choose a bounded X direction from machine clearance; it does not home or trust axes.")
         }
     }
 
@@ -419,10 +415,10 @@ struct ContentView: View {
         }
 
         guard bridge.hasPaperLock else {
-            calibrationStatusText = "CAL cap-marker probe blocked: paper homography required"
+            calibrationStatusText = "CAL visual-machine blocked: visual field fiducials required"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
-                detail: "Paper homography required",
+                detail: "Visual field fiducials required",
                 sampleCount: 0,
                 xPixelsPerMm: 0,
                 yPixelsPerMm: 0,
@@ -431,7 +427,7 @@ struct ContentView: View {
             return
         }
 
-        guard var initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+        guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
             calibrationStatusText = "CAL cap-marker probe blocked: cap not detected; move X into field"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
@@ -451,10 +447,12 @@ struct ContentView: View {
         manualFiducialMode = false
         manualCapColorMode = false
 
-        calibrationStatusText = "CAL cap-marker probe starting"
+        await bridge.refreshMachineStatus()
+
+        calibrationStatusText = "CAL visual-machine calibration starting"
         frameLearning = FrameLearningState(
             status: "LEARN",
-            detail: "Starting cap-marker visual jog probe",
+            detail: "Starting cap-marker visual-machine jog probe",
             sampleCount: 0,
             xPixelsPerMm: 0,
             yPixelsPerMm: 0,
@@ -482,15 +480,9 @@ struct ContentView: View {
             return
         }
 
-        if shouldBootstrapFromXMinimum(initialObservation.paperMm) {
-            guard let bootstrapped = await bootstrapVisualProbeFromXMinimum(startingAt: initialObservation) else {
-                return
-            }
-            initialObservation = bootstrapped
-        }
-
-        guard isGreenCapInsideProbeStartZone(initialObservation.paperMm) else {
-            calibrationStatusText = "CAL cap-marker probe blocked: \(greenCapProbeReadinessDetail)"
+        guard isGreenCapInsideMachineCalibrationBand(initialObservation.paperMm),
+              visualMachineCalibrationAxesHaveTravel else {
+            calibrationStatusText = "CAL visual-machine blocked: \(greenCapProbeReadinessDetail)"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
                 detail: greenCapProbeReadinessDetail,
@@ -501,15 +493,27 @@ struct ContentView: View {
             )
             return
         }
-        calibrationStatusText = "CAL cap-marker probe sampling from probe zone"
+        calibrationStatusText = "CAL visual-machine sampling bounded X/Y moves"
 
         let commandDistanceMm = 25.0
         let reinforcementDistanceMm = 40.0
         var samples: [FrameLearningSample] = []
 
         for axis in ["X", "Y"] {
+            guard let probeDistances = visualMachineCalibrationProbeDistances(
+                axis: axis,
+                commandDistanceMm: commandDistanceMm
+            ) else {
+                updateLearningSummary(
+                    samples: samples,
+                    status: "BLOCK",
+                    detail: "No safe \(axis) calibration travel from current machine position"
+                )
+                calibrationStatusText = "CAL visual-machine blocked: no safe \(axis) travel"
+                return
+            }
             let axisStartIndex = samples.count
-            for distance in [commandDistanceMm, -commandDistanceMm] {
+            for distance in probeDistances {
                 guard let sample = await runVisualAxisProbeMove(
                     axis: axis,
                     distanceMm: distance,
@@ -539,7 +543,19 @@ struct ContentView: View {
             }
             if strongSamples.count == 1, weakSamples.count == 1, let strong = strongSamples.first {
                 let direction = strong.distanceMm >= 0 ? 1.0 : -1.0
-                let distance = reinforcementDistanceMm * direction
+                guard let distance = visualMachineCalibrationBoundedDistance(
+                    axis: axis,
+                    preferredDistanceMm: reinforcementDistanceMm * direction,
+                    minimumDistanceMm: visualProbeMinimumObservedMm
+                ) else {
+                    updateLearningSummary(
+                        samples: samples,
+                        status: "WEAK",
+                        detail: "\(axis) weak and no safe reinforcement travel"
+                    )
+                    calibrationStatusText = "CAL visual-machine weak: no safe \(axis) reinforcement travel"
+                    return
+                }
                 updateLearningSummary(
                     samples: samples,
                     status: "LEARN",
@@ -803,260 +819,6 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func bootstrapVisualProbeFromXMinimum(
-        startingAt start: GreenCapPaperObservation
-    ) async -> GreenCapPaperObservation? {
-        var current = start
-        var totalCommandedMm = 0.0
-        var moveIndex = 1
-        updateLearningSummary(
-            samples: [],
-            status: "BOOT-X",
-            detail: String(
-                format: "X-min bootstrap to paper x%.0fmm",
-                visualProbeBootstrapTargetXForWorkspace
-            )
-        )
-        calibrationStatusText = String(
-            format: "CAL cap-marker bootstrap +X only from x%.1f",
-            current.paperMm.x
-        )
-
-        while shouldBootstrapFromXMinimum(current.paperMm) {
-            guard isGreenCapInsideBootstrapYBand(current.paperMm) else {
-                updateLearningSummary(
-                    samples: [],
-                    status: "STOP",
-                    detail: greenCapProbeReadinessDetail
-                )
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: \(greenCapProbeReadinessDetail)"
-                return nil
-            }
-
-            let remainingToTarget = visualProbeBootstrapTargetXForWorkspace - current.paperMm.x
-            var maxCommandMm = min(visualProbeBootstrapStepXMm, max(visualProbeBootstrapMinStepXMm, remainingToTarget))
-            let remainingBudget = visualProbeBootstrapMaxTotalXMm - totalCommandedMm
-            guard remainingBudget >= visualProbeBootstrapMinStepXMm else {
-                updateLearningSummary(
-                    samples: [],
-                    status: "STOP",
-                    detail: "X-min bootstrap travel limit reached"
-                )
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: +X travel limit"
-                return nil
-            }
-            maxCommandMm = min(maxCommandMm, remainingBudget)
-
-            guard await bridge.observeVisualCapForProbe(
-                cameraPoint: current.cameraPoint,
-                paperMm: current.paperMm,
-                confidence: current.strength,
-                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
-                safeZoneInsetYMm: visualCapSafeZoneMarginMm
-            ) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Bridge rejected cap observation"
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge cap observation failed"
-                return nil
-            }
-
-            let requestSuffix = String(format: "%02d", moveIndex)
-            guard let preview = await bridge.previewBootstrapAdaptiveProbe(
-                requestId: "swift-xmin-bootstrap-preview-\(requestSuffix)",
-                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
-                safeZoneInsetYMm: visualCapSafeZoneMarginMm,
-                maxXProbeMm: maxCommandMm,
-                maxYProbeMm: 50.0,
-                minProbeMm: visualProbeBootstrapMinStepXMm,
-                bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
-                bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
-                bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
-                feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
-            ), preview.status == "ready",
-               let plan = preview.plan,
-               plan.planMode == "x_min_bootstrap",
-               let plannedMove = plan.moves.first,
-               plan.moves.count == 1,
-               plannedMove.axis == "X",
-               plannedMove.direction == 1,
-               plannedMove.relativeXMm > 0.0,
-               abs(plannedMove.relativeYMm) < 0.000_001 else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = bridge.adaptiveProbeStatus
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge did not plan +X bootstrap"
-                return nil
-            }
-
-            let commandMm = plannedMove.relativeXMm
-            setVisualMoveIntent(
-                start: current.paperMm,
-                end: PaperPointMmSnapshot(
-                    x: min(bridge.workspaceXMm, current.paperMm.x + commandMm),
-                    y: current.paperMm.y
-                ),
-                label: "BOOT-X",
-                detail: String(format: "cmd +X %.0f", commandMm)
-            )
-
-            calibrationStatusText = String(
-                format: "CAL cap-marker bootstrap: move +X %.0f mm",
-                commandMm
-            )
-            frameLearning.detail = String(
-                format: "Bootstrap +X %.0fmm (total %.0f/%.0f)",
-                commandMm,
-                totalCommandedMm + commandMm,
-                visualProbeBootstrapMaxTotalXMm
-            )
-
-            guard let response = await bridge.runBootstrapAdaptiveProbe(
-                requestId: "swift-xmin-bootstrap-run-\(requestSuffix)",
-                expectedPlanId: plan.planId,
-                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
-                safeZoneInsetYMm: visualCapSafeZoneMarginMm,
-                maxXProbeMm: maxCommandMm,
-                maxYProbeMm: 50.0,
-                minProbeMm: visualProbeBootstrapMinStepXMm,
-                bootstrapTargetXMm: visualProbeBootstrapTargetXForWorkspace,
-                bootstrapBottomAllowanceMm: visualCapProjectionBottomAllowanceMm,
-                bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
-                feedMmMin: min(visualCalibrationTravelFeedMmMin, bridge.manualFeedMmMin)
-            ), response.status == "completed" else {
-                clearVisualMoveIntent(reason: "bootstrap_move_failed")
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Bootstrap move failed or machine busy"
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: move failed"
-                return nil
-            }
-
-            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
-                clearVisualMoveIntent(reason: "bootstrap_pin_active")
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Pin active after bootstrap"
-                frameLearning.lastPins = pins
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: pin active \(pins)"
-                return nil
-            }
-
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            guard let after = await waitForGreenCapPaperObservation(
-                afterFrame: current.frameNumber,
-                timeoutSeconds: 4.0
-            ) else {
-                clearVisualMoveIntent(reason: "bootstrap_cap_lost")
-                updateLearningSummary(
-                    samples: [],
-                    status: "STOP",
-                    detail: "Cap marker lost after bootstrap"
-                )
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: cap lost"
-                return nil
-            }
-            clearVisualMoveIntent(reason: "bootstrap_observed")
-
-            let observedDx = after.paperMm.x - current.paperMm.x
-            let observedDy = after.paperMm.y - current.paperMm.y
-            let observedDistance = hypot(observedDx, observedDy)
-            let bootstrapAccepted = observedDx >= visualProbeBootstrapMinProgressXMm
-            guard await bridge.observeVisualProbeSample(
-                visualProbeSampleRequest(
-                    source: "x_min_bootstrap",
-                    axis: "X",
-                    commandedDxMm: commandMm,
-                    commandedDyMm: 0.0,
-                    before: current,
-                    after: after,
-                    requestId: "swift-xmin-bootstrap-run-\(requestSuffix)",
-                    planId: plan.planId,
-                    commandId: response.commandId,
-                    controllerTranscript: response.controllerTranscript,
-                    status: bootstrapAccepted ? "accepted" : "rejected",
-                    blockers: bootstrapAccepted ? [] : ["X-min bootstrap did not meet minimum positive-X progress."],
-                    rejectionReason: bootstrapAccepted ? nil : "bootstrap_min_progress_not_met",
-                    sampleIdSuffix: "bootstrap-\(moveIndex)"
-                )
-            ) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Bridge failed to persist bootstrap evidence"
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: evidence persistence failed"
-                return nil
-            }
-            bridge.recordOperatorEvent(
-                "visual_motion_probe_bootstrap_sample",
-                details: [
-                    "move_index": moveIndex,
-                    "command_x_mm": commandMm,
-                    "total_commanded_x_mm": totalCommandedMm + commandMm,
-                    "before_frame": current.frameNumber,
-                    "after_frame": after.frameNumber,
-                    "before_paper_x_mm": current.paperMm.x,
-                    "before_paper_y_mm": current.paperMm.y,
-                    "after_paper_x_mm": after.paperMm.x,
-                    "after_paper_y_mm": after.paperMm.y,
-                    "observed_dx_mm": observedDx,
-                    "observed_dy_mm": observedDy,
-                    "observed_distance_mm": observedDistance,
-                    "strength": min(current.strength, after.strength)
-                ]
-            )
-            guard bootstrapAccepted else {
-                updateLearningSummary(
-                    samples: [],
-                    status: "STOP",
-                    detail: String(
-                        format: "Bootstrap +X saw dx %.1f dy %.1f",
-                        observedDx,
-                        observedDy
-                    )
-                )
-                calibrationStatusText = String(
-                    format: "CAL cap-marker bootstrap stopped: +X saw dx %.1f dy %.1f",
-                    observedDx,
-                    observedDy
-                )
-                return nil
-            }
-
-            totalCommandedMm += commandMm
-            current = after
-            guard await bridge.observeVisualCapForProbe(
-                cameraPoint: after.cameraPoint,
-                paperMm: after.paperMm,
-                confidence: after.strength,
-                safeZoneInsetXMm: visualCapSafeZoneMarginMm,
-                safeZoneInsetYMm: visualCapSafeZoneMarginMm
-            ) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Bridge rejected post-bootstrap cap observation"
-                calibrationStatusText = "CAL cap-marker bootstrap stopped: bridge post-observation failed"
-                return nil
-            }
-            updateLearningSummary(
-                samples: [
-                    FrameLearningSample(
-                        axis: "X",
-                        distanceMm: totalCommandedMm,
-                        observedDxMm: after.paperMm.x - start.paperMm.x,
-                        observedDyMm: after.paperMm.y - start.paperMm.y,
-                        observedDistanceMm: hypot(after.paperMm.x - start.paperMm.x, after.paperMm.y - start.paperMm.y),
-                        strength: min(start.strength, after.strength)
-                    )
-                ],
-                status: "BOOT-X",
-                detail: String(
-                    format: "Bootstrap x%.1f observed %.1fmm",
-                    current.paperMm.x,
-                    observedDistance
-                )
-            )
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            moveIndex += 1
-        }
-
-        return current
-    }
-
-    @MainActor
     private var canMoveXIntoCameraFieldForProbe: Bool {
         bridge.isLiveMotionMode
             && !bridge.isRunning
@@ -1091,14 +853,16 @@ struct ContentView: View {
             return
         }
 
+        await bridge.refreshMachineStatus()
+
         calibrationStatusText = String(
-            format: "CAL move-X: live +X up to %.0fmm for camera field",
+            format: "CAL move-X: live bounded X up to %.0fmm for camera field",
             visualProbeFieldRecoveryMaxTotalXMm
         )
         frameLearning = FrameLearningState(
             status: "MOVE-X",
             detail: String(
-                format: "Live +X chunks %.0f/%.0fmm camera-field recovery",
+                format: "Live bounded X chunks %.0f/%.0fmm camera-field recovery",
                 visualProbeFieldRecoveryStepXMm,
                 visualProbeFieldRecoveryMaxTotalXMm
             ),
@@ -1121,14 +885,22 @@ struct ContentView: View {
         var moveIndex = 0
         while totalCommanded < visualProbeFieldRecoveryMaxTotalXMm {
             moveIndex += 1
-            let commandMm = min(
+            let requestedMm = min(
                 visualProbeFieldRecoveryStepXMm,
                 visualProbeFieldRecoveryMaxTotalXMm - totalCommanded
             )
-            guard commandMm > 0 else { break }
+            guard let commandMm = visualFieldRecoveryCommandMm(requestedMm: requestedMm) else {
+                calibrationStatusText = "CAL move-X blocked: no safe X travel from current machine position"
+                frameLearning.detail = "Move-X recovery blocked by machine clearance"
+                bridge.recordOperatorEvent(
+                    "x_field_recovery_blocked",
+                    details: ["source": source, "reason": "no_safe_x_travel"]
+                )
+                return
+            }
 
             calibrationStatusText = String(
-                format: "CAL move-X: chunk %d +X %.0fmm",
+                format: "CAL move-X: chunk %d X%+.0fmm",
                 moveIndex,
                 commandMm
             )
@@ -1142,7 +914,7 @@ struct ContentView: View {
                 return
             }
 
-            totalCommanded += commandMm
+            totalCommanded += abs(commandMm)
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
                 calibrationStatusText = "CAL move-X stopped: pin active \(pins)"
@@ -1185,6 +957,16 @@ struct ContentView: View {
                 "move_count": moveIndex,
                 "total_commanded_x_mm": totalCommanded
             ]
+        )
+    }
+
+    private func visualFieldRecoveryCommandMm(requestedMm: Double) -> Double? {
+        guard bridge.hasMachinePosition else { return nil }
+        return bridge.boundedMachineTravelDistance(
+            axis: "X",
+            preferredDistanceMm: requestedMm,
+            minimumDistanceMm: 2.0,
+            clearanceMm: 2.0
         )
     }
 
@@ -1591,30 +1373,48 @@ struct ContentView: View {
             && paperMm.y <= bridge.workspaceYMm - visualCapSafeZoneMarginMm
     }
 
-    private var visualProbeBootstrapTargetXForWorkspace: Double {
-        let safeMaximum = max(visualCapSafeZoneMarginMm, bridge.workspaceXMm - visualCapSafeZoneMarginMm)
-        let preferred = min(visualProbeBootstrapTargetXMm, bridge.workspaceXMm * 0.40)
-        return clampDouble(
-            preferred,
-            min: visualCapSafeZoneMarginMm + visualProbeBootstrapMinStepXMm,
-            max: safeMaximum
-        )
-    }
-
-    private func isGreenCapInsideBootstrapYBand(_ paperMm: PaperPointMmSnapshot) -> Bool {
+    private func isGreenCapInsideMachineCalibrationYBand(_ paperMm: PaperPointMmSnapshot) -> Bool {
         paperMm.y >= -visualCapProjectionBottomAllowanceMm
             && paperMm.y <= bridge.workspaceYMm + visualCapProjectionTopAllowanceMm
     }
 
-    private func isGreenCapInsideProbeStartZone(_ paperMm: PaperPointMmSnapshot) -> Bool {
-        paperMm.x >= visualCapSafeZoneMarginMm
-            && paperMm.x <= bridge.workspaceXMm - visualCapSafeZoneMarginMm
-            && isGreenCapInsideBootstrapYBand(paperMm)
+    private func isGreenCapInsideMachineCalibrationBand(_ paperMm: PaperPointMmSnapshot) -> Bool {
+        paperMm.x >= -visualCapProjectionSideAllowanceMm
+            && paperMm.x <= bridge.workspaceXMm + visualCapProjectionSideAllowanceMm
+            && isGreenCapInsideMachineCalibrationYBand(paperMm)
     }
 
-    private func shouldBootstrapFromXMinimum(_ paperMm: PaperPointMmSnapshot) -> Bool {
-        isGreenCapInsideBootstrapYBand(paperMm)
-            && paperMm.x < visualProbeBootstrapTargetXForWorkspace - visualProbeBootstrapMinStepXMm
+    private func visualMachineCalibrationBoundedDistance(
+        axis: String,
+        preferredDistanceMm: Double,
+        minimumDistanceMm: Double
+    ) -> Double? {
+        guard bridge.hasMachinePosition else { return nil }
+        return bridge.boundedMachineTravelDistance(
+            axis: axis,
+            preferredDistanceMm: preferredDistanceMm,
+            minimumDistanceMm: minimumDistanceMm,
+            clearanceMm: 2.0
+        )
+    }
+
+    private func visualMachineCalibrationProbeDistances(
+        axis: String,
+        commandDistanceMm: Double
+    ) -> [Double]? {
+        guard let first = visualMachineCalibrationBoundedDistance(
+            axis: axis,
+            preferredDistanceMm: commandDistanceMm,
+            minimumDistanceMm: visualProbeMinimumObservedMm
+        ) else {
+            return nil
+        }
+        return [first, -first]
+    }
+
+    private var visualMachineCalibrationAxesHaveTravel: Bool {
+        visualMachineCalibrationProbeDistances(axis: "X", commandDistanceMm: 25.0) != nil
+            && visualMachineCalibrationProbeDistances(axis: "Y", commandDistanceMm: 25.0) != nil
     }
 
     private func evaluateVisualAxisProbe(samples: [FrameLearningSample]) -> VisualAxisProbeEvaluation {
@@ -1805,9 +1605,9 @@ struct ContentView: View {
 
     private var visualSessionBlockerText: String {
         var blockers: [String] = []
-        if !bridge.hasPaperLock { blockers.append("paper homography") }
+        if !bridge.hasPaperLock { blockers.append("visual field") }
         if !currentGreenCapSafeZoneReady { blockers.append(greenCapSafeZoneDetail) }
-        if frameLearning.status != "MEASURED" { blockers.append("adaptive probe") }
+        if frameLearning.status != "MEASURED" { blockers.append("visual-machine calibration") }
         if visualMotionModel?.isUsable != true { blockers.append("visual motion model") }
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
             blockers.append("five binding mark preview")
@@ -1825,18 +1625,20 @@ struct ContentView: View {
 
     private var currentGreenCapProbeStartReady: Bool {
         guard let observation = currentGreenCapPaperObservation() else { return false }
-        return isGreenCapInsideProbeStartZone(observation.paperMm)
+        return isGreenCapInsideMachineCalibrationBand(observation.paperMm)
+            && visualMachineCalibrationAxesHaveTravel
     }
 
-    private var currentGreenCapBootstrapReady: Bool {
+    private var currentGreenCapCalibrationBandReady: Bool {
         guard let observation = currentGreenCapPaperObservation() else { return false }
-        return shouldBootstrapFromXMinimum(observation.paperMm)
+        return isGreenCapInsideMachineCalibrationBand(observation.paperMm)
+            && !isGreenCapInsideSafeZone(observation.paperMm)
     }
 
     private var currentGreenCapCanStartProbe: Bool {
         guard let observation = currentGreenCapPaperObservation() else { return false }
-        return isGreenCapInsideProbeStartZone(observation.paperMm)
-            || shouldBootstrapFromXMinimum(observation.paperMm)
+        return isGreenCapInsideMachineCalibrationBand(observation.paperMm)
+            && visualMachineCalibrationAxesHaveTravel
     }
 
     private var confirmedCapSafeZoneReady: Bool {
@@ -1845,54 +1647,54 @@ struct ContentView: View {
     }
 
     private var greenCapSafeZoneDetail: String {
-        guard bridge.hasPaperLock else { return "Paper homography required" }
+        guard bridge.hasPaperLock else { return "Visual field fiducials required" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         guard isGreenCapInsideSafeZone(observation.paperMm) else {
             return String(
-                format: "Cap outside %.0fmm paper safe zone",
+                format: "Cap outside %.0fmm field safe zone",
                 visualCapSafeZoneMarginMm
             )
         }
-        return "Cap inside paper safe zone"
+        return "Cap inside field safe zone"
     }
 
     private var greenCapProbeReadinessDetail: String {
-        guard bridge.hasPaperLock else { return "Paper homography required" }
+        guard bridge.hasPaperLock else { return "Visual field fiducials required" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         let paperMm = observation.paperMm
-        if shouldBootstrapFromXMinimum(paperMm) {
-            return String(
-                format: "X-min bootstrap ready: +X only from x%.1f toward x%.0f",
-                paperMm.x,
-                visualProbeBootstrapTargetXForWorkspace
-            )
-        }
         if isGreenCapInsideSafeZone(paperMm) {
-            return "Cap inside paper safe zone"
+            return visualMachineCalibrationAxesHaveTravel
+                ? "Cap marker ready for visual-machine calibration"
+                : "No safe X/Y calibration travel from current machine position"
         }
-        if isGreenCapInsideProbeStartZone(paperMm) {
+        if isGreenCapInsideMachineCalibrationBand(paperMm) {
+            if !bridge.hasMachinePosition { return "Machine position unavailable; refresh machine status" }
+            if !visualMachineCalibrationAxesHaveTravel {
+                return "No safe X/Y calibration travel from current machine position"
+            }
             return String(
-                format: "Cap projection is outside drawing inset but inside probe band y %.1f",
+                format: "Cap marker outside drawing inset but usable for calibration x %.1f y %.1f",
+                paperMm.x,
                 paperMm.y
             )
         }
-        if !isGreenCapInsideBootstrapYBand(paperMm) {
+        if !isGreenCapInsideMachineCalibrationYBand(paperMm) {
             return String(
-                format: "Cap projection y %.1f outside probe band %.0f..%.0f",
+                format: "Cap projection y %.1f outside calibration band %.0f..%.0f",
                 paperMm.y,
                 -visualCapProjectionBottomAllowanceMm,
                 bridge.workspaceYMm + visualCapProjectionTopAllowanceMm
             )
         }
         return String(
-            format: "Cap x %.1f outside +X bootstrap/probe range",
+            format: "Cap marker x %.1f outside visual-machine calibration band",
             paperMm.x
         )
     }
 
     private var confirmedCapSafeZoneDetail: String {
-        guard bridge.hasPaperLock else { return "Paper homography required" }
-        guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap position not observed" }
+        guard bridge.hasPaperLock else { return "Visual field fiducials required" }
+        guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap marker not confirmed" }
         guard isGreenCapInsideSafeZone(paperMm) else {
             return String(
                 format: "Confirmed cap outside %.0fmm motion-safe inset",
@@ -2661,8 +2463,8 @@ struct ContentView: View {
 
                 controlButton(
                     systemName: "checklist.checked",
-                    label: "Wizard",
-                    help: "Open Calibration Wizard",
+                    label: "Field",
+                    help: "Open Visual Field Setup",
                     isActive: showCalibrationWizard || manualFiducialMode
                 ) {
                     startCalibrationWizard()
@@ -2813,7 +2615,7 @@ struct ContentView: View {
             instructionText: wizardInstructionText,
             fiducialDetail: wizardFiducialDetail,
             fiducialStatus: wizardFiducialStatus,
-            paperDetail: bridge.paperTransformStatus,
+            paperDetail: wizardFieldDetail,
             paperStatus: wizardPaperStatus,
             greenCapDetail: wizardGreenCapDetail,
             greenCapStatus: wizardGreenCapStatus,
@@ -2882,16 +2684,26 @@ struct ContentView: View {
 
     private var wizardFiducialDetail: String {
         if bridge.hasPaperLock && manualFiducials.count < 4 {
-            return "Stored paper homography in use"
+            return "Stored visual field in use"
         }
         if manualFiducials.count >= 4 { return "BL, BR, TR, TL captured" }
         return "Click \(nextFiducialLabel)  \(manualFiducials.count)/4"
     }
 
+    private var wizardFieldDetail: String {
+        if bridge.hasPaperLock {
+            return "Field locked; confirm grid alignment"
+        }
+        if manualFiducials.count >= 4 {
+            return "Fiducials captured; lock visual field"
+        }
+        return "Needs four field fiducials"
+    }
+
     private var wizardGreenCapDetail: String {
         guard let marker = currentCarriageMarker else {
             if confirmedCapPoint?.paperMm != nil {
-                return "Manual cap position accepted"
+                return "Cap marker confirmed"
             }
             return "Waiting for bright cap marker"
         }
@@ -2900,7 +2712,7 @@ struct ContentView: View {
 
     private var wizardCapStateLabel: String {
         if currentGreenCapSafeZoneReady { return "LIVE-SAFE" }
-        if currentGreenCapBootstrapReady { return "BOOT-X" }
+        if currentGreenCapCalibrationBandReady { return "CAL-BAND" }
         if currentGreenCapProbeStartReady { return "PROBE" }
         if confirmedCapSafeZoneReady { return "CONF-SAFE" }
         if confirmedCapPoint?.paperMm != nil { return "CONF-OUT" }
@@ -2912,32 +2724,29 @@ struct ContentView: View {
             if manualFiducials.count < 4 {
                 return "Click fiducials in order: bottom-left, bottom-right, top-right, top-left."
             }
-            return "Fiducials are captured. Solve paper homography to create the paper-mm frame."
+            return "Fiducials are captured. Lock the visual field before confirming the cap marker."
         }
         if confirmedCapPoint?.paperMm == nil {
             if currentCarriageMarker == nil {
-                return "Stored paper homography is locked. Confirm setup if the grid still aligns, then pick the cap region or click the cap position."
+                return "Visual field is locked. Confirm setup if the grid still aligns, then pick the cap region or click the cap marker."
             }
             if currentGreenCapPaperObservation() == nil {
-                return "Cap marker is detected but not mapped to paper. Click the cap position or re-solve paper."
+                return "Cap marker is detected but not mapped to the field. Click the cap marker or reset fiducials."
             }
-            return "Stored paper homography is locked. Confirm setup if the grid still aligns, then confirm the detected carriage cap."
+            return "Visual field is locked. Confirm setup if the grid still aligns, then confirm the detected carriage cap."
         }
         if frameLearning.status != "MEASURED" {
             if currentCarriageMarker == nil {
-                return "Visual calibration needs a live cap marker. If power-off gravity parked X off-camera, move X into the camera field first."
-            }
-            if currentGreenCapBootstrapReady {
-                return "X-min bootstrap will move +X only until the cap reaches the probe zone, then sample X/Y motion."
+                return "Visual-machine calibration needs a live cap marker. If the cap is off-camera, move X into the camera field first."
             }
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
-            return "Cap position is in paper mm. Run visual calibration only when the nearby path is clear."
+            return "Cap marker is in the visual field. Run visual-machine calibration only when the nearby path is clear."
         }
         if visualCenterDotIsActive {
             return "Binding marks are running watched relative motion. Do not start another move."
         }
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
-            return "Adaptive probe is measured. Preview the five binding marks before visual-relative motion."
+            return "Visual-machine calibration is measured. Preview the five binding marks before visual-relative motion."
         }
         if canRunVisualCenterDot {
             return "Run binding marks. The app approaches each expected point, marks only after residuals pass, posts ink observations, and solves the binding."
@@ -2953,13 +2762,13 @@ struct ContentView: View {
             if manualFiducials.count < 4 {
                 return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Fiducial Clicks"
             }
-            return "Solve Homography"
+            return "Lock Visual Field"
         }
         if confirmedCapPoint?.paperMm == nil {
-            return currentGreenCapPaperObservation() == nil ? "Click Cap Position" : "Confirm Cap"
+            return currentGreenCapPaperObservation() == nil ? "Click Cap Marker" : "Confirm Cap"
         }
-        if frameLearning.status != "MEASURED" { return "Run Visual Calibration" }
-        if visualSessionReadyToPlot { return "Ready to Plot" }
+        if frameLearning.status != "MEASURED" { return "Run Visual-Machine" }
+        if visualSessionReadyToPlot { return "Ready For Drawing" }
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty { return "Preview Binding Marks" }
         if canRunVisualCenterDot { return "Run Binding Marks" }
         return "Blocked"
@@ -2989,11 +2798,11 @@ struct ContentView: View {
         guard !wizardPrimaryActionEnabled else { return nil }
         if !bridge.hasPaperLock {
             if !bridge.isOnline { return "bridge offline" }
-            if bridge.isCalibrating { return "paper solve already running" }
-            return "paper homography not locked"
+            if bridge.isCalibrating { return "field lock already running" }
+            return "visual field not locked"
         }
         if confirmedCapPoint?.paperMm == nil {
-            return "cap position not observed"
+            return "cap marker not confirmed"
         }
         if frameLearning.status != "MEASURED" {
             if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
@@ -3001,7 +2810,7 @@ struct ContentView: View {
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
             if currentCarriageMarker == nil { return "cap marker not detected; move X into field if parked off-camera" }
             if !currentGreenCapCanStartProbe { return greenCapProbeReadinessDetail }
-            return "visual calibration blocked"
+            return "visual-machine calibration blocked"
         }
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
             if !bridge.isOnline { return "bridge offline" }
@@ -3045,13 +2854,13 @@ struct ContentView: View {
 
         if frameLearning.status != "MEASURED" {
             guard canRunWizardMotionProbe else {
-                calibrationStatusText = "WIZ visual calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
+                calibrationStatusText = "FIELD visual-machine blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
                 if currentCarriageMarker == nil, canMoveXIntoCameraFieldForProbe {
                     requestXFieldMovePrompt(source: "wizard_probe_blocked_no_cap")
                 }
                 return
             }
-            calibrationStatusText = "WIZ visual calibration requested"
+            calibrationStatusText = "FIELD visual-machine calibration requested"
             Task {
                 await runFrameLearning()
             }
@@ -3059,22 +2868,22 @@ struct ContentView: View {
         }
 
         if visualSessionReadyToPlot {
-            calibrationStatusText = "WIZ \(bridge.visualBindingStatus)"
+            calibrationStatusText = "FIELD \(bridge.visualBindingStatus)"
             return
         }
 
         if bridge.dotTestPreviewPattern != "five" || bridge.dotTestPreviewPoints.isEmpty {
-            calibrationStatusText = "WIZ preview binding marks"
+            calibrationStatusText = "FIELD preview binding marks"
             Task {
                 _ = await bridge.previewDotTestOverlay(pattern: "five")
                 await bridge.refreshVisualBindingStatus()
-                calibrationStatusText = "WIZ \(bridge.dotTestPreviewStatus)"
+                calibrationStatusText = "FIELD \(bridge.dotTestPreviewStatus)"
             }
             return
         }
 
         if canRunVisualCenterDot {
-            calibrationStatusText = "WIZ binding marks"
+            calibrationStatusText = "FIELD binding marks"
             Task {
                 await runVisualRelativeFivePointTest()
             }
@@ -3091,7 +2900,7 @@ struct ContentView: View {
             manualFiducialMode = false
             manualPenMode = false
             manualCapColorMode = false
-            calibrationStatusText = "WIZ paper lock ready; confirm setup if grid aligns"
+            calibrationStatusText = "FIELD visual field ready; confirm setup if grid aligns"
             return
         }
 
@@ -3099,7 +2908,7 @@ struct ContentView: View {
             manualFiducialMode = true
             manualPenMode = false
             manualCapColorMode = false
-            calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+            calibrationStatusText = "FIELD click \(nextFiducialLabel)"
             return
         }
 
@@ -3114,7 +2923,7 @@ struct ContentView: View {
         startVisibleCameras()
 
         guard bridge.hasPaperLock else {
-            calibrationStatusText = "WIZ no stored paper homography; click FID-BL"
+            calibrationStatusText = "FIELD no stored visual field; click FID-BL"
             manualFiducialMode = true
             manualPenMode = false
             manualCapColorMode = false
@@ -3125,7 +2934,7 @@ struct ContentView: View {
         manualPenMode = false
         manualCapColorMode = false
         focusPlotterVideoOnPaper(source: "wizard_confirm_setup")
-        calibrationStatusText = "WIZ setup confirmed from stored paper homography"
+        calibrationStatusText = "FIELD setup confirmed from stored visual field"
         bridge.recordOperatorEvent(
             "wizard_setup_confirmed",
             details: [
@@ -3140,7 +2949,7 @@ struct ContentView: View {
         manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false
-        calibrationStatusText = "WIZ hidden"
+        calibrationStatusText = "FIELD hidden"
     }
 
     private func solvePaperHomographyFromWizard() {
@@ -3149,13 +2958,13 @@ struct ContentView: View {
             return
         }
         guard bridge.isOnline else {
-            calibrationStatusText = "WIZ connect plotter to solve homography"
+            calibrationStatusText = "FIELD connect plotter to lock visual field"
             return
         }
         guard !bridge.isCalibrating else { return }
 
         manualFiducialMode = false
-        calibrationStatusText = "WIZ solving paper homography"
+        calibrationStatusText = "FIELD locking visual field"
         Task {
             let response = await bridge.registerPaperHomography(
                 fiducials: manualFiducials,
@@ -3165,7 +2974,7 @@ struct ContentView: View {
             if response?.registration != nil {
                 focusPlotterVideoOnPaper(source: "wizard_fiducials_solved")
             }
-            calibrationStatusText = "WIZ \(bridge.paperTransformStatus)"
+            calibrationStatusText = bridge.hasPaperLock ? "FIELD visual field locked" : "FIELD \(bridge.paperTransformStatus)"
         }
     }
 
@@ -3181,7 +2990,7 @@ struct ContentView: View {
         visualCenterDotTaskActive = false
         frameLearning = .idle
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
-        calibrationStatusText = "WIZ reset; click FID-BL"
+        calibrationStatusText = "FIELD reset; click FID-BL"
     }
 
     private var topStatusLights: some View {
@@ -3202,13 +3011,13 @@ struct ContentView: View {
                 title: "FID",
                 value: "\(manualFiducials.count)/4",
                 color: fiducialLampColor,
-                help: "Manual wizard fiducials"
+                help: "Manual visual field fiducials"
             )
             StatusLamp(
-                title: "PAPER",
+                title: "FIELD",
                 value: paperLampValue,
                 color: paperLampColor,
-                help: bridge.paperTransformStatus
+                help: wizardFieldDetail
             )
             StatusLamp(
                 title: "CAP",
@@ -3270,7 +3079,7 @@ struct ContentView: View {
     }
 
     private var confirmedCapStatusText: String {
-        guard let confirmedCapPoint else { return "Cap position not observed" }
+        guard let confirmedCapPoint else { return "Cap marker not confirmed" }
         if let paperMm = confirmedCapPoint.paperMm {
             return String(
                 format: "CAP cam x%.3f y%.3f paper x%.1f y%.1f mm %@",
@@ -3282,7 +3091,7 @@ struct ContentView: View {
             )
         }
         return String(
-            format: "CAP cam x%.3f y%.3f, no paper homography",
+            format: "CAP cam x%.3f y%.3f, visual field not locked",
             confirmedCapPoint.cameraPoint.x,
             confirmedCapPoint.cameraPoint.y
         )
@@ -3328,10 +3137,10 @@ struct ContentView: View {
         )
         if showCalibrationWizard {
             if manualFiducials.count >= 4 {
-                calibrationStatusText = "WIZ fiducials captured"
+                calibrationStatusText = "FIELD fiducials captured"
                 solvePaperHomographyFromWizard()
             } else {
-                calibrationStatusText = "WIZ click \(nextFiducialLabel)"
+                calibrationStatusText = "FIELD click \(nextFiducialLabel)"
             }
         }
     }
@@ -3342,8 +3151,8 @@ struct ContentView: View {
         manualCapColorMode = false
         confirmedCapPoint = nil
         calibrationStatusText = bridge.hasPaperLock
-            ? "WIZ click cap position on plotter view"
-            : "WIZ paper homography required before cap click"
+            ? "FIELD click cap marker on plotter view"
+            : "FIELD visual field required before cap click"
     }
 
     private func startCapColorPick() {
@@ -3380,14 +3189,14 @@ struct ContentView: View {
 
         if let paperMm {
             calibrationStatusText = String(
-                format: "WIZ %@ cap accepted paper x%.1f y%.1f mm",
+                format: "FIELD %@ cap accepted field x%.1f y%.1f mm",
                 marker.colorName.lowercased(),
                 paperMm.x,
                 paperMm.y
             )
         } else {
             calibrationStatusText = String(
-                format: "WIZ %@ cap cam x%.3f y%.3f; solve homography first",
+                format: "FIELD %@ cap cam x%.3f y%.3f; lock visual field first",
                 marker.colorName.lowercased(),
                 cameraPoint.x,
                 cameraPoint.y
@@ -3413,13 +3222,13 @@ struct ContentView: View {
 
         if let paperMm {
             calibrationStatusText = String(
-                format: "CAL cap position observed paper x%.1f y%.1f mm",
+                format: "CAL cap marker observed field x%.1f y%.1f mm",
                 paperMm.x,
                 paperMm.y
             )
         } else {
             calibrationStatusText = String(
-                format: "CAL cap position observed cam x%.3f y%.3f; lock paper first",
+                format: "CAL cap marker observed cam x%.3f y%.3f; lock visual field first",
                 normalizedCamera.x,
                 normalizedCamera.y
             )

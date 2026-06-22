@@ -110,6 +110,8 @@ def _assert_identity_fields(health: dict[str, Any], bridge: PlotterBridge) -> No
     assert health["event_log"].endswith("events.jsonl")
     assert health["workspace_x_mm"] == 533.4
     assert health["workspace_y_mm"] == 215.9
+    assert health["max_feed_mm_min"] == 1200.0
+    assert health["max_jog_mm"] == 50.0
 
 
 class _BridgeClient:

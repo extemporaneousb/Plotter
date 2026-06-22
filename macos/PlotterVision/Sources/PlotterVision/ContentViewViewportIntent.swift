@@ -23,7 +23,7 @@ extension ContentView {
         guard let registration = bridge.paperRegistrationSnapshot,
               let bounds = paperCameraBounds(registration) else {
             plotterViewport.resetFOV()
-            calibrationStatusText = "VIEW focus needs paper lock"
+            calibrationStatusText = "VIEW focus needs visual field"
             bridge.recordOperatorEvent(
                 "plotter_viewport_focus_blocked",
                 details: ["source": source, "reason": "paper_registration_missing"]

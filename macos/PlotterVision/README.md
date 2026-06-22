@@ -76,30 +76,30 @@ coordinates when sending motion commands.
 
 - Shows native AVFoundation plotter and face camera previews.
 - Runs Vision passes for line/shape segments, fiducials, carriage markers, and frame-change reports.
-- Renders bridge-planned expected paths, paper homography state, dot-test preview points, and
+- Renders bridge-planned expected paths, visual field state, dot-test preview points, and
   observed marks over the camera image.
 - Persists plotter-camera viewport controls, including fit/fill, rotation, video filter, and a
   centered FOV zoom. This zoom is an operator display transform only; `CameraModel` still runs
   segmentation and motion analysis against the full camera frame.
 - Exposes the Machine panel as the operator surface for bridge/controller state, arm gates, alarms,
   busy state, stop/resume, pen actions, homing, centering, and jogs.
-- Supports the wizard-first operator flow: manual paper fiducials, paper homography, cap
-  localization, visual motion probing, center-dot preview, and watched mark drawing. When the
-  bridge already reports a locked paper homography after restart and the grid still aligns, the
-  wizard's Confirm Setup action reuses that registration without re-clicking fiducials.
+- Supports the Visual Field Setup flow: manual paper fiducials, cap marker confirmation,
+  clearance-aware visual-machine calibration, and watched mark drawing. When the bridge already
+  reports a locked visual field after restart and the grid still aligns, Confirm Setup reuses that
+  registration without re-clicking fiducials.
 - Presents two post-calibration lanes in Draw/Verify: capability checks and portrait/image-to-shape
   drawing.
 
 The current true app flow is:
 
 ```text
-launch -> Calibration Wizard -> manual fiducials/paper homography -> cap confirmation
-  -> visual probe/BOOT-X if needed -> preview binding marks -> run watched binding marks
+launch -> Visual Field Setup -> manual/confirmed fiducials -> cap confirmation
+  -> Visual-Machine Calibration -> preview binding marks -> run watched binding marks
   -> /calibration/binding/observe -> /calibration/binding/solve
   -> validated VisualPositionBinding -> preview -> Draw/Verify
 ```
 
-If the bridge has a current persisted paper lock on launch, the wizard may start at Confirm Setup
+If the bridge has a current persisted visual field lock on launch, setup may start at Confirm Setup
 instead of manual fiducial capture. This does not create axis trust or a drawing unlock; it only keeps
 the Swift workflow aligned with the bridge-owned paper registration that is already locked.
 

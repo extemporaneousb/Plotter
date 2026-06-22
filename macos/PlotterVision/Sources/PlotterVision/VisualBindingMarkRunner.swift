@@ -7,7 +7,7 @@ let visualCalibrationMaxMarkSizeMm = 14.0
 let visualCalibrationInitialMarkDrawFeedMmMin = 240.0
 let visualCalibrationRetryMarkDrawFeedMmMin = 200.0
 let visualCalibrationMinimumMarkDrawFeedMmMin = 160.0
-let visualCalibrationTravelFeedMmMin = 600.0
+let visualCalibrationTravelFeedMmMin = 1200.0
 let visualCalibrationParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]
 
 extension ContentView {

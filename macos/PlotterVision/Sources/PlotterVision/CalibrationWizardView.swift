@@ -67,7 +67,7 @@ struct CalibrationWizardView: View {
             Image(systemName: "checklist.checked")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(.cyan)
-            Text("Calibration Wizard")
+            Text("Visual Field Setup")
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.92))
             Spacer(minLength: 0)
@@ -79,18 +79,17 @@ struct CalibrationWizardView: View {
                     .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
-            .help("Hide calibration wizard")
+            .help("Hide visual field setup")
         }
     }
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
             CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus)
-            CalibrationWizardStepRow(index: 2, title: "Paper Homography", detail: paperDetail, status: paperStatus)
-            CalibrationWizardStepRow(index: 3, title: "Green Cap", detail: greenCapDetail, status: greenCapStatus)
-            CalibrationWizardStepRow(index: 4, title: "Cap Position", detail: capPositionDetail, status: capPositionStatus)
-            CalibrationWizardStepRow(index: 5, title: "Visual Calibration", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-            CalibrationWizardStepRow(index: 6, title: "Binding", detail: bindingDetail, status: bindingStatus)
+            CalibrationWizardStepRow(index: 2, title: "Visual Field", detail: paperDetail, status: paperStatus)
+            CalibrationWizardStepRow(index: 3, title: "Cap Marker", detail: greenCapDetail, status: greenCapStatus)
+            CalibrationWizardStepRow(index: 4, title: "Visual-Machine", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+            CalibrationWizardStepRow(index: 5, title: "Draw/Verify", detail: bindingDetail, status: bindingStatus)
         }
     }
 
@@ -111,7 +110,7 @@ struct CalibrationWizardView: View {
                 Button("Confirm Setup", action: confirmSetup)
                     .buttonStyle(.bordered)
                     .disabled(!canConfirmSetup)
-                    .help("Reuse the bridge's locked paper homography when the visible grid still matches the setup")
+                    .help("Reuse the locked visual field when the visible grid still matches the setup")
 
                 Button("Reset", action: reset)
                     .buttonStyle(.bordered)
@@ -125,10 +124,10 @@ struct CalibrationWizardView: View {
                 Button("Pick Region", action: pickRegion)
                     .buttonStyle(.bordered)
 
-                Button("Move +X Field", action: moveXIntoCameraField)
+                Button("Move Field", action: moveXIntoCameraField)
                     .buttonStyle(.bordered)
                     .disabled(!canMoveXIntoCameraField)
-                    .help("Live +X recovery jog when the cap is parked outside the camera field")
+                    .help("Live bounded X recovery jog when the cap is parked outside the camera field")
             }
         }
         .controlSize(.small)
@@ -150,7 +149,7 @@ struct CalibrationWizardView: View {
             Label(capDetected ? "cap detected" : "cap not detected", systemImage: "circle.fill")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(capDetected ? .green.opacity(0.92) : .yellow.opacity(0.86))
-            Text(String(format: "FID %d/4  PAPER %@  CAP %@  LIVE %@",
+            Text(String(format: "FID %d/4  FIELD %@  CAP %@  LIVE %@",
                         manualFiducialCount,
                         hasPaperLock ? "LOCK" : "--",
                         capStateLabel,

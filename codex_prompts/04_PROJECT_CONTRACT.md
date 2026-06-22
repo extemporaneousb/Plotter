@@ -41,11 +41,11 @@
 The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open the calibration wizard.
-3. Click paper fiducials, solve paper homography, and confirm or localize the cap marker. If a
-   restart leaves the bridge with a locked paper homography and the rendered grid still aligns, the
-   wizard may Confirm Setup and reuse that registration without re-clicking fiducials.
-4. Run visual probe or BOOT-X only when needed to bring relative cap motion into a measured state.
+2. Open Visual Field Setup.
+3. Click or confirm paper fiducials and confirm or localize the cap marker. The bridge still owns the
+   internal paper homography artifact, but operator-facing setup treats it as a locked visual field.
+4. Run Visual-Machine Calibration to measure relative cap motion with bounded moves chosen from
+   current machine clearance; do not assume a fixed +X bootstrap.
 5. Preview binding marks, run watched binding marks, post observations to
    `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
 6. Treat the validated `VisualPositionBinding` as the current drawing unlock.
@@ -107,7 +107,7 @@ A serializable config object:
 {
   "units": "mm",
   "workspace": {"x_min": 0, "x_max": 300, "y_min": 0, "y_max": 300},
-  "max_feed_mm_min": 600,
+  "max_feed_mm_min": 1200,
   "max_jog_mm": 5,
   "homing_trusted": false,
   "axis_model_trusted": false,

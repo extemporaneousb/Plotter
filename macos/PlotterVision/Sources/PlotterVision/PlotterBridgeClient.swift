@@ -12,6 +12,8 @@ struct BridgeHealthResponse: Decodable {
     let eventLog: String
     let workspaceXMm: Double?
     let workspaceYMm: Double?
+    let maxFeedMmMin: Double?
+    let maxJogMm: Double?
     let bridgeApiVersion: String?
     let lifecycleMode: String?
     let lifecycleLabel: String?
@@ -32,6 +34,8 @@ struct BridgeHealthResponse: Decodable {
         case eventLog
         case workspaceXMm
         case workspaceYMm
+        case maxFeedMmMin
+        case maxJogMm
         case bridgeApiVersion
         case lifecycleMode
         case lifecycleLabel
@@ -54,6 +58,8 @@ struct BridgeHealthResponse: Decodable {
         eventLog = try container.decodeIfPresent(String.self, forKey: .eventLog) ?? ""
         workspaceXMm = container.decodeFlexibleDoubleIfPresent(forKey: .workspaceXMm)
         workspaceYMm = container.decodeFlexibleDoubleIfPresent(forKey: .workspaceYMm)
+        maxFeedMmMin = container.decodeFlexibleDoubleIfPresent(forKey: .maxFeedMmMin)
+        maxJogMm = container.decodeFlexibleDoubleIfPresent(forKey: .maxJogMm)
         bridgeApiVersion = container.decodeFlexibleStringIfPresent(forKey: .bridgeApiVersion)
         lifecycleMode = container.decodeFlexibleStringIfPresent(forKey: .lifecycleMode)
         lifecycleLabel = container.decodeFlexibleStringIfPresent(forKey: .lifecycleLabel)

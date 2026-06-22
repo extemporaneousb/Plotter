@@ -60,6 +60,8 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var drawVerifyPlanHash = ""
     @Published var workspaceXMm = 533.4
     @Published var workspaceYMm = 215.9
+    @Published var machineMaxFeedMmMin = 1200.0
+    @Published var machineMaxJogMm = 50.0
     @Published var shapeSideMm = 35.0
     @Published var shapeCenterXNorm = 0.5
     @Published var shapeCenterYNorm = 0.5
@@ -70,7 +72,9 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var isMachineAlarm = false
     @Published var activeAction = ""
     @Published var manualStepMm = 1.0
-    @Published var manualFeedMmMin = 600.0
+    @Published var manualFeedMmMin = 1200.0
+    @Published var machineMPosMm: [Double] = []
+    @Published var machineWPosMm: [Double] = []
 
     private let client = PlotterBridgeClient()
     private let diagnostics = AppDiagnostics.shared
@@ -88,6 +92,69 @@ final class PlotterBridgeModel: ObservableObject {
 
     var isLiveMotionMode: Bool {
         isOnline && !isDryRun
+    }
+
+    var fastTravelFeedMmMin: Double {
+        min(machineMaxFeedMmMin, manualFeedMmMin)
+    }
+
+    var hasMachinePosition: Bool {
+        machineMPosMm.count >= 2
+    }
+
+    func availableMachineTravelMm(axis: String, direction: Double, clearanceMm: Double = 2.0) -> Double? {
+        guard hasMachinePosition else { return nil }
+        let normalizedAxis = axis.uppercased()
+        let index: Int
+        let upper: Double
+        switch normalizedAxis {
+        case "X":
+            index = 0
+            upper = workspaceXMm
+        case "Y":
+            index = 1
+            upper = workspaceYMm
+        default:
+            return nil
+        }
+        guard machineMPosMm.indices.contains(index) else { return nil }
+        let position = machineMPosMm[index]
+        if direction >= 0 {
+            return max(0.0, upper - clearanceMm - position)
+        }
+        return max(0.0, position - clearanceMm)
+    }
+
+    func boundedMachineTravelDistance(
+        axis: String,
+        preferredDistanceMm: Double,
+        minimumDistanceMm: Double,
+        clearanceMm: Double = 2.0
+    ) -> Double? {
+        guard abs(preferredDistanceMm) > 0.000_001 else { return nil }
+        let preferredDirection = preferredDistanceMm >= 0 ? 1.0 : -1.0
+        let requested = abs(preferredDistanceMm)
+        if let preferredRoom = availableMachineTravelMm(
+            axis: axis,
+            direction: preferredDirection,
+            clearanceMm: clearanceMm
+        ) {
+            let bounded = min(requested, preferredRoom)
+            if bounded >= minimumDistanceMm {
+                return preferredDirection * bounded
+            }
+            let oppositeRoom = availableMachineTravelMm(
+                axis: axis,
+                direction: -preferredDirection,
+                clearanceMm: clearanceMm
+            ) ?? 0.0
+            let oppositeBounded = min(requested, oppositeRoom)
+            if oppositeBounded >= minimumDistanceMm {
+                return -preferredDirection * oppositeBounded
+            }
+            return nil
+        }
+        return preferredDistanceMm
     }
 
     func startVisualProbeEvidenceRun(prefix: String = "swift-probe") -> String {
@@ -350,7 +417,7 @@ final class PlotterBridgeModel: ObservableObject {
         if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
         if isMachineAlarm { return "Motion blocked: machine alarm" }
         if isMachineBusy || isRunning { return "Motion busy: \(activeAction)" }
-        if !hasPaperLock { return "Bridge-run drawing blocked: paper homography missing" }
+        if !hasPaperLock { return "Bridge-run drawing blocked: visual field missing" }
         if !machineAxisModelTrusted { return "Bridge-run drawing blocked: axis geometry not trusted" }
         if !machineHomingTrusted { return "Bridge-run drawing blocked: absolute position not trusted" }
         return "Live motion enabled"
@@ -464,7 +531,9 @@ final class PlotterBridgeModel: ObservableObject {
                 "state": machineState,
                 "pins": machinePins,
                 "mpos": machineMPos,
+                "mpos_mm": machineMPosMm,
                 "wpos": machineWPos,
+                "wpos_mm": machineWPosMm,
                 "feed_spindle": machineFeedSpindle,
                 "status": machineStatus,
                 "busy": isMachineBusy || isRunning,
@@ -478,7 +547,9 @@ final class PlotterBridgeModel: ObservableObject {
                 "locked": hasPaperLock,
                 "registration_id": paperRegistrationSnapshot?.registrationId ?? "",
                 "workspace_x_mm": workspaceXMm,
-                "workspace_y_mm": workspaceYMm
+                "workspace_y_mm": workspaceYMm,
+                "max_feed_mm_min": machineMaxFeedMmMin,
+                "max_jog_mm": machineMaxJogMm
             ],
             "previews": [
                 "shape": previewStatus,
@@ -661,6 +732,9 @@ final class PlotterBridgeModel: ObservableObject {
             armUnlock = health.armUnlock
             workspaceXMm = health.workspaceXMm ?? workspaceXMm
             workspaceYMm = health.workspaceYMm ?? workspaceYMm
+            machineMaxFeedMmMin = health.maxFeedMmMin ?? machineMaxFeedMmMin
+            machineMaxJogMm = health.maxJogMm ?? machineMaxJogMm
+            manualFeedMmMin = min(manualFeedMmMin, machineMaxFeedMmMin)
             bridgeApiVersion = health.bridgeApiVersion
             lifecycleMode = health.lifecycleMode
             lifecycleLabel = health.lifecycleLabel
@@ -725,6 +799,8 @@ final class PlotterBridgeModel: ObservableObject {
             machinePins = "-"
             machineMPos = "M --"
             machineWPos = "W --"
+            machineMPosMm = []
+            machineWPosMm = []
             machineFeedSpindle = "FS --"
             machineStatus = error.localizedDescription
             machineHomingTrusted = false
@@ -784,6 +860,8 @@ final class PlotterBridgeModel: ObservableObject {
             machinePins = "-"
             machineMPos = "M --"
             machineWPos = "W --"
+            machineMPosMm = []
+            machineWPosMm = []
             machineFeedSpindle = "FS --"
             machineStatus = error.localizedDescription
             machineHomingTrusted = false
@@ -1076,7 +1154,7 @@ final class PlotterBridgeModel: ObservableObject {
                     centerXMm: shapeCenterXNorm * workspaceXMm,
                     centerYMm: shapeCenterYNorm * workspaceYMm,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0
+                    travelFeedMmMin: fastTravelFeedMmMin
                 )
             )
             expectedPathSegments = response.simulation?.previewSegments ?? []
@@ -1130,7 +1208,7 @@ final class PlotterBridgeModel: ObservableObject {
                     centerXMm: centerXMm ?? shapeCenterXNorm * workspaceXMm,
                     centerYMm: centerYMm ?? shapeCenterYNorm * workspaceYMm,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0
+                    travelFeedMmMin: fastTravelFeedMmMin
                 )
             )
             shortStatus = response.dryRun ? "DRY" : "DONE"
@@ -1250,8 +1328,8 @@ final class PlotterBridgeModel: ObservableObject {
                     ),
                     includeHoming: false,
                     visualPositionTrusted: visualBindingValid,
-                    drawFeedMmMin: min(600.0, max(240.0, shapeDrawFeedMmMin)),
-                    travelFeedMmMin: min(600.0, manualFeedMmMin),
+                    drawFeedMmMin: min(machineMaxFeedMmMin, max(240.0, shapeDrawFeedMmMin)),
+                    travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 50.0,
                     maxPolylineCount: 4,
                     requestId: "binding-bounds-frame-\(UUID().uuidString.lowercased())"
@@ -1261,7 +1339,7 @@ final class PlotterBridgeModel: ObservableObject {
             expectedPathSegments = response.simulation?.previewSegments ?? []
             previewStatus = "SIM \(response.status.uppercased())"
             let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
-            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: min(600.0, max(240.0, shapeDrawFeedMmMin)))
+            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: min(machineMaxFeedMmMin, max(240.0, shapeDrawFeedMmMin)))
             let segments = response.summary?.drawSegmentCount ?? 0
             drawVerifyStatus = "DRAW \(response.status.uppercased())"
             drawVerifyCommandId = response.commandId
@@ -1341,7 +1419,7 @@ final class PlotterBridgeModel: ObservableObject {
                     ),
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0,
+                    travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0
                 )
             )
@@ -1428,7 +1506,7 @@ final class PlotterBridgeModel: ObservableObject {
                         maxContours: 900
                     ),
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0,
+                    travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0
                 )
             )
@@ -1557,7 +1635,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = error.localizedDescription
             machineStatus = error.localizedDescription
             isMachineBusy = false
-            isMachineAlarm = true
+            isMachineAlarm = error.localizedDescription.localizedCaseInsensitiveContains("alarm")
             diagnosticsEvent(
                 "learning_jog_failed",
                 errorPayload(error).merging(["axis": axis, "distance_mm": distanceMm]) { current, _ in current },
@@ -1760,7 +1838,7 @@ final class PlotterBridgeModel: ObservableObject {
             adaptiveProbeStatus = "PROBE RUN ERR"
             statusText = error.localizedDescription
             isMachineBusy = false
-            isMachineAlarm = true
+            isMachineAlarm = error.localizedDescription.localizedCaseInsensitiveContains("alarm")
             diagnosticsEvent("adaptive_probe_run_failed", ["request_id": requestId, "error": error.localizedDescription], snapshot: true)
             return nil
         }
@@ -1968,7 +2046,7 @@ final class PlotterBridgeModel: ObservableObject {
                 MachineRelativeMarkRequest(
                     markSizeMm: markSizeMm,
                     drawFeedMmMin: drawFeedMmMin,
-                    travelFeedMmMin: min(600.0, manualFeedMmMin)
+                    travelFeedMmMin: fastTravelFeedMmMin
                 )
             )
             if let machineStatus = response.machineStatus {
@@ -2199,7 +2277,7 @@ final class PlotterBridgeModel: ObservableObject {
         isCalibrating = true
         activeAction = "paper"
         paperTransformStatus = "PAPER SOLVE"
-        statusText = "Solving paper homography"
+        statusText = "Locking visual field"
         diagnosticsEvent(
             "paper_registration_started",
             [
@@ -2291,7 +2369,7 @@ final class PlotterBridgeModel: ObservableObject {
                     markSizeMm: 6.0,
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0,
+                    travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0
                 )
             )
@@ -2540,7 +2618,7 @@ final class PlotterBridgeModel: ObservableObject {
                     markSizeMm: 6.0,
                     includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: 600.0,
+                    travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0,
                     expectedPlanHash: expectedHash
                 )
@@ -2648,6 +2726,8 @@ final class PlotterBridgeModel: ObservableObject {
         armUnlock = response.armUnlock
         machineState = response.state
         machinePins = response.pins.isEmpty ? "-" : response.pins
+        machineMPosMm = response.mposMm ?? []
+        machineWPosMm = response.wposMm ?? []
         machineMPos = "M \(formatPosition(response.mposMm))"
         machineWPos = "W \(formatPosition(response.wposMm))"
         machineFeedSpindle = "FS \(formatTuple(response.feedSpindle))"

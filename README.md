@@ -27,7 +27,7 @@ Implemented vertical slices now include:
 
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
-- paper homography registration from wizard-clicked manual fiducials;
+- visual field setup from operator-clicked manual fiducials, backed internally by paper homography;
 - preview-safe shape, raster, and dot-test planning with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible.
 
@@ -36,16 +36,15 @@ Implemented vertical slices now include:
 The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open the calibration wizard.
-3. Click the paper fiducials, solve the paper homography, and confirm or localize the visible cap
-   marker. If the bridge already reports a locked paper homography after restart and the rendered
-   grid still aligns with the physical setup, use Confirm Setup in the wizard to reuse that paper
-   registration without re-clicking fiducials.
-4. If power-off gravity has parked X outside the camera field, use the motion-probe startup recovery
-   action to move +X into view. This is a live-gated visibility jog only; it is not homing and does
-   not promote axis trust.
-5. Run or rerun the motion probe from the current cap location. When the cap is visible near the
-   X-min side, the probe may run a +X-only BOOT-X bootstrap before sampling X/Y motion.
+2. Open Visual Field Setup.
+3. Confirm or click the paper fiducials, then confirm or click the visible cap marker. If the bridge
+   already reports a locked visual field after restart and the rendered grid still aligns with the
+   physical setup, use Confirm Setup to reuse that registration without re-clicking fiducials.
+4. If the cap is outside the camera field, use the live-gated X-field recovery action. The app
+   chooses a bounded X direction from current machine clearance; this is not homing and does not
+   promote axis trust.
+5. Run or rerun Visual-Machine Calibration from the current cap location. The app samples bounded
+   X/Y carriage motion using live machine clearance instead of assuming a fixed +X bootstrap.
 6. Preview the expected binding marks on the video stream, draw the watched visual-relative marks,
    collect ink observations, post them to `/calibration/binding/observe`, and solve
    `/calibration/binding/solve`.
@@ -81,10 +80,10 @@ The operator sequence should stay explicit:
 
 | Step | Action | Evidence recorded | Does not prove |
 | --- | --- | --- | --- |
-| 1 | Paper homography | Fiducial corners, paper registration id, reprojection error | Machine axes or pen position. |
-| 2 | Cap localization | Camera-space cap point mapped into paper/logical mm | Drawing authority. |
-| 3 | Move X into camera field when needed | App event with commanded +X recovery and post-move cap observation if visible | Homing, absolute X zero, or axis trust. |
-| 4 | Motion probe / BOOT-X | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
+| 1 | Visual field setup | Fiducial corners, paper registration id, reprojection error | Machine axes or pen position. |
+| 2 | Cap marker confirmation | Camera-space cap point mapped into paper/logical mm | Drawing authority. |
+| 3 | Move X into camera field when needed | App event with bounded signed X recovery and post-move cap observation if visible | Homing, absolute X zero, or axis trust. |
+| 4 | Visual-machine calibration | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
 | 5 | Center mark | Projected center target, watched relative moves, residual checks, ink visibility | Full-field geometry. |
 | 6 | Five-point marks | Multiple projected targets and residual/ink observations across the paper | Arbitrary shape correctness. |
 | 7 | Capabilities suite | `center_crosshair`, `line_length`, `square_closure`, `triangle`, then `multi_shape_coordinate_sheet` through the shared drawing pipeline | Portrait or image ingestion quality. |
@@ -268,7 +267,7 @@ The bridge surfaces that exist today are:
 The app-side diagnostics surfaces are:
 
 - `artifacts/app_state.json`: latest app-observed state, including app/bridge identity, lifecycle
-  label, machine summary, paper lock status, preview state, and safety gate labels.
+  label, machine summary, visual field lock status, preview state, and safety gate labels.
 - `artifacts/app_events.jsonl`: bounded append-only app lifecycle, UI action, bridge polling,
   preview/draw, visual-probe, and visible error events.
 - `POST /codex/app/state` and `POST /codex/app/events`: append-only bridge ingestion routes for app
@@ -313,14 +312,15 @@ Interpretation rules:
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.
 
-In the app, use the calibration wizard as the only calibration path: manually clicked paper fiducials
-establish the paper plane, the cap marker provides live carriage observations, and binding ink marks
-validate the durable `VisualPositionBinding`. Bridge previews simulate the exact command stream and
-project the expected path into the camera view before any real drawing action is enabled. If simulated
-or observed geometry fails its gate, the bridge returns a failed response and does not send the command
-stream. After binding validation, use Draw/Verify for capability-check preview/run and shape or
-portrait drawing. Draw/Verify displays the latest bridge preview identity and only offers matching
-execution paths while Python safety, dry-run/live, paper, and binding gates allow them.
+In the app, use Visual Field Setup as the only setup path: manually clicked paper fiducials establish
+the field, the cap marker provides live carriage observations, and Visual-Machine Calibration learns
+bounded X/Y motion from current machine clearance. Binding ink marks validate the durable
+`VisualPositionBinding`. Bridge previews simulate the exact command stream and project the expected
+path into the camera view before any real drawing action is enabled. If simulated or observed geometry
+fails its gate, the bridge returns a failed response and does not send the command stream. After
+binding validation, use Draw/Verify for capability-check preview/run and shape or portrait drawing.
+Draw/Verify displays the latest bridge preview identity and only offers matching execution paths while
+Python safety, dry-run/live, paper, and binding gates allow them.
 Stop the background preview bridge with:
 
 ```bash

@@ -80,7 +80,7 @@ class MachineConfig(BaseModel):
     units: str = "mm"
     axes: AxesConfig = Field(default_factory=AxesConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
-    max_feed_mm_min: float = 600.0
+    max_feed_mm_min: float = 1200.0
     max_jog_mm: float = 50.0
     max_calibration_line_mm: float = 50.0
     homing_trusted: bool = False
