@@ -159,6 +159,8 @@ struct PlotterViewportTransform<Content: View>: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .rotationEffect(.degrees(settings.rotationDegrees))
                 .scaleEffect(rotationFitScale(size: geometry.size, degrees: settings.rotationDegrees))
+                .scaleEffect(plotterViewportZoomScale(settings))
+                .offset(plotterViewportZoomOffset(size: geometry.size, settings: settings))
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .clipped()
@@ -659,10 +661,16 @@ func inversePlotterViewportPoint(
     settings: PlotterViewportSettings
 ) -> CGPoint {
     let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+    let zoomScale = max(plotterViewportZoomScale(settings), 0.0001)
+    let zoomOffset = plotterViewportZoomOffset(size: viewSize, settings: settings)
+    let unzoomed = CGPoint(
+        x: center.x + (point.x - zoomOffset.width - center.x) / zoomScale,
+        y: center.y + (point.y - zoomOffset.height - center.y) / zoomScale
+    )
     let scale = max(rotationFitScale(size: viewSize, degrees: settings.rotationDegrees), 0.0001)
     let translated = CGPoint(
-        x: (point.x - center.x) / scale,
-        y: (point.y - center.y) / scale
+        x: (unzoomed.x - center.x) / scale,
+        y: (unzoomed.y - center.y) / scale
     )
     let radians = -CGFloat(settings.rotationDegrees) * .pi / 180.0
     let cosTheta = cos(radians)
@@ -670,6 +678,25 @@ func inversePlotterViewportPoint(
     return CGPoint(
         x: center.x + translated.x * cosTheta - translated.y * sinTheta,
         y: center.y + translated.x * sinTheta + translated.y * cosTheta
+    )
+}
+
+func plotterViewportZoomScale(_ settings: PlotterViewportSettings) -> CGFloat {
+    CGFloat(clampDouble(
+        settings.zoomScale,
+        min: PlotterViewportSettings.minZoomScale,
+        max: PlotterViewportSettings.maxZoomScale
+    ))
+}
+
+func plotterViewportZoomOffset(size: CGSize, settings: PlotterViewportSettings) -> CGSize {
+    let zoom = Double(plotterViewportZoomScale(settings))
+    guard zoom > 1.0001 else { return .zero }
+    let centerX = clampDouble(settings.zoomCenterX, min: 0.0, max: 1.0)
+    let centerY = clampDouble(settings.zoomCenterY, min: 0.0, max: 1.0)
+    return CGSize(
+        width: (0.5 - centerX) * Double(size.width) * (zoom - 1.0),
+        height: (centerY - 0.5) * Double(size.height) * (zoom - 1.0)
     )
 }
 

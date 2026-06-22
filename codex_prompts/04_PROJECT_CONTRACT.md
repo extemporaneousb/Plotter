@@ -42,7 +42,9 @@ The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open the calibration wizard.
-3. Click paper fiducials, solve paper homography, and confirm or localize the cap marker.
+3. Click paper fiducials, solve paper homography, and confirm or localize the cap marker. If a
+   restart leaves the bridge with a locked paper homography and the rendered grid still aligns, the
+   wizard may Confirm Setup and reuse that registration without re-clicking fiducials.
 4. Run visual probe or BOOT-X only when needed to bring relative cap motion into a measured state.
 5. Preview binding marks, run watched binding marks, post observations to
    `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
@@ -59,6 +61,12 @@ Cap-only motion is relative session evidence. Absolute drawing in the paper plan
 position binding backed by paper homography, cap localization, ink or pen-tip observations,
 residuals, camera identity, and freshness. Swift observations are evidence; Python decides whether a
 binding or trust flag is valid.
+
+Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
+operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned
+calibration and execution authority. Current segmentation and motion detection occur in
+`CameraModel` on the full camera frame; processing ROI is a separate Swift observation feature if it
+is added later.
 
 ## Core entities
 

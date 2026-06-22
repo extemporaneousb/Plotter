@@ -42,6 +42,7 @@ def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
     assert "struct VisualControlsMenu" in visual_controls
     assert "struct DrawVerifyMenu" in draw_verify
     assert "startCalibrationWizard" in content
+    assert "Confirm Setup" in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
 
 
 def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
@@ -138,6 +139,59 @@ def test_wizard_drives_visual_position_binding_loop() -> None:
     assert "BridgeVisualBindingObservationRequest" in client
     assert 'post(path: "calibration/binding/observe"' in client
     assert 'post(path: "calibration/binding/solve"' in client
+
+
+def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+
+    assert 'Button("Confirm Setup", action: confirmSetup)' in wizard
+    assert "canConfirmSetup: bridge.hasPaperLock" in content
+    assert "confirmSetup: confirmWizardSetupFromExistingRegistration" in content
+    assert "private func confirmWizardSetupFromExistingRegistration" in content
+    assert '"wizard_setup_confirmed"' in content
+    assert "Stored paper homography in use" in content
+    assert "WIZ paper lock ready; confirm setup if grid aligns" in content
+
+    primary_title = content.split("private var wizardPrimaryActionTitle", 1)[1].split(
+        "private var wizardPrimaryActionEnabled",
+        1,
+    )[0]
+    primary_action = content.split("private func runCalibrationWizardPrimaryAction", 1)[1].split(
+        "private func startCalibrationWizard",
+        1,
+    )[0]
+    assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Fiducial Clicks")
+    assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
+
+
+def test_plotter_fov_zoom_is_persisted_ui_state_and_click_safe() -> None:
+    models = _read(SWIFT_DIR / "Models.swift")
+    support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    visual_controls = _read(SWIFT_DIR / "VisualControlsMenu.swift")
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
+
+    assert "var zoomScale = 1.0" in models
+    assert "var zoomCenterX = 0.5" in models
+    assert "var zoomCenterY = 0.5" in models
+    assert "decodeIfPresent(Double.self, forKey: .zoomScale)" in models
+    assert "plotterViewport: plotterViewport" in _read(SWIFT_DIR / "FrameStateStore.swift")
+
+    assert "plotterViewportZoomScale(settings)" in support
+    assert "plotterViewportZoomOffset(size: geometry.size, settings: settings)" in support
+    assert "let unzoomed = CGPoint" in support
+    assert "point.x - zoomOffset.width - center.x" in support
+
+    assert "Section(\"Plotter FOV\")" in visual_controls
+    assert "Zoom In" in visual_controls
+    assert "Zoom Out" in visual_controls
+    assert "Reset FOV" in visual_controls
+    assert "plotterViewport.resetFOV()" in content
+
+    assert "func captureOutput(" in camera_model
+    assert "try self.analyzer.analyze(pixelBuffer: pixelBuffer" in camera_model
+    assert "zoomScale" not in camera_model
 
 
 def test_visual_probe_reacquires_cap_before_stopping() -> None:

@@ -2657,7 +2657,7 @@ struct ContentView: View {
                 .frame(height: 24)
                 .overlay(Color.white.opacity(0.18))
 
-            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
+            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg \(plotterViewport.zoomLabel)  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
@@ -2763,7 +2763,9 @@ struct ContentView: View {
             isLiveMotionMode: bridge.isLiveMotionMode,
             capDetected: plotterCamera.carriageMarker != nil,
             canMoveXIntoCameraField: canMoveXIntoCameraFieldForProbe,
+            canConfirmSetup: bridge.hasPaperLock,
             primaryAction: runCalibrationWizardPrimaryAction,
+            confirmSetup: confirmWizardSetupFromExistingRegistration,
             reset: resetCalibrationWizard,
             clickCap: startManualPenClick,
             pickRegion: startCapColorPick,
@@ -2773,7 +2775,8 @@ struct ContentView: View {
     }
 
     private var wizardFiducialStatus: CalibrationWizardStepStatus {
-        manualFiducials.count >= 4 ? .done : .active
+        if bridge.hasPaperLock { return .done }
+        return manualFiducials.count >= 4 ? .done : .active
     }
 
     private var wizardPaperStatus: CalibrationWizardStepStatus {
@@ -2809,6 +2812,9 @@ struct ContentView: View {
     }
 
     private var wizardFiducialDetail: String {
+        if bridge.hasPaperLock && manualFiducials.count < 4 {
+            return "Stored paper homography in use"
+        }
         if manualFiducials.count >= 4 { return "BL, BR, TR, TL captured" }
         return "Click \(nextFiducialLabel)  \(manualFiducials.count)/4"
     }
@@ -2833,20 +2839,20 @@ struct ContentView: View {
     }
 
     private var wizardInstructionText: String {
-        if manualFiducials.count < 4 {
-            return "Click fiducials in order: bottom-left, bottom-right, top-right, top-left."
-        }
         if !bridge.hasPaperLock {
+            if manualFiducials.count < 4 {
+                return "Click fiducials in order: bottom-left, bottom-right, top-right, top-left."
+            }
             return "Fiducials are captured. Solve paper homography to create the paper-mm frame."
         }
         if confirmedCapPoint?.paperMm == nil {
             if plotterCamera.carriageMarker == nil {
-                return "Cap marker is not detected. Pick the cap region or click the cap position."
+                return "Stored paper homography is locked. Confirm setup if the grid still aligns, then pick the cap region or click the cap position."
             }
             if currentGreenCapPaperObservation() == nil {
                 return "Cap marker is detected but not mapped to paper. Click the cap position or re-solve paper."
             }
-            return "Green cap is detected in paper coordinates. Confirm it as the carriage position."
+            return "Stored paper homography is locked. Confirm setup if the grid still aligns, then confirm the detected carriage cap."
         }
         if frameLearning.status != "MEASURED" {
             if plotterCamera.carriageMarker == nil {
@@ -2874,10 +2880,12 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionTitle: String {
-        if manualFiducials.count < 4 {
-            return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Fiducial Clicks"
+        if !bridge.hasPaperLock {
+            if manualFiducials.count < 4 {
+                return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Fiducial Clicks"
+            }
+            return "Solve Homography"
         }
-        if !bridge.hasPaperLock { return "Solve Homography" }
         if confirmedCapPoint?.paperMm == nil {
             return currentGreenCapPaperObservation() == nil ? "Click Cap Position" : "Confirm Cap"
         }
@@ -2889,8 +2897,8 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionEnabled: Bool {
-        if manualFiducials.count < 4 { return true }
         if !bridge.hasPaperLock {
+            if manualFiducials.count < 4 { return true }
             return bridge.isOnline && manualFiducials.count >= 4 && !bridge.isCalibrating
         }
         if confirmedCapPoint?.paperMm == nil {
@@ -2948,12 +2956,11 @@ struct ContentView: View {
     }
 
     private func runCalibrationWizardPrimaryAction() {
-        if manualFiducials.count < 4 {
-            startCalibrationWizard()
-            return
-        }
-
         if !bridge.hasPaperLock {
+            if manualFiducials.count < 4 {
+                startCalibrationWizard()
+                return
+            }
             solvePaperHomographyFromWizard()
             return
         }
@@ -3011,6 +3018,14 @@ struct ContentView: View {
         showLiveVideo = true
         startVisibleCameras()
 
+        if bridge.hasPaperLock {
+            manualFiducialMode = false
+            manualPenMode = false
+            manualCapColorMode = false
+            calibrationStatusText = "WIZ paper lock ready; confirm setup if grid aligns"
+            return
+        }
+
         if manualFiducials.count < 4 {
             manualFiducialMode = true
             manualPenMode = false
@@ -3020,12 +3035,34 @@ struct ContentView: View {
         }
 
         manualFiducialMode = false
-        if !bridge.hasPaperLock {
-            solvePaperHomographyFromWizard()
+        solvePaperHomographyFromWizard()
+    }
+
+    private func confirmWizardSetupFromExistingRegistration() {
+        showCalibrationWizard = true
+        cameraLayout = .plotter
+        showLiveVideo = true
+        startVisibleCameras()
+
+        guard bridge.hasPaperLock else {
+            calibrationStatusText = "WIZ no stored paper homography; click FID-BL"
+            manualFiducialMode = true
+            manualPenMode = false
+            manualCapColorMode = false
             return
         }
 
-        calibrationStatusText = "WIZ paper locked"
+        manualFiducialMode = false
+        manualPenMode = false
+        manualCapColorMode = false
+        calibrationStatusText = "WIZ setup confirmed from stored paper homography"
+        bridge.recordOperatorEvent(
+            "wizard_setup_confirmed",
+            details: [
+                "paper_status": bridge.paperTransformStatus,
+                "paper_registration_id": bridge.paperRegistrationSnapshot?.registrationId ?? ""
+            ]
+        )
     }
 
     private func hideCalibrationWizard() {
@@ -3356,6 +3393,7 @@ struct ContentView: View {
 
     private func resetVisualControls() {
         plotterViewport.videoFilter = .normal
+        plotterViewport.resetFOV()
         plotterOverlay.opacity = 0.38
         plotterCamera.showGrid = true
         plotterCamera.showMeasurements = true

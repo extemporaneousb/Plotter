@@ -38,7 +38,9 @@ The normal development target is the fixed-camera drawing loop:
 1. Start the app against a preview or hardware-standby bridge.
 2. Open the calibration wizard.
 3. Click the paper fiducials, solve the paper homography, and confirm or localize the visible cap
-   marker.
+   marker. If the bridge already reports a locked paper homography after restart and the rendered
+   grid still aligns with the physical setup, use Confirm Setup in the wizard to reuse that paper
+   registration without re-clicking fiducials.
 4. If power-off gravity has parked X outside the camera field, use the motion-probe startup recovery
    action to move +X into view. This is a live-gated visibility jog only; it is not homing and does
    not promote axis trust.
@@ -66,6 +68,12 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 Simulation is not a decorative UI preview. It is the expected pen motion projected onto the plotter
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
+
+The plotter-camera FOV zoom in the macOS app is a persisted Swift viewport transform for operator
+inspection. It does not crop bridge geometry, promote trust, or change machine authority. Current
+segmentation and motion detection run in `CameraModel` on the full camera frame; adding a processing
+ROI would be a separate app-side observation change and must keep Python-owned safety and calibration
+authority intact.
 
 ## Calibration And Draw/Verify Evidence
 

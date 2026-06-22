@@ -324,14 +324,23 @@ enum PlotterVideoFilter: String, CaseIterable, Codable, Identifiable {
 }
 
 struct PlotterViewportSettings: Equatable, Codable {
+    static let minZoomScale = 1.0
+    static let maxZoomScale = 3.0
+
     var previewMode = CameraPreviewMode.fit
     var rotationDegrees = 0.0
     var videoFilter = PlotterVideoFilter.normal
+    var zoomScale = 1.0
+    var zoomCenterX = 0.5
+    var zoomCenterY = 0.5
 
     enum CodingKeys: String, CodingKey {
         case previewMode
         case rotationDegrees
         case videoFilter
+        case zoomScale
+        case zoomCenterX
+        case zoomCenterY
     }
 
     init() {}
@@ -341,6 +350,39 @@ struct PlotterViewportSettings: Equatable, Codable {
         previewMode = try container.decodeIfPresent(CameraPreviewMode.self, forKey: .previewMode) ?? .fit
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0.0
         videoFilter = try container.decodeIfPresent(PlotterVideoFilter.self, forKey: .videoFilter) ?? .normal
+        zoomScale = Self.clamp(
+            try container.decodeIfPresent(Double.self, forKey: .zoomScale) ?? 1.0,
+            min: Self.minZoomScale,
+            max: Self.maxZoomScale
+        )
+        zoomCenterX = Self.clamp(
+            try container.decodeIfPresent(Double.self, forKey: .zoomCenterX) ?? 0.5,
+            min: 0.0,
+            max: 1.0
+        )
+        zoomCenterY = Self.clamp(
+            try container.decodeIfPresent(Double.self, forKey: .zoomCenterY) ?? 0.5,
+            min: 0.0,
+            max: 1.0
+        )
+    }
+
+    var clampedZoomScale: Double {
+        Self.clamp(zoomScale, min: Self.minZoomScale, max: Self.maxZoomScale)
+    }
+
+    var zoomLabel: String {
+        String(format: "%.1fx", clampedZoomScale)
+    }
+
+    mutating func resetFOV() {
+        zoomScale = 1.0
+        zoomCenterX = 0.5
+        zoomCenterY = 0.5
+    }
+
+    private static func clamp(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
+        Swift.min(maximum, Swift.max(minimum, value))
     }
 }
 

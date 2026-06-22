@@ -23,7 +23,9 @@ struct CalibrationWizardView: View {
     let isLiveMotionMode: Bool
     let capDetected: Bool
     let canMoveXIntoCameraField: Bool
+    let canConfirmSetup: Bool
     let primaryAction: () -> Void
+    let confirmSetup: () -> Void
     let reset: () -> Void
     let clickCap: () -> Void
     let pickRegion: () -> Void
@@ -93,32 +95,41 @@ struct CalibrationWizardView: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 8) {
-            Button(action: primaryAction) {
-                Label(
-                    primaryActionTitle,
-                    systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
-                )
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button(action: primaryAction) {
+                    Label(
+                        primaryActionTitle,
+                        systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(primaryActionEnabled ? .cyan : .gray)
+                .disabled(!primaryActionEnabled)
+                .help(primaryActionDisabledReason ?? primaryActionTitle)
+
+                Button("Confirm Setup", action: confirmSetup)
+                    .buttonStyle(.bordered)
+                    .disabled(!canConfirmSetup)
+                    .help("Reuse the bridge's locked paper homography when the visible grid still matches the setup")
+
+                Button("Reset", action: reset)
+                    .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(primaryActionEnabled ? .cyan : .gray)
-            .disabled(!primaryActionEnabled)
-            .help(primaryActionDisabledReason ?? primaryActionTitle)
 
-            Button("Reset", action: reset)
-                .buttonStyle(.bordered)
+            HStack(spacing: 8) {
+                Button("Click Cap", action: clickCap)
+                    .buttonStyle(.bordered)
+                    .disabled(!hasPaperLock)
 
-            Button("Click Cap", action: clickCap)
-                .buttonStyle(.bordered)
-                .disabled(!hasPaperLock)
+                Button("Pick Region", action: pickRegion)
+                    .buttonStyle(.bordered)
 
-            Button("Pick Region", action: pickRegion)
-                .buttonStyle(.bordered)
-
-            Button("Move +X Field", action: moveXIntoCameraField)
-                .buttonStyle(.bordered)
-                .disabled(!canMoveXIntoCameraField)
-                .help("Live +X recovery jog when the cap is parked outside the camera field")
+                Button("Move +X Field", action: moveXIntoCameraField)
+                    .buttonStyle(.bordered)
+                    .disabled(!canMoveXIntoCameraField)
+                    .help("Live +X recovery jog when the cap is parked outside the camera field")
+            }
         }
         .controlSize(.small)
     }

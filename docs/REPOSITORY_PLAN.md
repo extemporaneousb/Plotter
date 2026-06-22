@@ -50,7 +50,8 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
 
 - SwiftUI is the operator surface and bridge client. It may render camera observations, paper locks,
   expected paths, dot-test previews, and controller status, but it must not own serial transport or
-  hardware command semantics.
+  hardware command semantics. Plotter-camera FOV zoom is Swift display state for operator inspection;
+  it is not calibration authority.
 - `plotter_vision.bridge` is the local process boundary. It accepts typed request/response models,
   publishes current controller/runtime state, and routes every machine action through the Python
   safety and controller layers.
@@ -71,7 +72,9 @@ The fixed-camera workflow is:
 
 1. Start the app.
 2. Open the calibration wizard.
-3. Click paper fiducials, solve the paper homography, and confirm or localize the cap marker.
+3. Click paper fiducials, solve the paper homography, and confirm or localize the cap marker. If the
+   bridge already has a locked paper homography after restart and the visible grid still aligns, use
+   Confirm Setup in the wizard to reuse that registration without re-clicking fiducials.
 4. If the cap is not visible because the unpowered X axis fell back to the left edge, use the
    live-gated "move X into camera field" recovery before probing. This is a non-homing +X visibility
    jog and does not create axis trust.
@@ -113,11 +116,15 @@ and transforms:
 | Observed logical millimeters | Python calibration/readiness | Observations in the logical drawing frame. |
 | Drawing/logical millimeters | Python drawing/planning | Shape-language coordinates used by `plotter_vision.drawing`. |
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
-| Display space | Swift | Fit/fill/rotation and overlay rendering only; it is not motion authority. |
+| Display space | Swift | Fit/fill/rotation/FOV zoom and overlay rendering only; it is not motion authority. |
 
 The active bridge surface uses `ShapeExecutionRequest`, `/draw/shape`, `/draw/shape/preview`, and
 `/capabilities/tests/...`. Operator-facing text calls this lane Draw/Verify even while the bridge
 keeps the internal capabilities-test route name.
+
+Current plotter segmentation and motion detection run in `CameraModel` against the full camera frame.
+Restricting processing to a region of interest would be an explicit Swift observation change, not a
+side effect of operator zoom.
 
 Cap-marker evidence is session evidence. A green-cap visual probe measures relative carriage motion
 in the registered paper plane; cap-only motion is not enough to set durable `axis_model_trusted` or
