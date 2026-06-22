@@ -103,6 +103,12 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "BridgePortraitContourPreviewRequest" in client
     assert 'post(path: "draw/portrait/preview"' in client
     assert "BridgePortraitContourOptionsRequest" in model
+    portrait_preview_block = model.split("func previewPortraitContours", 1)[1].split(
+        "func replayExpectedPath", 1
+    )[0]
+    assert 'revealExpectedPathImmediately(status: "FULL PREVIEW")' in portrait_preview_block
+    assert "animateExpectedPath" not in portrait_preview_block
+    assert "func revealExpectedPathImmediately" in model
 
 
 def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> None:

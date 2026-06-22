@@ -1530,7 +1530,7 @@ final class PlotterBridgeModel: ObservableObject {
             imagePreviewDetail = response.previewOnly ? "PREVIEW ONLY" : "EXECUTION"
             previewStatus = "SIM IMAGE \(response.status.uppercased())"
             let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
-            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
+            revealExpectedPathImmediately(status: "FULL PREVIEW")
             statusText = "\(response.commandId) portrait contour preview"
             diagnosticsEvent(
                 "portrait_preview_completed",
@@ -2633,6 +2633,12 @@ final class PlotterBridgeModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 33_000_000)
             }
         }
+    }
+
+    private func revealExpectedPathImmediately(status: String) {
+        animationTask?.cancel()
+        pathRevealProgress = 1.0
+        pathAnimationStatus = status
     }
 
     private func formatPosition(_ values: [Double]?) -> String {
