@@ -3,7 +3,7 @@ import SwiftUI
 struct MeasurementOverlay: View {
     let segments: [VisionSegment]
     let carriageMarker: CarriageMarker?
-    let confirmedCapPoint: ConfirmedCapPoint?
+    let visualMoveIntent: VisualMoveIntent?
     let motionTracks: [MotionTrack]
     let expectedPathSegments: [ExpectedPathSegment]
     let dotTestPreviewSegments: [DotTestPreviewSegment]
@@ -26,16 +26,13 @@ struct MeasurementOverlay: View {
                 }
                 drawPaperDrawingRegion(paperTransform, mapper: mapper, in: &context)
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
+                drawVisualMoveIntent(registration: paperTransform, mapper: mapper, in: &context)
             }
 
             drawDotTestPreview(mapper: mapper, in: &context)
 
             if let carriageMarker {
                 draw(carriageMarker: carriageMarker, mapper: mapper, in: &context)
-            }
-
-            if let confirmedCapPoint {
-                draw(confirmedCapPoint: confirmedCapPoint, mapper: mapper, in: &context)
             }
 
             for (index, segment) in segments.enumerated() {
@@ -319,6 +316,105 @@ struct MeasurementOverlay: View {
         return totalLength * min(1.0, max(0.0, pathRevealProgress))
     }
 
+    private func drawVisualMoveIntent(
+        registration: PaperRegistrationSnapshot,
+        mapper: OverlayMapper,
+        in context: inout GraphicsContext
+    ) {
+        guard let visualMoveIntent else { return }
+        let widthMm = max(registration.paperSizeMm.width, 0.000_001)
+        let heightMm = max(registration.paperSizeMm.height, 0.000_001)
+        let startNorm = CGPoint(
+            x: visualMoveIntent.startPaperMm.x / widthMm,
+            y: visualMoveIntent.startPaperMm.y / heightMm
+        )
+        let endNorm = CGPoint(
+            x: visualMoveIntent.endPaperMm.x / widthMm,
+            y: visualMoveIntent.endPaperMm.y / heightMm
+        )
+        guard let cameraStart = paperToCameraPoint(startNorm, registration: registration),
+              let cameraEnd = paperToCameraPoint(endNorm, registration: registration) else {
+            return
+        }
+
+        let start = mapper.point(cameraStart)
+        let end = mapper.point(cameraEnd)
+        var path = Path()
+        path.move(to: start)
+        path.addLine(to: end)
+        context.stroke(
+            path,
+            with: .color(.black.opacity(0.88)),
+            style: StrokeStyle(lineWidth: 13.0, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            path,
+            with: .color(.orange.opacity(0.98)),
+            style: StrokeStyle(lineWidth: 8.0, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            path,
+            with: .color(.white.opacity(0.92)),
+            style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
+        )
+
+        drawArrowHead(start: start, end: end, color: .orange, in: &context)
+        context.fill(
+            Path(ellipseIn: CGRect(x: start.x - 5, y: start.y - 5, width: 10, height: 10)),
+            with: .color(.white.opacity(0.96))
+        )
+        context.fill(
+            Path(ellipseIn: CGRect(x: end.x - 6, y: end.y - 6, width: 12, height: 12)),
+            with: .color(.orange.opacity(0.98))
+        )
+
+        guard showMeasurements else { return }
+        let label = Text("\(visualMoveIntent.label) \(visualMoveIntent.detail)")
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .foregroundStyle(.orange.opacity(0.98))
+        context.draw(label, at: CGPoint(x: end.x + 14, y: end.y - 12), anchor: .leading)
+    }
+
+    private func drawArrowHead(
+        start: CGPoint,
+        end: CGPoint,
+        color: Color,
+        in context: inout GraphicsContext
+    ) {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let length = hypot(dx, dy)
+        guard length > 8 else { return }
+        let angle = atan2(dy, dx)
+        let wing: CGFloat = 15
+        let spread: CGFloat = .pi / 7
+        var head = Path()
+        head.move(to: end)
+        head.addLine(
+            to: CGPoint(
+                x: end.x - wing * cos(angle - spread),
+                y: end.y - wing * sin(angle - spread)
+            )
+        )
+        head.move(to: end)
+        head.addLine(
+            to: CGPoint(
+                x: end.x - wing * cos(angle + spread),
+                y: end.y - wing * sin(angle + spread)
+            )
+        )
+        context.stroke(
+            head,
+            with: .color(.black.opacity(0.88)),
+            style: StrokeStyle(lineWidth: 9.0, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            head,
+            with: .color(color.opacity(0.98)),
+            style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round)
+        )
+    }
+
     private func draw(
         segment: VisionSegment,
         index: Int,
@@ -390,31 +486,6 @@ struct MeasurementOverlay: View {
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(color.opacity(0.98))
         context.draw(label, at: CGPoint(x: center.x + 14, y: center.y + 12), anchor: .leading)
-    }
-
-    private func draw(confirmedCapPoint: ConfirmedCapPoint, mapper: OverlayMapper, in context: inout GraphicsContext) {
-        let center = mapper.point(confirmedCapPoint.cameraPoint)
-        let color = Color(red: 0.62, green: 1.0, blue: 0.30)
-        let outer = CGRect(x: center.x - 26, y: center.y - 26, width: 52, height: 52)
-        let middle = CGRect(x: center.x - 16, y: center.y - 16, width: 32, height: 32)
-
-        context.stroke(Path(ellipseIn: outer), with: .color(.black.opacity(0.86)), lineWidth: 7.0)
-        context.stroke(Path(ellipseIn: middle), with: .color(color.opacity(0.98)), lineWidth: 3.4)
-
-        var tick = Path()
-        tick.move(to: CGPoint(x: center.x - 36, y: center.y))
-        tick.addLine(to: CGPoint(x: center.x + 36, y: center.y))
-        tick.move(to: CGPoint(x: center.x, y: center.y - 36))
-        tick.addLine(to: CGPoint(x: center.x, y: center.y + 36))
-        context.stroke(tick, with: .color(.black.opacity(0.82)), lineWidth: 7.0)
-        context.stroke(tick, with: .color(.white.opacity(0.96)), lineWidth: 2.8)
-
-        guard showMeasurements else { return }
-
-        let label = Text(confirmedCapPoint.label)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(color.opacity(0.98))
-        context.draw(label, at: CGPoint(x: center.x + 15, y: center.y - 16), anchor: .leading)
     }
 
     private func draw(track: MotionTrack, mapper: OverlayMapper, in context: inout GraphicsContext) {

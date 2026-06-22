@@ -158,6 +158,14 @@ struct ConfirmedCapPoint: Identifiable, Equatable {
     }
 }
 
+struct VisualMoveIntent: Identifiable, Equatable {
+    let id = UUID()
+    var startPaperMm: PaperPointMmSnapshot
+    var endPaperMm: PaperPointMmSnapshot
+    var label: String
+    var detail: String
+}
+
 struct VisionAnalysisResult {
     let segments: [VisionSegment]
     let carriageMarker: CarriageMarker?
@@ -323,13 +331,39 @@ enum PlotterVideoFilter: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum PlotterViewportFocusMode: String, CaseIterable, Codable, Identifiable {
+    case original
+    case focused
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .original:
+            return "Original Video"
+        case .focused:
+            return "Focused"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .original:
+            return "viewfinder"
+        case .focused:
+            return "scope"
+        }
+    }
+}
+
 struct PlotterViewportSettings: Equatable, Codable {
     static let minZoomScale = 1.0
-    static let maxZoomScale = 3.0
+    static let maxZoomScale = 4.0
 
     var previewMode = CameraPreviewMode.fit
     var rotationDegrees = 0.0
     var videoFilter = PlotterVideoFilter.normal
+    var focusMode = PlotterViewportFocusMode.original
     var zoomScale = 1.0
     var zoomCenterX = 0.5
     var zoomCenterY = 0.5
@@ -338,6 +372,7 @@ struct PlotterViewportSettings: Equatable, Codable {
         case previewMode
         case rotationDegrees
         case videoFilter
+        case focusMode
         case zoomScale
         case zoomCenterX
         case zoomCenterY
@@ -350,6 +385,7 @@ struct PlotterViewportSettings: Equatable, Codable {
         previewMode = try container.decodeIfPresent(CameraPreviewMode.self, forKey: .previewMode) ?? .fit
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0.0
         videoFilter = try container.decodeIfPresent(PlotterVideoFilter.self, forKey: .videoFilter) ?? .normal
+        focusMode = try container.decodeIfPresent(PlotterViewportFocusMode.self, forKey: .focusMode) ?? .original
         zoomScale = Self.clamp(
             try container.decodeIfPresent(Double.self, forKey: .zoomScale) ?? 1.0,
             min: Self.minZoomScale,
@@ -375,10 +411,28 @@ struct PlotterViewportSettings: Equatable, Codable {
         String(format: "%.1fx", clampedZoomScale)
     }
 
+    var focusLabel: String {
+        focusMode.title
+    }
+
     mutating func resetFOV() {
+        focusMode = .original
         zoomScale = 1.0
         zoomCenterX = 0.5
         zoomCenterY = 0.5
+    }
+
+    mutating func focusOnCameraBounds(_ bounds: CGRect, padding: CGFloat = 0.08) {
+        let minX = Self.clamp(Double(bounds.minX) - Double(padding), min: 0.0, max: 1.0)
+        let maxX = Self.clamp(Double(bounds.maxX) + Double(padding), min: 0.0, max: 1.0)
+        let minY = Self.clamp(Double(bounds.minY) - Double(padding), min: 0.0, max: 1.0)
+        let maxY = Self.clamp(Double(bounds.maxY) + Double(padding), min: 0.0, max: 1.0)
+        let width = max(0.05, maxX - minX)
+        let height = max(0.05, maxY - minY)
+        focusMode = .focused
+        zoomCenterX = Self.clamp((minX + maxX) / 2.0, min: 0.0, max: 1.0)
+        zoomCenterY = Self.clamp((minY + maxY) / 2.0, min: 0.0, max: 1.0)
+        zoomScale = Self.clamp(0.94 / max(width, height), min: Self.minZoomScale, max: Self.maxZoomScale)
     }
 
     private static func clamp(_ value: Double, min minimum: Double, max maximum: Double) -> Double {

@@ -165,16 +165,21 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
 
 
-def test_plotter_fov_zoom_is_persisted_ui_state_and_click_safe() -> None:
+def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     models = _read(SWIFT_DIR / "Models.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
     visual_controls = _read(SWIFT_DIR / "VisualControlsMenu.swift")
     content = _read(SWIFT_DIR / "ContentView.swift")
+    viewport_intent = _read(SWIFT_DIR / "ContentViewViewportIntent.swift")
     camera_model = _read(SWIFT_DIR / "CameraModel.swift")
 
+    assert "enum PlotterViewportFocusMode" in models
+    assert "var focusMode = PlotterViewportFocusMode.original" in models
     assert "var zoomScale = 1.0" in models
     assert "var zoomCenterX = 0.5" in models
     assert "var zoomCenterY = 0.5" in models
+    assert "focusOnCameraBounds" in models
+    assert "decodeIfPresent(PlotterViewportFocusMode.self, forKey: .focusMode)" in models
     assert "decodeIfPresent(Double.self, forKey: .zoomScale)" in models
     assert "plotterViewport: plotterViewport" in _read(SWIFT_DIR / "FrameStateStore.swift")
 
@@ -183,15 +188,56 @@ def test_plotter_fov_zoom_is_persisted_ui_state_and_click_safe() -> None:
     assert "let unzoomed = CGPoint" in support
     assert "point.x - zoomOffset.width - center.x" in support
 
-    assert "Section(\"Plotter FOV\")" in visual_controls
-    assert "Zoom In" in visual_controls
-    assert "Zoom Out" in visual_controls
-    assert "Reset FOV" in visual_controls
-    assert "plotterViewport.resetFOV()" in content
+    assert "Section(\"Plotter View\")" in visual_controls
+    assert "Original Video" in visual_controls
+    assert "Zoom In" not in visual_controls
+    assert "Zoom Out" not in visual_controls
+    assert "Reset FOV" not in visual_controls
+    assert "togglePlotterFocusMode()" in viewport_intent
+    assert ".keyboardShortcut(\"f\", modifiers: [.command])" in content
+    assert "focusPlotterVideoOnPaper(source: \"wizard_fiducials_solved\")" in content
+    assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" in content
 
     assert "func captureOutput(" in camera_model
     assert "try self.analyzer.analyze(pixelBuffer: pixelBuffer" in camera_model
     assert "zoomScale" not in camera_model
+
+
+def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
+
+    assert "ConfirmedCapOverlay(point: nil, isActive: manualPenMode)" in content
+    assert "confirmedCapPoint: confirmedCapPoint" not in content
+    assert "draw(confirmedCapPoint" not in overlay
+    assert "CONF CAP" in _read(SWIFT_DIR / "Models.swift")
+
+
+def test_visual_move_intent_is_projected_on_video() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    viewport_intent = _read(SWIFT_DIR / "ContentViewViewportIntent.swift")
+    overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+
+    assert "struct VisualMoveIntent" in models
+    assert "@State var visualMoveIntent" in content
+    assert "visualMoveIntent: visualMoveIntent" in content
+    assert '"visual_move_intent_set"' in viewport_intent
+    assert '"visual_move_intent_cleared"' in viewport_intent
+    assert "BOOT-X" in content
+    assert "MOVE \\(label)" in content
+    assert "drawVisualMoveIntent" in overlay
+    assert "drawArrowHead" in overlay
+
+
+def test_main_window_placement_only_filters_main_window_candidates() -> None:
+    app_main = _read(SWIFT_DIR / "AppMain.swift")
+
+    assert "applicationDidBecomeActive" not in app_main
+    assert "isMainWindowCandidate" in app_main
+    assert "window.title != PlotterWindowConfiguration.machineTitle" not in app_main
+    assert "window.identifier == PlotterWindowConfiguration.mainIdentifier" in app_main
+    assert "window.title == PlotterWindowConfiguration.mainTitle" in app_main
 
 
 def test_visual_probe_reacquires_cap_before_stopping() -> None:

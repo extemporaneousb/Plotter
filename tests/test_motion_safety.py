@@ -9,6 +9,7 @@ from plotter_vision.machine.safety import (
     validate_shape_execution_request,
     validate_jog_request,
     validate_polygon_draw_request,
+    validate_projected_workspace_motion,
     validate_workspace_point,
 )
 from plotter_vision.motion.gcode import (
@@ -209,6 +210,39 @@ def test_real_polygon_draw_requires_motion_arm() -> None:
 def test_workspace_point_rejects_out_of_bounds_coordinates() -> None:
     with pytest.raises(MotionSafetyError, match="outside workspace"):
         validate_workspace_point(x_mm=301.0, y_mm=150.0, machine=MachineConfig())
+
+
+def test_projected_workspace_motion_rejects_accumulated_relative_x_overrun() -> None:
+    machine = MachineConfig()
+    machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
+
+    with pytest.raises(MotionSafetyError, match="Projected X position 557\\.900"):
+        validate_projected_workspace_motion(
+            start_mpos_mm=(457.9, -88.4, 0.0),
+            commands=[
+                "G21",
+                "G91",
+                "G1 F300",
+                "G1 X50",
+                "G90",
+                "G91",
+                "G1 F300",
+                "G1 X50",
+                "G90",
+            ],
+            machine=machine,
+        )
+
+
+def test_projected_workspace_motion_only_checks_commanded_axes() -> None:
+    machine = MachineConfig()
+    machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
+
+    validate_projected_workspace_motion(
+        start_mpos_mm=(457.9, -88.4, 0.0),
+        commands=["G91", "G1 X25", "G90"],
+        machine=machine,
+    )
 
 
 def test_parallel_x_line_motion_commands_space_on_y() -> None:

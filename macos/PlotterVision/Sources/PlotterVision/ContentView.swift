@@ -27,13 +27,13 @@ struct ContentView: View {
     @State private var showLiveVideo = true
     @State private var cameraLayout = CameraLayoutMode.both
     @State private var plotterOverlay = PlotterOverlaySettings()
-    @State private var plotterViewport = PlotterViewportSettings()
+    @State var plotterViewport = PlotterViewportSettings()
     @State private var drawingFrame = DrawingFrameSettings()
     @State private var shapeAssessment = ShapeAssessmentState.idle
     @State private var frameLearning = FrameLearningState.idle
     @State private var awaitingAssessment = false
     @State private var didLoadSavedFrameState = false
-    @State private var calibrationStatusText = "CAL idle"
+    @State var calibrationStatusText = "CAL idle"
     @State private var showCalibrationWizard = false
     @State private var showImageProcessingPanel = true
     @State private var manualFiducialMode = false
@@ -41,6 +41,7 @@ struct ContentView: View {
     @State private var manualPenMode = false
     @State private var manualCapColorMode = false
     @State private var confirmedCapPoint: ConfirmedCapPoint?
+    @State var visualMoveIntent: VisualMoveIntent?
     @State private var visualMotionModel: VisualMotionModel?
     @State private var visualMotionSamples: [VisualMotionSample] = []
     @State private var visualCenterDotTaskActive = false
@@ -102,6 +103,11 @@ struct ContentView: View {
         }
         .onChange(of: plotterViewport) { _, _ in
             saveFrameState()
+        }
+        .onChange(of: bridge.paperRegistrationSnapshot?.registrationId) { _, _ in
+            if plotterViewport.focusMode == .focused {
+                focusPlotterVideoOnPaper(source: "paper_registration_changed")
+            }
         }
         .onChange(of: drawingFrame) { _, _ in
             saveFrameState()
@@ -171,7 +177,7 @@ struct ContentView: View {
                     MeasurementOverlay(
                         segments: plotterCamera.segments,
                         carriageMarker: (manualPenMode || manualCapColorMode) ? nil : currentCarriageMarker,
-                        confirmedCapPoint: confirmedCapPoint,
+                        visualMoveIntent: visualMoveIntent,
                         motionTracks: plotterCamera.motionTracks,
                         expectedPathSegments: bridge.expectedPathSegments,
                         dotTestPreviewSegments: bridge.dotTestPreviewSegments,
@@ -190,7 +196,7 @@ struct ContentView: View {
 
             ManualFiducialOverlay(points: manualFiducials, isActive: manualFiducialMode)
 
-            ConfirmedCapOverlay(point: manualPenMode ? confirmedCapPoint : nil, isActive: manualPenMode)
+            ConfirmedCapOverlay(point: nil, isActive: manualPenMode)
             CapColorPickOverlay(isActive: manualCapColorMode)
 
             if manualCapColorMode {
@@ -675,12 +681,22 @@ struct ContentView: View {
                 axis,
                 distanceMm
             )
+            setVisualMoveIntent(
+                start: before.paperMm,
+                end: PaperPointMmSnapshot(
+                    x: before.paperMm.x + commandDx,
+                    y: before.paperMm.y + commandDy
+                ),
+                label: "PROBE \(axis)",
+                detail: String(format: "cmd X%+.0f Y%+.0f", commandDx, commandDy)
+            )
 
             guard let response = await bridge.learningJog(
                 axis: axis,
                 distanceMm: distanceMm,
                 feedMmMin: feedMmMin
             ) else {
+                clearVisualMoveIntent(reason: "probe_move_failed")
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Move failed or machine busy"
                 calibrationStatusText = "CAL cap-marker probe stopped: move failed"
@@ -688,6 +704,7 @@ struct ContentView: View {
             }
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                clearVisualMoveIntent(reason: "probe_pin_active")
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Pin active after move"
                 frameLearning.lastPins = pins
@@ -711,6 +728,7 @@ struct ContentView: View {
                               await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
                       ) else {
+                    clearVisualMoveIntent(reason: "probe_cap_lost_after_move")
                     updateLearningSummary(
                         samples: [],
                         status: "STOP",
@@ -729,6 +747,7 @@ struct ContentView: View {
                 )
                 continue
             }
+            clearVisualMoveIntent(reason: "probe_observed")
 
             let dx = after.paperMm.x - before.paperMm.x
             let dy = after.paperMm.y - before.paperMm.y
@@ -872,6 +891,15 @@ struct ContentView: View {
             }
 
             let commandMm = plannedMove.relativeXMm
+            setVisualMoveIntent(
+                start: current.paperMm,
+                end: PaperPointMmSnapshot(
+                    x: min(bridge.workspaceXMm, current.paperMm.x + commandMm),
+                    y: current.paperMm.y
+                ),
+                label: "BOOT-X",
+                detail: String(format: "cmd +X %.0f", commandMm)
+            )
 
             calibrationStatusText = String(
                 format: "CAL cap-marker bootstrap: move +X %.0f mm",
@@ -897,6 +925,7 @@ struct ContentView: View {
                 bootstrapTopAllowanceMm: visualCapProjectionTopAllowanceMm,
                 feedMmMin: min(300.0, bridge.manualFeedMmMin)
             ), response.status == "completed" else {
+                clearVisualMoveIntent(reason: "bootstrap_move_failed")
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Bootstrap move failed or machine busy"
                 calibrationStatusText = "CAL cap-marker bootstrap stopped: move failed"
@@ -904,6 +933,7 @@ struct ContentView: View {
             }
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                clearVisualMoveIntent(reason: "bootstrap_pin_active")
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Pin active after bootstrap"
                 frameLearning.lastPins = pins
@@ -916,6 +946,7 @@ struct ContentView: View {
                 afterFrame: current.frameNumber,
                 timeoutSeconds: 4.0
             ) else {
+                clearVisualMoveIntent(reason: "bootstrap_cap_lost")
                 updateLearningSummary(
                     samples: [],
                     status: "STOP",
@@ -924,6 +955,7 @@ struct ContentView: View {
                 calibrationStatusText = "CAL cap-marker bootstrap stopped: cap lost"
                 return nil
             }
+            clearVisualMoveIntent(reason: "bootstrap_observed")
 
             let observedDx = after.paperMm.x - current.paperMm.x
             let observedDy = after.paperMm.y - current.paperMm.y
@@ -2119,16 +2151,27 @@ struct ContentView: View {
                 commandX,
                 commandY
             )
+            setVisualMoveIntent(
+                start: before.paperMm,
+                end: PaperPointMmSnapshot(
+                    x: before.paperMm.x + predicted.dx,
+                    y: before.paperMm.y + predicted.dy
+                ),
+                label: "MOVE \(label)",
+                detail: String(format: "cmd X%+.1f Y%+.1f", commandX, commandY)
+            )
 
             guard let response = await bridge.visualRelativeMove(
                 xMm: commandX,
                 yMm: commandY,
                 feedMmMin: feedMmMin
             ) else {
+                clearVisualMoveIntent(reason: "visual_target_move_failed")
                 calibrationStatusText = "CAL visual target stopped: move failed"
                 return nil
             }
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                clearVisualMoveIntent(reason: "visual_target_pin_active")
                 bridge.visualCenterDotStatus = "VIS PIN \(pins)"
                 calibrationStatusText = "CAL visual target stopped: pin active \(pins)"
                 return nil
@@ -2150,6 +2193,7 @@ struct ContentView: View {
                               await bridge.visualRelativeMove(xMm: commandMm, yMm: 0.0, feedMmMin: feedMmMin)
                           }
                       ) else {
+                    clearVisualMoveIntent(reason: "visual_target_no_new_frame")
                     bridge.visualCenterDotStatus = "VIS NO NEW FRAME"
                     calibrationStatusText = "CAL visual target stopped: no new cap observation"
                     return nil
@@ -2165,6 +2209,7 @@ struct ContentView: View {
                 )
                 continue
             }
+            clearVisualMoveIntent(reason: "visual_target_observed")
 
             let observedDx = after.paperMm.x - before.paperMm.x
             let observedDy = after.paperMm.y - before.paperMm.y
@@ -2395,12 +2440,22 @@ struct ContentView: View {
             label,
             residualMm
         )
+        setVisualMoveIntent(
+            start: after.paperMm,
+            end: PaperPointMmSnapshot(
+                x: after.paperMm.x - (after.paperMm.x - before.paperMm.x),
+                y: after.paperMm.y - (after.paperMm.y - before.paperMm.y)
+            ),
+            label: "BACK \(label)",
+            detail: String(format: "cmd X%+.1f Y%+.1f", -commandX, -commandY)
+        )
 
         guard let response = await bridge.visualRelativeMove(
             xMm: -commandX,
             yMm: -commandY,
             feedMmMin: feedMmMin
         ) else {
+            clearVisualMoveIntent(reason: "rollback_move_failed")
             bridge.recordOperatorEvent(
                 "visual_target_rollback_failed",
                 details: [
@@ -2419,6 +2474,7 @@ struct ContentView: View {
             return nil
         }
         if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+            clearVisualMoveIntent(reason: "rollback_pin_active")
             bridge.visualCenterDotStatus = "VIS PIN \(pins)"
             bridge.recordOperatorEvent(
                 "visual_target_rollback_failed",
@@ -2441,6 +2497,7 @@ struct ContentView: View {
             afterFrame: after.frameNumber,
             timeoutSeconds: 4.0
         ), rollback.frameNumber > after.frameNumber else {
+            clearVisualMoveIntent(reason: "rollback_no_new_frame")
             bridge.recordOperatorEvent(
                 "visual_target_rollback_failed",
                 details: [
@@ -2458,6 +2515,7 @@ struct ContentView: View {
             calibrationStatusText = "CAL visual target stopped: rollback produced no new cap observation"
             return nil
         }
+        clearVisualMoveIntent(reason: "rollback_observed")
 
         let rollbackDistanceMm = paperDistance(from: rollback.paperMm, to: before.paperMm)
         let rollbackImprovementMm = displacedDistanceMm - rollbackDistanceMm
@@ -2516,16 +2574,27 @@ struct ContentView: View {
             return false
         }
         bridge.visualCenterDotStatus = String(format: "VIS PARK %@", label)
+        setVisualMoveIntent(
+            start: current.paperMm,
+            end: PaperPointMmSnapshot(
+                x: current.paperMm.x + parkDx,
+                y: current.paperMm.y + parkDy
+            ),
+            label: "PARK \(label)",
+            detail: String(format: "cmd X%+.1f Y%+.1f", machineDelta.xMm, machineDelta.yMm)
+        )
         guard await bridge.visualRelativeMove(
             xMm: machineDelta.xMm,
             yMm: machineDelta.yMm,
             feedMmMin: min(300.0, bridge.manualFeedMmMin)
         ) != nil else {
+            clearVisualMoveIntent(reason: "park_move_failed")
             calibrationStatusText = "CAL visual \(label) park move failed"
             return false
         }
         try? await Task.sleep(nanoseconds: 650_000_000)
         _ = await waitForGreenCapPaperObservation(afterFrame: current.frameNumber, timeoutSeconds: 3.0)
+        clearVisualMoveIntent(reason: "park_observed")
         return true
     }
 
@@ -2589,13 +2658,14 @@ struct ContentView: View {
                 }
 
                 controlButton(
-                    systemName: plotterViewport.previewMode == .fit ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                    label: plotterViewport.previewMode.title,
-                    help: "Toggle plotter camera fit/fill display",
-                    isActive: plotterViewport.previewMode == .fit
+                    systemName: plotterViewport.focusMode.systemImage,
+                    label: plotterViewport.focusMode.title,
+                    help: "Toggle original video and focused plotter area",
+                    isActive: plotterViewport.focusMode == .focused
                 ) {
-                    plotterViewport.previewMode = plotterViewport.previewMode == .fit ? .fill : .fit
+                    togglePlotterFocusMode()
                 }
+                .keyboardShortcut("f", modifiers: [.command])
 
                 controlButton(
                     systemName: "checklist.checked",
@@ -2664,7 +2734,7 @@ struct ContentView: View {
                 .frame(height: 24)
                 .overlay(Color.white.opacity(0.18))
 
-            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.previewMode.title.uppercased()) \(Int(plotterViewport.rotationDegrees))deg \(plotterViewport.zoomLabel)  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
+            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  PAPER \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.focusLabel.uppercased()) \(Int(plotterViewport.rotationDegrees))deg \(plotterViewport.zoomLabel)  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
@@ -3062,6 +3132,7 @@ struct ContentView: View {
         manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false
+        focusPlotterVideoOnPaper(source: "wizard_confirm_setup")
         calibrationStatusText = "WIZ setup confirmed from stored paper homography"
         bridge.recordOperatorEvent(
             "wizard_setup_confirmed",
@@ -3094,11 +3165,14 @@ struct ContentView: View {
         manualFiducialMode = false
         calibrationStatusText = "WIZ solving paper homography"
         Task {
-            _ = await bridge.registerPaperHomography(
+            let response = await bridge.registerPaperHomography(
                 fiducials: manualFiducials,
                 paperWidthMm: bridge.workspaceXMm,
                 paperHeightMm: bridge.workspaceYMm
             )
+            if response?.registration != nil {
+                focusPlotterVideoOnPaper(source: "wizard_fiducials_solved")
+            }
             calibrationStatusText = "WIZ \(bridge.paperTransformStatus)"
         }
     }
@@ -3411,35 +3485,4 @@ struct ContentView: View {
         calibrationStatusText = "VIS controls reset"
     }
 
-    private func controlButton(
-        systemName: String,
-        label: String,
-        help: String,
-        isActive: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: systemName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.9))
-                    .frame(width: 32, height: 32)
-                    .background(isActive ? Color.cyan : Color.white.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(isActive ? 0.0 : 0.18), lineWidth: 1)
-                    )
-                Text(label.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(isActive ? Color.cyan.opacity(0.9) : Color.white.opacity(0.62))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .frame(width: 52)
-            }
-            .frame(width: 54)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
 }

@@ -101,6 +101,7 @@ from plotter_vision.machine.pen import validate_pen_trial_command
 from plotter_vision.machine.safety import (
     MotionSafetyError,
     validate_jog_request,
+    validate_projected_workspace_motion,
     validate_relative_xy_move_request,
     validate_workspace_point,
 )
@@ -3550,6 +3551,7 @@ class PlotterBridge:
             try:
                 return self._run_planned_commands_locked(
                     command_id=command_id,
+                    action=action,
                     planned_commands=planned_commands,
                     transcript_path=transcript_path,
                 )
@@ -3560,6 +3562,7 @@ class PlotterBridge:
         self,
         *,
         command_id: str,
+        action: str,
         planned_commands: list[PlannedCommand],
         transcript_path: Path,
     ) -> MachineStatusResponse:
@@ -3567,6 +3570,25 @@ class PlotterBridge:
             self._set_active_controller(controller)
             try:
                 controller.wake_and_drain()
+                initial_report = controller.query_status_report(timeout_s=3.0)
+                initial_status = self._machine_status_from_report(initial_report, status="guard")
+                self._remember_machine_status(initial_status)
+                if action in {"adaptive_probe", "relative_move", "relative_mark", "jog"}:
+                    validate_projected_workspace_motion(
+                        start_mpos_mm=initial_status.mpos_mm,
+                        commands=[planned.command for planned in planned_commands],
+                        machine=self._load_machine_config(),
+                    )
+                    self.event_log.emit(
+                        "machine.motion_workspace_guard",
+                        command_id=command_id,
+                        status="accepted",
+                        payload={
+                            "action": action,
+                            "start_mpos_mm": initial_status.mpos_mm,
+                            "command_count": len(planned_commands),
+                        },
+                    )
                 current_feed_mm_min: float | None = None
                 for planned in planned_commands:
                     self.event_log.emit(

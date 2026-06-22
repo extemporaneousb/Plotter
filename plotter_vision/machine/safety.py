@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from plotter_vision.config import MachineConfig, SafetyState
 
@@ -172,3 +173,101 @@ def validate_workspace_point(
             f"Y coordinate {y_mm:.3f} mm is outside workspace "
             f"[{machine.workspace.y_min:.3f}, {machine.workspace.y_max:.3f}]."
         )
+
+
+def validate_projected_workspace_motion(
+    *,
+    start_mpos_mm: Sequence[float] | None,
+    commands: Sequence[str],
+    machine: MachineConfig,
+) -> None:
+    """Project planned XY motion against current MPos before live execution."""
+    if start_mpos_mm is None or len(start_mpos_mm) < 2:
+        raise MotionSafetyError("Workspace projection guard requires current controller MPos.")
+
+    current_x = _finite_axis_position(start_mpos_mm[0], axis="X")
+    current_y = _finite_axis_position(start_mpos_mm[1], axis="Y")
+    relative_mode = False
+
+    for command in commands:
+        words = command.strip().split()
+        if not words:
+            continue
+        for word in words:
+            modal = word.upper()
+            if modal in {"G90", "G90.0"}:
+                relative_mode = False
+            elif modal in {"G91", "G91.0"}:
+                relative_mode = True
+
+        if not _is_motion_command(words):
+            continue
+
+        x_word = _axis_word_value(words, "X")
+        y_word = _axis_word_value(words, "Y")
+        if x_word is None and y_word is None:
+            continue
+
+        projected_x = current_x
+        projected_y = current_y
+        if x_word is not None:
+            projected_x = current_x + x_word if relative_mode else x_word
+            _validate_projected_axis(
+                axis="X",
+                value=projected_x,
+                minimum=machine.workspace.x_min,
+                maximum=machine.workspace.x_max,
+                command=command,
+            )
+        if y_word is not None:
+            projected_y = current_y + y_word if relative_mode else y_word
+            _validate_projected_axis(
+                axis="Y",
+                value=projected_y,
+                minimum=machine.workspace.y_min,
+                maximum=machine.workspace.y_max,
+                command=command,
+            )
+
+        current_x = projected_x
+        current_y = projected_y
+
+
+def _finite_axis_position(value: float, *, axis: str) -> float:
+    position = float(value)
+    if not math.isfinite(position):
+        raise MotionSafetyError(f"Workspace projection guard needs finite {axis} MPos.")
+    return position
+
+
+def _is_motion_command(words: Sequence[str]) -> bool:
+    return any(word.upper() in {"G0", "G00", "G1", "G01"} for word in words)
+
+
+def _axis_word_value(words: Sequence[str], axis: str) -> float | None:
+    for word in words:
+        if word.upper().startswith(axis):
+            try:
+                value = float(word[1:])
+            except ValueError as exc:
+                raise MotionSafetyError(f"Invalid {axis} axis word in motion command {word!r}.") from exc
+            if not math.isfinite(value):
+                raise MotionSafetyError(f"Invalid non-finite {axis} axis value in motion command.")
+            return value
+    return None
+
+
+def _validate_projected_axis(
+    *,
+    axis: str,
+    value: float,
+    minimum: float,
+    maximum: float,
+    command: str,
+) -> None:
+    if minimum <= value <= maximum:
+        return
+    raise MotionSafetyError(
+        f"Projected {axis} position {value:.3f} mm for {command!r} is outside workspace "
+        f"[{minimum:.3f}, {maximum:.3f}]. Motion not sent."
+    )

@@ -46,22 +46,21 @@ final class WindowPlacementDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) {
-        DispatchQueue.main.async { [weak self] in
-            self?.normalizeOpenWindows()
-        }
-    }
-
     func applicationWillTerminate(_ notification: Notification) {
         saveOpenWindowFrames()
     }
 
     private func normalizeOpenWindows() {
         for window in NSApplication.shared.windows where window.isVisible {
-            guard window.title != PlotterWindowConfiguration.machineTitle else { continue }
+            guard isMainWindowCandidate(window) else { continue }
             configureMainWindow(window)
             normalize(window)
         }
+    }
+
+    private func isMainWindowCandidate(_ window: NSWindow) -> Bool {
+        window.identifier == PlotterWindowConfiguration.mainIdentifier
+            || window.title == PlotterWindowConfiguration.mainTitle
     }
 
     private func configureMainWindow(_ window: NSWindow) {
