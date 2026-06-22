@@ -21,9 +21,9 @@ log_phase "app build: starting"
 APP_DIR="$("$ROOT_DIR/build.sh")"
 log_phase "app build: finished app_dir=$APP_DIR"
 
-log_phase "app relaunch: stopping existing PlotterVisionCamera instances"
+log_phase "app relaunch: stopping existing PlotterVision instances"
 osascript -e 'tell application id "com.plottervision.camera" to quit' >/dev/null 2>&1 || true
-pkill -x PlotterVisionCamera >/dev/null 2>&1 || true
+pkill -x PlotterVision >/dev/null 2>&1 || true
 
 log_phase "app relaunch: opening $APP_DIR"
 open -n "$APP_DIR"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="PlotterVisionCamera"
+APP_NAME="PlotterVision"
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
@@ -27,11 +27,11 @@ log_phase() {
 
 log_phase "build: resolving macOS SDK"
 SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
-SOURCES=("$ROOT_DIR"/Sources/PlotterVisionCameraDemo/*.swift)
+SOURCES=("$ROOT_DIR"/Sources/PlotterVision/*.swift)
 
 log_phase "build: preparing app bundle $APP_DIR"
 if [[ -d "$BUILD_DIR" ]]; then
-  find "$BUILD_DIR" -maxdepth 1 -type d -name 'PlotterVisionCamera*.app' ! -path "$APP_DIR" -exec rm -rf {} +
+  find "$BUILD_DIR" -maxdepth 1 -type d -name 'PlotterVision*.app' ! -path "$APP_DIR" -exec rm -rf {} +
 fi
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR"

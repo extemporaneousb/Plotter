@@ -13,7 +13,7 @@ hardware command semantics itself. Machine actions go through the local Python b
 The script creates:
 
 ```text
-build/PlotterVisionCamera.app
+build/PlotterVision.app
 ```
 
 ## Run Directly
@@ -82,7 +82,21 @@ coordinates when sending motion commands.
   busy state, stop/resume, pen actions, homing, centering, and jogs.
 - Supports the wizard-first operator flow: manual paper fiducials, paper homography, cap
   localization, visual motion probing, center-dot preview, and watched mark drawing.
-- Presents two post-calibration lanes: capabilities tests and portrait/image-to-shape drawing.
+- Presents two post-calibration lanes in Draw/Verify: capability checks and portrait/image-to-shape
+  drawing.
+
+The current true app flow is:
+
+```text
+launch -> Calibration Wizard -> manual fiducials/paper homography -> cap confirmation
+  -> visual probe/BOOT-X if needed -> preview binding marks -> run watched binding marks
+  -> /calibration/binding/observe -> /calibration/binding/solve
+  -> validated VisualPositionBinding -> preview -> Draw/Verify
+```
+
+Draw/Verify capability runs are tied to the latest preview identity returned by the bridge. The app
+displays the command id and plan hash when available, then sends that plan hash back on run; Python
+still owns safety, trust, simulation, execution, and residual validation.
 
 Canonical geometry still belongs in the Python bridge/calibration/drawing layers. Swift overlays are
 views over bridge state and local camera observations; they are not motion authority.

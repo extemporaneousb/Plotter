@@ -31,7 +31,7 @@ make install
 # test
 make check
 
-# mock/demo
+# mock/preview
 make mock-snapshot
 
 # real hardware, passive only

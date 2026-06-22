@@ -15,7 +15,7 @@ The active system has three canonical surfaces:
 - `plotterctl`: the root CLI for passive probes, guarded setup operations, and launching the bridge.
 - `plotter_vision.bridge`: the local HTTP bridge that owns machine actions, dry-run/live gates,
   paper registration, dot-test previews, and drawing execution.
-- the native operator app in `macos/PlotterVisionCameraDemo`: the bridge client and visual surface,
+- the native operator app in `macos/PlotterVision`: the bridge client and visual surface,
   not a serial controller owner.
 
 Authority stays deliberately narrow: Python owns calibration, bridge routing, safety gates, model
@@ -47,12 +47,12 @@ The normal development target is the fixed-camera drawing loop:
 6. Preview the expected binding marks on the video stream, draw the watched visual-relative marks,
    collect ink observations, post them to `/calibration/binding/observe`, and solve
    `/calibration/binding/solve`.
-7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability tests and
+7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
    drawing programs still require bridge preview before execution.
-7. Persist the learned parameters as future initialization values for the coordinate system and
+8. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
-8. Draw through one of two lanes:
-   - capabilities tests: simple-to-more-complex shape programs that can include coordinate markup;
+9. Open Draw/Verify and draw through one of two lanes:
+   - capability checks: simple-to-more-complex shape programs that can include coordinate markup;
    - portrait drawing: camera capture, contour or polygon extraction, and translation into the
      drawing program.
 
@@ -67,7 +67,7 @@ Simulation is not a decorative UI preview. It is the expected pen motion project
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
 
-## Calibration And Drawing Tests
+## Calibration And Draw/Verify Evidence
 
 The operator sequence should stay explicit:
 
@@ -310,7 +310,9 @@ establish the paper plane, the cap marker provides live carriage observations, a
 validate the durable `VisualPositionBinding`. Bridge previews simulate the exact command stream and
 project the expected path into the camera view before any real drawing action is enabled. If simulated
 or observed geometry fails its gate, the bridge returns a failed response and does not send the command
-stream.
+stream. After binding validation, use Draw/Verify for capability-check preview/run and shape or
+portrait drawing. Draw/Verify displays the latest bridge preview identity and only offers matching
+execution paths while Python safety, dry-run/live, paper, and binding gates allow them.
 Stop the background preview bridge with:
 
 ```bash

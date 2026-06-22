@@ -6,7 +6,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>PlotterVisionCamera</string>
+  <string>PlotterVision</string>
   <key>CFBundleDisplayName</key>
   <string>Plotter Vision</string>
   <key>CFBundleIdentifier</key>

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct PlotterVisionCameraApp: App {
+struct PlotterVisionApp: App {
     @NSApplicationDelegateAdaptor(WindowPlacementDelegate.self) private var windowPlacement
     @StateObject private var bridge = PlotterBridgeModel()
 

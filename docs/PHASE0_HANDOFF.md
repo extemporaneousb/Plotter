@@ -39,7 +39,7 @@ pip install -e '.[dev]'
 pytest
 ruff check .
 
-# mock/demo
+# mock/preview
 plotterctl ports
 plotterctl probe --mock --transcript artifacts/mock_probe_transcript.jsonl
 plotterctl snapshot --mock --out artifacts/mock_snapshot.json \

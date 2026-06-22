@@ -134,7 +134,7 @@ install-shortcuts:
 	scripts/install_launcher_shortcuts.sh
 
 app:
-	macos/PlotterVisionCameraDemo/run.sh
+	macos/PlotterVision/run.sh
 
 preview-app: standby-app
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SWIFT_DIR = ROOT / "macos" / "PlotterVisionCameraDemo" / "Sources" / "PlotterVisionCameraDemo"
+SWIFT_DIR = ROOT / "macos" / "PlotterVision" / "Sources" / "PlotterVision"
 
 
 def _read(path: Path) -> str:
@@ -13,6 +14,8 @@ def _read(path: Path) -> str:
 
 def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
+    visual_controls = _read(SWIFT_DIR / "VisualControlsMenu.swift")
     removed_labels = [
         "Triangle Residual Runner Pending",
         "Square Residual Runner Pending",
@@ -34,9 +37,66 @@ def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
     for label in removed_labels:
         assert label not in content
     assert "private var calibrationMenu" not in content
-    assert "private var visualControlsMenu" in content
-    assert "private var drawingTestsMenu" in content
+    assert "VisualControlsMenu(" in content
+    assert "DrawVerifyMenu(" in content
+    assert "struct VisualControlsMenu" in visual_controls
+    assert "struct DrawVerifyMenu" in draw_verify
     assert "startCalibrationWizard" in content
+
+
+def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
+    stale_word = "de" + "mo"
+    stale_app_name = f"PlotterVisionCamera{stale_word.capitalize()}"
+
+    assert (ROOT / "macos" / "PlotterVision" / "build.sh").exists()
+    assert SWIFT_DIR.exists()
+    assert not (ROOT / "macos" / stale_app_name).exists()
+
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    assert all(stale_word not in path.lower() for path in tracked)
+
+    grep = subprocess.run(
+        ["git", "grep", "-n", "-i", stale_word, "--", "."],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert grep.returncode == 1, grep.stdout
+
+
+def test_draw_verify_operator_surface_replaces_tests_menu() -> None:
+    swift_text = "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
+    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+
+    assert "Draw/Verify" in draw_verify
+    assert "Run Verified Capability" in draw_verify
+    assert "previewDrawVerifyCapability" in model
+    assert "runVerifiedDrawVerifyCapability" in model
+    assert "expectedPlanHash: expectedHash" in model
+    assert 'label: "Tests"' not in swift_text
+    assert "drawingTestsMenu" not in swift_text
+    assert "TEST " not in swift_text
+
+
+def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+
+    assert (SWIFT_DIR / "CalibrationWizardView.swift").exists()
+    assert (SWIFT_DIR / "CameraOverlaySupportViews.swift").exists()
+    assert (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
+    assert "final class PlotterBridgeModel" not in client
+    assert "final class PlotterBridgeModel" in model
+    assert len(content.splitlines()) < 3500
 
 
 def test_swift_auto_red_fiducial_path_is_removed() -> None:
@@ -55,14 +115,14 @@ def test_swift_auto_red_fiducial_path_is_removed() -> None:
 
 
 def test_bridge_contract_requires_api_3_and_gates_build_mismatch() -> None:
-    build_script = _read(ROOT / "macos" / "PlotterVisionCameraDemo" / "build.sh")
-    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    build_script = _read(ROOT / "macos" / "PlotterVision" / "build.sh")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
     assert "PlotterRequiredBridgeAPIVersion integer 3" in build_script
-    assert "var hasBridgeContractMismatch" in client
-    assert "hasLifecycleBuildMismatch { return \"Motion blocked" in client
-    assert "guard let rawVersion = cleanBridgeMetadata(bridgeApiVersion)" in client
-    assert "return true" in client.split("var hasBridgeApiMismatch", 1)[1].split("var hasBridgeContractMismatch", 1)[0]
+    assert "var hasBridgeContractMismatch" in model
+    assert "hasLifecycleBuildMismatch { return \"Motion blocked" in model
+    assert "guard let rawVersion = cleanBridgeMetadata(bridgeApiVersion)" in model
+    assert "return true" in model.split("var hasBridgeApiMismatch", 1)[1].split("var hasBridgeContractMismatch", 1)[0]
 
 
 def test_wizard_drives_visual_position_binding_loop() -> None:
@@ -82,7 +142,7 @@ def test_wizard_drives_visual_position_binding_loop() -> None:
 
 def test_visual_probe_reacquires_cap_before_stopping() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
-    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
     assert "visualCapReacquireMaxAttempts" in content
     assert "reacquireGreenCapByXAxis" in content
@@ -94,8 +154,8 @@ def test_visual_probe_reacquires_cap_before_stopping() -> None:
     assert "preferredXReacquireDirection(opposingCommandX: commandX)" in content
     assert "preferredXReacquireDirection(opposingCommandX: commandDx)" in content
     assert "resetVisualCalibrationSession(prefix: \"swift-probe\")" in content
-    assert "func resetVisualCalibrationSession" in client
-    assert '"visual_calibration_session_reset"' in client
+    assert "func resetVisualCalibrationSession" in model
+    assert '"visual_calibration_session_reset"' in model
 
 
 def test_removed_bridge_routes_and_red_detection_support_are_absent() -> None:

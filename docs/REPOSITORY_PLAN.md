@@ -39,7 +39,7 @@ plotter_vision/
     gcode.py
     simulator.py
 macos/
-  PlotterVisionCameraDemo/
+  PlotterVision/
 tests/
 ```
 
@@ -81,7 +81,8 @@ The fixed-camera workflow is:
 6. Preview expected binding marks, draw the watched visual-relative marks, collect ink observations,
    post them through `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
 7. Use the validated `VisualPositionBinding` as the drawing unlock.
-8. Draw either capabilities tests or portrait/image-derived programs after bridge preview.
+8. Open Draw/Verify and draw either capability checks or portrait/image-derived programs after
+   bridge preview.
 
 Both post-calibration drawing lanes use the same pipeline:
 
@@ -90,7 +91,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
   -> Executor -> Vision Observer -> Residual Solver -> Persisted Binding
 ```
 
-- Capabilities tests are first-class drawing programs. They should start with simple shapes and move
+- Capability checks are first-class drawing programs. They should start with simple shapes and move
   toward more complex shape sets, including coordinate markup when useful for residual inspection.
   The canonical order is `center_crosshair`, `line_length`, `square_closure`, `triangle`, then
   `multi_shape_coordinate_sheet`.
@@ -114,9 +115,9 @@ and transforms:
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation and overlay rendering only; it is not motion authority. |
 
-Demo compatibility is not an architecture requirement. The active bridge surface uses
-`ShapeExecutionRequest`, `/draw/shape`, `/draw/shape/preview`, and
-`/capabilities/tests/...`; `/demo/run` is not an active route.
+The active bridge surface uses `ShapeExecutionRequest`, `/draw/shape`, `/draw/shape/preview`, and
+`/capabilities/tests/...`. Operator-facing text calls this lane Draw/Verify even while the bridge
+keeps the internal capabilities-test route name.
 
 Cap-marker evidence is session evidence. A green-cap visual probe measures relative carriage motion
 in the registered paper plane; cap-only motion is not enough to set durable `axis_model_trusted` or
@@ -234,14 +235,14 @@ separate from motion authority.
 
 ### Phase 5.5 — Command Simulation and Preview Gate
 
-Status: implemented for shape execution, polygon drawing, capabilities-test programs, calibration
+Status: implemented for shape execution, polygon drawing, capability-check programs, calibration
 mark programs, and image-derived contour previews.
 
 - Interpret the same G-code/pen command stream that the bridge would send to hardware.
 - Track modal G90/G91, G20/G21, G53 absolute machine moves, feed-only moves, and configured pen
   up/down commands.
 - Emit drawn line segments only when the simulated pen is down.
-- Verify capabilities-test command streams by simulation, projected overlay geometry, execution
+- Verify capability-check command streams by simulation, projected overlay geometry, execution
   gates, and residual observations.
 - Include normalized expected path segments in bridge JSON so the macOS video overlay can draw the
   preview path in the registered paper plane.
@@ -249,10 +250,10 @@ mark programs, and image-derived contour previews.
 
 ### Phase 6 — Drawing/Vector Ingestion
 
-Status: started for image/contour previews, capabilities tests, and face raster drawing; broad
+Status: started for image/contour previews, capability checks, and face raster drawing; broad
 vector import remains deferred.
 
-- Capabilities tests and portrait/image-to-shape should use `DrawingProgram` before any broad SVG or
+- Capability checks and portrait/image-to-shape should use `DrawingProgram` before any broad SVG or
   CAM import.
 - Do not implement SVG/vector import until the control, calibration, simulation, and residual
   foundation is reliable.

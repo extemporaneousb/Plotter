@@ -67,7 +67,7 @@ enum CameraRole: String, CaseIterable, Identifiable {
     }
 
     var defaultsKey: String {
-        "PlotterVisionCamera.\(rawValue).selectedCameraID"
+        "PlotterVision.\(rawValue).selectedCameraID"
     }
 
     var statusPrefix: String {

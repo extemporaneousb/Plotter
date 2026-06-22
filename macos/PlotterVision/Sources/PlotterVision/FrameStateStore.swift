@@ -10,7 +10,7 @@ enum FrameStateStore {
     static var path: URL {
         let directory = FileManager.default
             .homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/PlotterVisionCamera", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/PlotterVision", isDirectory: true)
         return directory.appendingPathComponent("frame_state.json")
     }
 

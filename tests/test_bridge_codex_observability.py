@@ -24,7 +24,7 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
         status_code, state_response = client.post(
             "/codex/app/state",
             {
-                "source": "PlotterVisionCameraDemo",
+                "source": "PlotterVision",
                 "app_build_id": "app/test",
                 "bridge_url": "http://127.0.0.1:8765",
                 "status": "ready",
@@ -42,7 +42,7 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
         status_code, event_response = client.post(
             "/codex/app/events",
             {
-                "source": "PlotterVisionCameraDemo",
+                "source": "PlotterVision",
                 "event_type": "ui.selection_changed",
                 "status": "observed",
                 "payload": {"selected_panel": "diagnostics"},

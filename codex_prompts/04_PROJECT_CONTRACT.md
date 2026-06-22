@@ -32,9 +32,9 @@
   persisted bindings, and trust flags.
 - Preview is separate from execution. Preview endpoints must force dry-run behavior, return simulated
   geometry only, never move hardware, and never write controller transcripts.
-- Obsolete compatibility paths should be removed when no external caller exists. Do not preserve old
-  "demo" routes, DTOs, or UI actions unless they directly become capabilities-test or shape-execution
-  infrastructure.
+- Obsolete compatibility paths should be removed when no external caller exists. Keep drawing and
+  verification surfaces named for their current bridge contract: capability checks, shape execution,
+  binding observations, and image-derived drawing.
 
 ## Canonical fixed-camera flow
 
@@ -43,9 +43,12 @@ The app-first drawing flow is:
 1. Start the app against a preview or hardware-standby bridge.
 2. Open the calibration wizard.
 3. Click paper fiducials, solve paper homography, and confirm or localize the cap marker.
-4. Draw calibration marks, measure them in the plotter camera video, adjust the model, and repeat.
-5. Persist learned parameters as future initialization values.
-6. Draw capabilities tests or portrait/image-derived programs through:
+4. Run visual probe or BOOT-X only when needed to bring relative cap motion into a measured state.
+5. Preview binding marks, run watched binding marks, post observations to
+   `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
+6. Treat the validated `VisualPositionBinding` as the current drawing unlock.
+7. Use Draw/Verify to preview capability checks, shape programs, or portrait/image-derived programs
+   through:
 
 ```text
 DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay

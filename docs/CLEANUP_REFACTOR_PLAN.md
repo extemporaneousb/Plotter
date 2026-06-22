@@ -8,10 +8,9 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 - Machine safety, motion planning, simulation, drawing, and calibration remain Python-owned
   canonical interfaces.
 - Preview is separate from execution, and preview routes must stay dry-run even on a live bridge.
-- No external caller currently depends on the old demo API. Obsolete compatibility routes, DTOs, UI
-  actions, and event names should be removed or renamed into canonical drawing concepts instead of
-  preserved for their own sake.
-- Simple shapes belong to the capabilities-test lane, not to a separate "demo" product path.
+- Obsolete compatibility routes, DTOs, UI actions, and event names should be removed or renamed into
+  canonical drawing concepts instead of preserved for their own sake.
+- Simple shapes belong to the Draw/Verify capability-check lane.
 
 ## Completed In This Pass
 
@@ -25,8 +24,8 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 - Aligned homing safety with bridge guard semantics by treating `Pn=-` as clear.
 - Updated README and repository plan docs to describe the current bridge, app, calibration, paper,
   drawing, and preview-safe execution surfaces.
-- Removed the active `/demo/run` route and renamed demo-era bridge, Swift DTO, event, and test
-  names into shape execution and capabilities-test concepts.
+- Removed obsolete shape-execution compatibility naming and aligned bridge, Swift DTO, event, and
+  test names with shape execution and capability-check concepts.
 - Added canonical drawing pipeline, preview overlay, visual position binding, residual observation,
   and first capabilities-test surfaces.
 
@@ -83,7 +82,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
   not write controller transcripts. Preview success is evidence, not execution readiness.
 - Cap-only motion is relative session evidence. Absolute paper-plane drawing requires visual
   position binding from cap localization plus ink or pen-tip observations and residual thresholds.
-- Capabilities tests and portrait/image-to-shape both produce `DrawingProgram` data and use the same
+- Capability checks and portrait/image-to-shape both produce `DrawingProgram` data and use the same
   planner, simulator, video projection, execution, observation, and residual path.
 - Generic SVG/vector import remains deferred until the control, calibration, simulation, and residual
   foundation is reliable.

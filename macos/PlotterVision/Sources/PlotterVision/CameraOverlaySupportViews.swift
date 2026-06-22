@@ -1,0 +1,794 @@
+import SwiftUI
+
+enum CalibrationWizardStepStatus {
+    case pending
+    case active
+    case done
+    case blocked
+
+    var label: String {
+        switch self {
+        case .pending:
+            return "--"
+        case .active:
+            return "DO"
+        case .done:
+            return "OK"
+        case .blocked:
+            return "BLOCK"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .pending:
+            return .white.opacity(0.42)
+        case .active:
+            return .yellow.opacity(0.95)
+        case .done:
+            return .green.opacity(0.95)
+        case .blocked:
+            return .red.opacity(0.95)
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .pending:
+            return "circle"
+        case .active:
+            return "arrow.right.circle.fill"
+        case .done:
+            return "checkmark.circle.fill"
+        case .blocked:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+struct CalibrationWizardStepRow: View {
+    let index: Int
+    let title: String
+    let detail: String
+    let status: CalibrationWizardStepStatus
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(index)")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.black.opacity(0.82))
+                .frame(width: 18, height: 18)
+                .background(status.color, in: Circle())
+            Image(systemName: status.symbolName)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(status.color)
+                .frame(width: 15)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                    Text(status.label)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(status.color)
+                }
+                Text(detail)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.56))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 32)
+    }
+}
+
+enum CameraLayoutMode: String, CaseIterable, Identifiable {
+    case both
+    case plotter
+    case face
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .both:
+            return "Both"
+        case .plotter:
+            return "Plotter"
+        case .face:
+            return "Face"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .both:
+            return "rectangle.split.2x1"
+        case .plotter:
+            return "rectangle.dashed"
+        case .face:
+            return "person.crop.rectangle"
+        }
+    }
+}
+
+struct CameraLayoutControl: View {
+    @Binding var selection: CameraLayoutMode
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(CameraLayoutMode.allCases) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    Label(mode.title, systemImage: mode.icon)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(selection == mode ? Color.black : Color.white.opacity(0.84))
+                        .frame(width: 30, height: 30)
+                        .background(selection == mode ? Color.cyan : Color.white.opacity(0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Show \(mode.title.lowercased()) camera view")
+            }
+        }
+        .padding(4)
+        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+}
+
+struct PlotterViewportTransform<Content: View>: View {
+    let settings: PlotterViewportSettings
+    let content: Content
+
+    init(settings: PlotterViewportSettings, @ViewBuilder content: () -> Content) {
+        self.settings = settings
+        self.content = content()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            content
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .rotationEffect(.degrees(settings.rotationDegrees))
+                .scaleEffect(rotationFitScale(size: geometry.size, degrees: settings.rotationDegrees))
+                .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .clipped()
+    }
+}
+
+struct ManualFiducialOverlay: View {
+    let points: [ManualFiducialPoint]
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard !points.isEmpty || isActive else { return }
+
+            if isActive {
+                let label = Text("CLICK FIDUCIALS \(min(points.count, 4))/4")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.yellow.opacity(0.95))
+                context.draw(label, at: CGPoint(x: size.width - 12, y: 14), anchor: .topTrailing)
+            }
+
+            for point in points {
+                let center = CGPoint(
+                    x: point.point.x * size.width,
+                    y: point.point.y * size.height
+                )
+                let color = Color.yellow
+                let outer = CGRect(x: center.x - 9, y: center.y - 9, width: 18, height: 18)
+                context.stroke(Path(ellipseIn: outer), with: .color(color.opacity(0.96)), lineWidth: 2.2)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: center.x - 3, y: center.y - 3, width: 6, height: 6)),
+                    with: .color(color.opacity(0.98))
+                )
+
+                var cross = Path()
+                cross.move(to: CGPoint(x: center.x - 15, y: center.y))
+                cross.addLine(to: CGPoint(x: center.x + 15, y: center.y))
+                cross.move(to: CGPoint(x: center.x, y: center.y - 15))
+                cross.addLine(to: CGPoint(x: center.x, y: center.y + 15))
+                context.stroke(cross, with: .color(.black.opacity(0.78)), lineWidth: 1.0)
+
+                let label = Text(point.label)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(color.opacity(0.95))
+                context.draw(label, at: CGPoint(x: center.x + 12, y: center.y), anchor: .leading)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct ConfirmedCapOverlay: View {
+    let point: ConfirmedCapPoint?
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            if isActive {
+                let label = Text("CLICK CAP POSITION")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.green.opacity(0.96))
+                context.draw(label, at: CGPoint(x: size.width - 12, y: 32), anchor: .topTrailing)
+            }
+
+            guard let point else { return }
+
+            let center = CGPoint(
+                x: point.point.x * size.width,
+                y: point.point.y * size.height
+            )
+            let outer = CGRect(x: center.x - 25, y: center.y - 25, width: 50, height: 50)
+            let middle = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
+            let inner = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
+
+            context.stroke(Path(ellipseIn: outer), with: .color(.black.opacity(0.86)), lineWidth: 7.0)
+            context.stroke(Path(ellipseIn: middle), with: .color(.green.opacity(0.98)), lineWidth: 4.0)
+            context.fill(Path(ellipseIn: inner), with: .color(.white.opacity(0.98)))
+
+            var cross = Path()
+            cross.move(to: CGPoint(x: center.x - 35, y: center.y))
+            cross.addLine(to: CGPoint(x: center.x + 35, y: center.y))
+            cross.move(to: CGPoint(x: center.x, y: center.y - 35))
+            cross.addLine(to: CGPoint(x: center.x, y: center.y + 35))
+            context.stroke(cross, with: .color(.black.opacity(0.82)), lineWidth: 7.0)
+            context.stroke(cross, with: .color(.green.opacity(0.98)), lineWidth: 3.2)
+
+            let label = Text(point.label)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.green.opacity(0.98))
+            context.draw(label, at: CGPoint(x: center.x + 16, y: center.y - 16), anchor: .leading)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct CapColorPickOverlay: View {
+    let isActive: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            guard isActive else { return }
+
+            let label = Text("CLICK CAP COLOR")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.cyan.opacity(0.96))
+            context.draw(label, at: CGPoint(x: size.width - 12, y: 50), anchor: .topTrailing)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct ManualFiducialClickLayer: View {
+    let settings: PlotterViewportSettings
+    let videoSize: CGSize
+    let onMark: (CGPoint, CGPoint) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            let width = max(geometry.size.width, 1)
+                            let height = max(geometry.size.height, 1)
+                            let viewPoint = CGPoint(
+                                x: value.location.x / width,
+                                y: value.location.y / height
+                            )
+                            let cameraPoint = plotterCameraNormFromViewPoint(
+                                value.location,
+                                viewSize: geometry.size,
+                                videoSize: videoSize,
+                                settings: settings
+                            )
+                            onMark(
+                                viewPoint,
+                                cameraPoint
+                            )
+                        }
+                )
+        }
+    }
+}
+
+struct ManualPenClickLayer: View {
+    let settings: PlotterViewportSettings
+    let videoSize: CGSize
+    let onMark: (CGPoint, CGPoint) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            let width = max(geometry.size.width, 1)
+                            let height = max(geometry.size.height, 1)
+                            let viewPoint = CGPoint(
+                                x: value.location.x / width,
+                                y: value.location.y / height
+                            )
+                            let cameraPoint = plotterCameraNormFromViewPoint(
+                                value.location,
+                                viewSize: geometry.size,
+                                videoSize: videoSize,
+                                settings: settings
+                            )
+                            onMark(viewPoint, cameraPoint)
+                        }
+                )
+        }
+    }
+}
+
+struct CameraPlaceholder: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: camera.role == .plotter ? "rectangle.dashed" : "person.crop.rectangle")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.28))
+            Text(camera.role.title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.72))
+            Text(camera.statusText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.50))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct FaceContourOverlay: View {
+    let segments: [VisionSegment]
+    let videoSize: CGSize
+    let previewMode: CameraPreviewMode
+
+    var body: some View {
+        Canvas { context, size in
+            let displayRect = videoDisplayRect(
+                viewSize: size,
+                videoSize: videoSize,
+                previewMode: previewMode
+            )
+            for (index, segment) in segments.prefix(80).enumerated() {
+                let color = faceContourColor(for: segment.kind, index: index)
+                if segment.points.count > 1 {
+                    var path = Path()
+                    path.move(to: faceOverlayPoint(segment.points[0], displayRect: displayRect))
+                    for point in segment.points.dropFirst() {
+                        path.addLine(to: faceOverlayPoint(point, displayRect: displayRect))
+                    }
+                    if segment.points.count > 2 {
+                        path.closeSubpath()
+                        context.fill(path, with: .color(color.opacity(0.10)))
+                    }
+                    context.stroke(path, with: .color(.black.opacity(0.68)), lineWidth: 3.4)
+                    context.stroke(path, with: .color(color.opacity(0.90)), lineWidth: 1.5)
+                }
+
+                let rect = faceOverlayRect(segment.boundingBox, displayRect: displayRect)
+                context.stroke(
+                    Path(roundedRect: rect, cornerRadius: 2),
+                    with: .color(color.opacity(0.70)),
+                    lineWidth: 0.9
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+struct ImageProcessingPanel: View {
+    @ObservedObject var bridge: PlotterBridgeModel
+    let visualContourCount: Int
+    let isBridgeOnline: Bool
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 8, height: 8)
+                        Text("IMAGE")
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.74))
+                        Text(bridge.imagePreviewStatus)
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 8) {
+                        Text(String(format: "VIS %dC", visualContourCount))
+                        Text(bridge.imagePreviewDetail)
+                    }
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                }
+                .frame(minWidth: 158, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+            }
+            .padding(.top, 68)
+            .padding(.horizontal, 18)
+            Spacer()
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var statusColor: Color {
+        if !isBridgeOnline { return .gray }
+        if bridge.imagePreviewStatus.contains("ERR") { return .red }
+        if bridge.imagePreviewEligibleForBridgePreview { return .green }
+        return .yellow
+    }
+}
+
+struct CameraPaneBadge: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        VStack {
+            Spacer()
+            HStack {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(cameraBadgeColor)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 6) {
+                            Text(camera.role.shortTitle)
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.86))
+                            Text(camera.selectedCameraName)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.64))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Text(camera.statusText)
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.48))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 82)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var cameraBadgeColor: Color {
+        if camera.isRunning && camera.isReceivingFrames { return .green }
+        if camera.isRunning { return .yellow }
+        return .gray
+    }
+}
+
+struct CameraSelector: View {
+    @ObservedObject var camera: CameraModel
+
+    var body: some View {
+        Menu {
+            Button {
+                camera.refreshCameraDevices(reconnect: true)
+            } label: {
+                Label("Refresh & Reconnect", systemImage: "arrow.clockwise")
+            }
+
+            Button {
+                camera.reconnectSelectedCamera()
+            } label: {
+                Label("Reconnect Selected", systemImage: "video.badge.checkmark")
+            }
+
+            Divider()
+
+            if camera.availableCameras.isEmpty {
+                Text("No cameras")
+            } else {
+                ForEach(camera.availableCameras) { option in
+                    Button {
+                        camera.selectCamera(option.id)
+                    } label: {
+                        Label(
+                            option.displayName,
+                            systemImage: option.id == camera.selectedCameraID ? "checkmark.circle.fill" : "video"
+                        )
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "video.badge.ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(camera.role.shortTitle)
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.54))
+                    Text(camera.selectedCameraName)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Select \(camera.role.title)")
+    }
+}
+
+struct StatusLamp: View {
+    let title: String
+    let value: String
+    let color: Color
+    let help: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 9, height: 9)
+                .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.50))
+                Text(value)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+        }
+        .frame(minWidth: 64, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .help(help)
+    }
+}
+
+func faceOverlayPoint(_ normalized: CGPoint, displayRect: CGRect) -> CGPoint {
+    CGPoint(
+        x: displayRect.minX + normalized.x * displayRect.width,
+        y: displayRect.minY + (1.0 - normalized.y) * displayRect.height
+    )
+}
+
+func faceOverlayRect(_ normalized: CGRect, displayRect: CGRect) -> CGRect {
+    CGRect(
+        x: displayRect.minX + normalized.minX * displayRect.width,
+        y: displayRect.minY + (1.0 - normalized.maxY) * displayRect.height,
+        width: normalized.width * displayRect.width,
+        height: normalized.height * displayRect.height
+    )
+}
+
+func faceContourColor(for kind: SegmentKind, index: Int) -> Color {
+    switch kind {
+    case .line:
+        return .cyan
+    case .shape:
+        return .mint
+    case .mark:
+        return .yellow
+    case .contour:
+        return index.isMultiple(of: 2) ? .orange : .pink
+    }
+}
+
+func plotterCameraNormFromViewPoint(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    videoSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let unrotated = inversePlotterViewportPoint(point, viewSize: viewSize, settings: settings)
+    let displayRect = videoDisplayRect(
+        viewSize: viewSize,
+        videoSize: videoSize,
+        previewMode: settings.previewMode
+    )
+    guard displayRect.width > 0, displayRect.height > 0 else {
+        return CGPoint(x: 0.5, y: 0.5)
+    }
+    let x = (unrotated.x - displayRect.minX) / displayRect.width
+    let y = 1.0 - ((unrotated.y - displayRect.minY) / displayRect.height)
+    return CGPoint(
+        x: clampDouble(Double(x), min: 0.0, max: 1.0),
+        y: clampDouble(Double(y), min: 0.0, max: 1.0)
+    )
+}
+
+func inversePlotterViewportPoint(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+    let scale = max(rotationFitScale(size: viewSize, degrees: settings.rotationDegrees), 0.0001)
+    let translated = CGPoint(
+        x: (point.x - center.x) / scale,
+        y: (point.y - center.y) / scale
+    )
+    let radians = -CGFloat(settings.rotationDegrees) * .pi / 180.0
+    let cosTheta = cos(radians)
+    let sinTheta = sin(radians)
+    return CGPoint(
+        x: center.x + translated.x * cosTheta - translated.y * sinTheta,
+        y: center.y + translated.x * sinTheta + translated.y * cosTheta
+    )
+}
+
+func videoDisplayRect(
+    viewSize: CGSize,
+    videoSize: CGSize,
+    previewMode: CameraPreviewMode
+) -> CGRect {
+    let sourceSize = videoSize.width > 0 && videoSize.height > 0
+        ? videoSize
+        : CGSize(width: 1280, height: 720)
+    let imageAspect = sourceSize.width / sourceSize.height
+    let viewAspect = max(viewSize.width, 1) / max(viewSize.height, 1)
+    let displaySize: CGSize
+    let offset: CGPoint
+
+    switch previewMode {
+    case .fill:
+        if viewAspect > imageAspect {
+            let width = viewSize.width
+            let height = width / imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: 0, y: (viewSize.height - height) / 2)
+        } else {
+            let height = viewSize.height
+            let width = height * imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: (viewSize.width - width) / 2, y: 0)
+        }
+    case .fit:
+        if viewAspect > imageAspect {
+            let height = viewSize.height
+            let width = height * imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: (viewSize.width - width) / 2, y: 0)
+        } else {
+            let width = viewSize.width
+            let height = width / imageAspect
+            displaySize = CGSize(width: width, height: height)
+            offset = CGPoint(x: 0, y: (viewSize.height - height) / 2)
+        }
+    }
+
+    return CGRect(origin: offset, size: displaySize)
+}
+
+func rotationFitScale(size: CGSize, degrees: Double) -> CGFloat {
+    let normalized = Int(abs(degrees).rounded()) % 180
+    guard normalized == 90 else { return 1.0 }
+    let width = max(size.width, 1)
+    let height = max(size.height, 1)
+    return min(width / height, height / width)
+}
+
+func nextQuarterTurn(after degrees: Double) -> Double {
+    let turns = [0.0, 90.0, 180.0, 270.0]
+    let normalized = degrees.truncatingRemainder(dividingBy: 360.0)
+    let positive = normalized < 0 ? normalized + 360.0 : normalized
+    let currentIndex = turns.enumerated().min { lhs, rhs in
+        abs(lhs.element - positive) < abs(rhs.element - positive)
+    }?.offset ?? 0
+    return turns[(currentIndex + 1) % turns.count]
+}
+
+func clampDouble(_ value: Double, min minimum: Double, max maximum: Double) -> Double {
+    Swift.min(maximum, Swift.max(minimum, value))
+}
+
+func normalizedDistance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+    hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+}
+
+struct PlotterVideoFilterModifier: ViewModifier {
+    let filter: PlotterVideoFilter
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch filter {
+        case .normal:
+            content
+        case .monochrome:
+            content
+                .saturation(0.0)
+                .contrast(1.18)
+        case .highContrast:
+            content
+                .contrast(1.75)
+                .saturation(1.08)
+        case .inverted:
+            content
+                .colorInvert()
+                .contrast(1.10)
+        case .inkCheck:
+            content
+                .saturation(0.0)
+                .contrast(2.10)
+                .brightness(-0.08)
+        }
+    }
+}
+
+struct MenuSliderControl: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let display: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(label)
+                Spacer(minLength: 8)
+                Text(display)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: $value, in: range, step: step)
+        }
+        .frame(width: 220)
+    }
+}
