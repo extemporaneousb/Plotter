@@ -9,6 +9,9 @@ private let visualProbeBootstrapTargetXMm = 200.0
 private let visualProbeBootstrapMinProgressXMm = 4.0
 private let visualProbeFieldRecoveryStepXMm = 50.0
 private let visualProbeFieldRecoveryMaxTotalXMm = 150.0
+private let visualCapReacquireStepXMm = 25.0
+private let visualCapReacquireMaxTotalXMm = 150.0
+private let visualCapReacquireMaxAttempts = 2
 private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
 private let visualCalibrationMarkSizeMm = 6.0
@@ -439,7 +442,7 @@ struct ContentView: View {
         }
         visualMotionModel = nil
         visualMotionSamples = []
-        _ = bridge.startVisualProbeEvidenceRun(prefix: "swift-probe")
+        _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
         manualPenMode = false
         manualFiducialMode = false
         manualCapColorMode = false
@@ -628,103 +631,158 @@ struct ContentView: View {
         distanceMm: Double,
         sampleIndex: Int
     ) async -> FrameLearningSample? {
-        guard let before = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
-            updateLearningSummary(
-                samples: [],
-                status: "STOP",
-                detail: "Cap marker lost before move"
-            )
-            calibrationStatusText = "CAL cap-marker probe stopped: cap lost before move"
-            return nil
-        }
-
-        frameLearning.detail = String(format: "Move %@ %.0f mm", axis, distanceMm)
-        calibrationStatusText = String(
-            format: "CAL cap-marker probe: move %@ %.0f mm",
-            axis,
-            distanceMm
-        )
-
-        guard let response = await bridge.learningJog(
-            axis: axis,
-            distanceMm: distanceMm,
-            feedMmMin: min(300.0, bridge.manualFeedMmMin)
-        ) else {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Move failed or machine busy"
-            calibrationStatusText = "CAL cap-marker probe stopped: move failed"
-            return nil
-        }
-
-        if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Pin active after move"
-            frameLearning.lastPins = pins
-            calibrationStatusText = "CAL cap-marker probe stopped: pin active \(pins)"
-            return nil
-        }
-
-        try? await Task.sleep(nanoseconds: 450_000_000)
-        guard let after = await waitForGreenCapPaperObservation(
-            afterFrame: before.frameNumber,
-            timeoutSeconds: 4.0
-        ) else {
-            updateLearningSummary(
-                samples: [],
-                status: "STOP",
-                detail: "Cap marker lost after move"
-            )
-            calibrationStatusText = "CAL cap-marker probe stopped: cap lost after move"
-            return nil
-        }
-
-        let dx = after.paperMm.x - before.paperMm.x
-        let dy = after.paperMm.y - before.paperMm.y
-        let observedDistance = hypot(dx, dy)
-        let sample = FrameLearningSample(
-            axis: axis,
-            distanceMm: distanceMm,
-            observedDxMm: dx,
-            observedDyMm: dy,
-            observedDistanceMm: observedDistance,
-            strength: min(before.strength, after.strength)
-        )
         let commandDx = axis == "X" ? distanceMm : 0.0
         let commandDy = axis == "Y" ? distanceMm : 0.0
-        guard await bridge.observeVisualProbeSample(
-            visualProbeSampleRequest(
-                source: "motion_probe",
-                axis: axis,
-                commandedDxMm: commandDx,
-                commandedDyMm: commandDy,
-                before: before,
-                after: after,
-                commandId: response.commandId,
-                controllerTranscript: response.controllerTranscript,
-                status: "accepted",
-                sampleIdSuffix: "axis-\(sampleIndex)"
+        let feedMmMin = min(300.0, bridge.manualFeedMmMin)
+        var attempt = 0
+
+        while attempt <= visualCapReacquireMaxAttempts {
+            guard let before = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+                guard attempt < visualCapReacquireMaxAttempts,
+                      let recovered = await reacquireGreenCapByXAxis(
+                          afterFrame: plotterCamera.stats.frameNumber,
+                          source: "probe_before_move",
+                          label: "\(axis)-\(sampleIndex)",
+                          preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
+                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          moveX: { commandMm, feedMmMin in
+                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
+                          }
+                      ) else {
+                    updateLearningSummary(
+                        samples: [],
+                        status: "STOP",
+                        detail: "Cap marker lost before move"
+                    )
+                    calibrationStatusText = "CAL cap-marker probe stopped: cap lost before move"
+                    return nil
+                }
+                attempt += 1
+                calibrationStatusText = String(
+                    format: "CAL cap-marker probe reacquired cap x%.1f y%.1f; retry %@ %.0f",
+                    recovered.paperMm.x,
+                    recovered.paperMm.y,
+                    axis,
+                    distanceMm
+                )
+                continue
+            }
+
+            frameLearning.detail = String(format: "Move %@ %.0f mm", axis, distanceMm)
+            calibrationStatusText = String(
+                format: "CAL cap-marker probe: move %@ %.0f mm",
+                axis,
+                distanceMm
             )
-        ) else {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Bridge failed to persist probe evidence"
-            calibrationStatusText = "CAL cap-marker probe stopped: evidence persistence failed"
-            return nil
+
+            guard let response = await bridge.learningJog(
+                axis: axis,
+                distanceMm: distanceMm,
+                feedMmMin: feedMmMin
+            ) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Move failed or machine busy"
+                calibrationStatusText = "CAL cap-marker probe stopped: move failed"
+                return nil
+            }
+
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Pin active after move"
+                frameLearning.lastPins = pins
+                calibrationStatusText = "CAL cap-marker probe stopped: pin active \(pins)"
+                return nil
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard let after = await waitForFreshGreenCapPaperObservation(
+                afterFrame: before.frameNumber,
+                timeoutSeconds: 4.0
+            ) else {
+                guard attempt < visualCapReacquireMaxAttempts,
+                      let recovered = await reacquireGreenCapByXAxis(
+                          afterFrame: before.frameNumber,
+                          source: "probe_after_move",
+                          label: "\(axis)-\(sampleIndex)",
+                          preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
+                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          moveX: { commandMm, feedMmMin in
+                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
+                          }
+                      ) else {
+                    updateLearningSummary(
+                        samples: [],
+                        status: "STOP",
+                        detail: "Cap marker lost after move"
+                    )
+                    calibrationStatusText = "CAL cap-marker probe stopped: cap lost after move"
+                    return nil
+                }
+                attempt += 1
+                calibrationStatusText = String(
+                    format: "CAL cap-marker probe reacquired cap x%.1f y%.1f; retry %@ %.0f",
+                    recovered.paperMm.x,
+                    recovered.paperMm.y,
+                    axis,
+                    distanceMm
+                )
+                continue
+            }
+
+            let dx = after.paperMm.x - before.paperMm.x
+            let dy = after.paperMm.y - before.paperMm.y
+            let observedDistance = hypot(dx, dy)
+            let sample = FrameLearningSample(
+                axis: axis,
+                distanceMm: distanceMm,
+                observedDxMm: dx,
+                observedDyMm: dy,
+                observedDistanceMm: observedDistance,
+                strength: min(before.strength, after.strength)
+            )
+            guard await bridge.observeVisualProbeSample(
+                visualProbeSampleRequest(
+                    source: "motion_probe",
+                    axis: axis,
+                    commandedDxMm: commandDx,
+                    commandedDyMm: commandDy,
+                    before: before,
+                    after: after,
+                    commandId: response.commandId,
+                    controllerTranscript: response.controllerTranscript,
+                    status: "accepted",
+                    sampleIdSuffix: "axis-\(sampleIndex)"
+                )
+            ) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Bridge failed to persist probe evidence"
+                calibrationStatusText = "CAL cap-marker probe stopped: evidence persistence failed"
+                return nil
+            }
+            recordVisualMotionProbeSample(
+                sample,
+                sampleIndex: sampleIndex,
+                before: before,
+                after: after
+            )
+            calibrationStatusText = String(
+                format: "CAL cap-marker probe: sample %d %@ %.0f observed %.1fmm",
+                sampleIndex,
+                axis,
+                distanceMm,
+                observedDistance
+            )
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            return sample
         }
-        recordVisualMotionProbeSample(
-            sample,
-            sampleIndex: sampleIndex,
-            before: before,
-            after: after
+
+        updateLearningSummary(
+            samples: [],
+            status: "STOP",
+            detail: "Cap marker reacquire exhausted"
         )
-        calibrationStatusText = String(
-            format: "CAL cap-marker probe: sample %d %@ %.0f observed %.1fmm",
-            sampleIndex,
-            axis,
-            distanceMm,
-            observedDistance
-        )
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        return sample
+        calibrationStatusText = "CAL cap-marker probe stopped: cap reacquire exhausted"
+        return nil
     }
 
     @MainActor
@@ -1322,6 +1380,159 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func waitForFreshGreenCapPaperObservation(
+        afterFrame: Int,
+        timeoutSeconds: Double
+    ) async -> GreenCapPaperObservation? {
+        guard let observation = await waitForGreenCapPaperObservation(
+            afterFrame: afterFrame,
+            timeoutSeconds: timeoutSeconds
+        ), observation.frameNumber > afterFrame else {
+            return nil
+        }
+        return observation
+    }
+
+    private func preferredXReacquireDirection(opposingCommandX commandX: Double) -> Double {
+        if commandX > 0.2 { return -1.0 }
+        if commandX < -0.2 { return 1.0 }
+        return 1.0
+    }
+
+    private func visualCapReacquireCommands(firstDirection: Double) -> [Double] {
+        let direction = firstDirection < 0 ? -1.0 : 1.0
+        let step = min(visualCapReacquireStepXMm, visualProbeFieldRecoveryStepXMm)
+        return [
+            direction * step,
+            direction * step,
+            -direction * min(visualProbeFieldRecoveryStepXMm, step * 2.0),
+            -direction * min(visualProbeFieldRecoveryStepXMm, step * 2.0)
+        ]
+    }
+
+    @MainActor
+    private func reacquireGreenCapByXAxis(
+        afterFrame: Int,
+        source: String,
+        label: String,
+        preferredDirection: Double,
+        feedMmMin: Double,
+        moveX: (Double, Double) async -> MachineCommandResponse?
+    ) async -> GreenCapPaperObservation? {
+        let commands = visualCapReacquireCommands(firstDirection: preferredDirection)
+        var moveIndex = 0
+        var totalCommandedMm = 0.0
+        bridge.visualCenterDotStatus = "VIS SEEK X"
+        calibrationStatusText = "CAL cap reacquire \(label): scanning X"
+        bridge.recordOperatorEvent(
+            "visual_cap_reacquire_started",
+            details: [
+                "source": source,
+                "label": label,
+                "after_frame": afterFrame,
+                "step_x_mm": visualCapReacquireStepXMm,
+                "max_total_x_mm": visualCapReacquireMaxTotalXMm,
+                "preferred_direction": preferredDirection < 0 ? -1 : 1,
+                "feed_mm_min": feedMmMin
+            ]
+        )
+
+        for commandMm in commands {
+            let remainingBudget = visualCapReacquireMaxTotalXMm - totalCommandedMm
+            guard remainingBudget > 0 else { break }
+            let boundedCommandMm = commandMm.sign == .minus
+                ? -min(abs(commandMm), remainingBudget)
+                : min(abs(commandMm), remainingBudget)
+            guard abs(boundedCommandMm) >= 0.5 else { break }
+
+            moveIndex += 1
+            bridge.visualCenterDotStatus = String(format: "VIS SEEK X%+.0f", boundedCommandMm)
+            calibrationStatusText = String(
+                format: "CAL cap reacquire %@: X%+.0f chunk %d",
+                label,
+                boundedCommandMm,
+                moveIndex
+            )
+            guard let response = await moveX(boundedCommandMm, feedMmMin) else {
+                bridge.recordOperatorEvent(
+                    "visual_cap_reacquire_failed",
+                    details: [
+                        "source": source,
+                        "label": label,
+                        "reason": "move_failed",
+                        "move_index": moveIndex,
+                        "command_x_mm": boundedCommandMm,
+                        "total_commanded_x_mm": totalCommandedMm
+                    ]
+                )
+                bridge.visualCenterDotStatus = "VIS SEEK FAIL"
+                calibrationStatusText = "CAL cap reacquire stopped: X move failed"
+                return nil
+            }
+
+            totalCommandedMm += abs(boundedCommandMm)
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                bridge.recordOperatorEvent(
+                    "visual_cap_reacquire_failed",
+                    details: [
+                        "source": source,
+                        "label": label,
+                        "reason": "pin_active",
+                        "pins": pins,
+                        "move_index": moveIndex,
+                        "command_x_mm": boundedCommandMm,
+                        "total_commanded_x_mm": totalCommandedMm
+                    ]
+                )
+                bridge.visualCenterDotStatus = "VIS PIN \(pins)"
+                calibrationStatusText = "CAL cap reacquire stopped: pin active \(pins)"
+                return nil
+            }
+
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            if let observation = await waitForFreshGreenCapPaperObservation(
+                afterFrame: afterFrame,
+                timeoutSeconds: 2.5
+            ) {
+                bridge.recordOperatorEvent(
+                    "visual_cap_reacquired",
+                    details: [
+                        "source": source,
+                        "label": label,
+                        "move_count": moveIndex,
+                        "last_command_x_mm": boundedCommandMm,
+                        "total_commanded_x_mm": totalCommandedMm,
+                        "frame": observation.frameNumber,
+                        "paper_x_mm": observation.paperMm.x,
+                        "paper_y_mm": observation.paperMm.y,
+                        "strength": observation.strength
+                    ]
+                )
+                bridge.visualCenterDotStatus = String(
+                    format: "VIS FOUND X%.1f Y%.1f",
+                    observation.paperMm.x,
+                    observation.paperMm.y
+                )
+                return observation
+            }
+        }
+
+        bridge.recordOperatorEvent(
+            "visual_cap_reacquire_failed",
+            details: [
+                "source": source,
+                "label": label,
+                "reason": "no_cap",
+                "move_count": moveIndex,
+                "total_commanded_x_mm": totalCommandedMm
+            ]
+        )
+        bridge.visualCenterDotStatus = "VIS NO NEW FRAME"
+        calibrationStatusText = "CAL cap reacquire stopped: no fresh cap observation"
+        return nil
+    }
+
+    @MainActor
     private func currentGreenCapPaperObservation() -> GreenCapPaperObservation? {
         guard let marker = plotterCamera.carriageMarker else { return nil }
         let cameraPoint = CGPoint(
@@ -1547,6 +1758,7 @@ struct ContentView: View {
             || status == "VIS SOLVE FAIL"
             || status == "VIS TINY MOVE"
             || status == "VIS WEAK PRED"
+            || status == "VIS SEEK FAIL"
             || status.hasPrefix("VIS BACK")
             || status.hasPrefix("VIS PIN")
     }
@@ -1840,6 +2052,7 @@ struct ContentView: View {
         let feedMmMin = min(300.0, bridge.manualFeedMmMin)
         var goodSegments = 0
         var residualRetries = 0
+        var noNewFrameReacquires = 0
         var adaptiveCommandCapMm = maximumCommandCapMm
         let initialDistance = paperDistance(from: current.paperMm, to: target)
 
@@ -1919,9 +2132,31 @@ struct ContentView: View {
                 afterFrame: before.frameNumber,
                 timeoutSeconds: 4.0
             ), after.frameNumber > before.frameNumber else {
-                bridge.visualCenterDotStatus = "VIS NO NEW FRAME"
-                calibrationStatusText = "CAL visual target stopped: no new cap observation"
-                return nil
+                guard noNewFrameReacquires < visualCapReacquireMaxAttempts,
+                      let recovered = await reacquireGreenCapByXAxis(
+                          afterFrame: before.frameNumber,
+                          source: "visual_target_no_new_frame",
+                          label: label,
+                          preferredDirection: preferredXReacquireDirection(opposingCommandX: commandX),
+                          feedMmMin: min(240.0, bridge.manualFeedMmMin),
+                          moveX: { commandMm, feedMmMin in
+                              await bridge.visualRelativeMove(xMm: commandMm, yMm: 0.0, feedMmMin: feedMmMin)
+                          }
+                      ) else {
+                    bridge.visualCenterDotStatus = "VIS NO NEW FRAME"
+                    calibrationStatusText = "CAL visual target stopped: no new cap observation"
+                    return nil
+                }
+                noNewFrameReacquires += 1
+                adaptiveCommandCapMm = max(minimumCommandCapMm, commandCapMm * 0.5)
+                current = recovered
+                calibrationStatusText = String(
+                    format: "CAL visual %@ reacquired cap; retrying target move from x%.1f y%.1f",
+                    label,
+                    recovered.paperMm.x,
+                    recovered.paperMm.y
+                )
+                continue
             }
 
             let observedDx = after.paperMm.x - before.paperMm.x
@@ -2064,6 +2299,7 @@ struct ContentView: View {
                 model = updatedModel
             }
             goodSegments += 1
+            noNewFrameReacquires = 0
             if commandCapMm < maximumCommandCapMm && residualMm <= residualLimitMm * 0.5 {
                 adaptiveCommandCapMm = min(maximumCommandCapMm, adaptiveCommandCapMm * 1.5)
             }
@@ -2933,8 +3169,7 @@ struct ContentView: View {
         visualMotionSamples = []
         visualCenterDotTaskActive = false
         frameLearning = .idle
-        bridge.clearDotTestOverlay()
-        bridge.visualCenterDotStatus = "VIS --"
+        _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
         calibrationStatusText = "WIZ reset; click FID-BL"
     }
 

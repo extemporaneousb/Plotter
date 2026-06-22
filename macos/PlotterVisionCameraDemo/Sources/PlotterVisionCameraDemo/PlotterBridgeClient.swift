@@ -1198,6 +1198,26 @@ final class PlotterBridgeModel: ObservableObject {
         return runId
     }
 
+    func resetVisualCalibrationSession(prefix: String = "swift-probe") -> String {
+        let runId = startVisualProbeEvidenceRun(prefix: prefix)
+        clearDotTestOverlay()
+        adaptiveProbeStatus = "PROBE --"
+        visualCenterDotStatus = "VIS --"
+        visualBindingStatus = "BIND --"
+        visualBindingDetail = "Run motion probe, preview binding marks, then collect ink observations"
+        visualBindingObservationCount = 0
+        visualBindingValid = false
+        diagnosticsEvent(
+            "visual_calibration_session_reset",
+            [
+                "run_id": runId,
+                "prefix": prefix
+            ],
+            snapshot: true
+        )
+        return runId
+    }
+
     var isMockBridge: Bool {
         bridgeController == "mock"
     }

@@ -80,6 +80,24 @@ def test_wizard_drives_visual_position_binding_loop() -> None:
     assert 'post(path: "calibration/binding/solve"' in client
 
 
+def test_visual_probe_reacquires_cap_before_stopping() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+
+    assert "visualCapReacquireMaxAttempts" in content
+    assert "reacquireGreenCapByXAxis" in content
+    assert "waitForFreshGreenCapPaperObservation" in content
+    assert '"visual_cap_reacquire_started"' in content
+    assert '"visual_cap_reacquired"' in content
+    assert '"visual_target_no_new_frame"' in content
+    assert '"probe_after_move"' in content
+    assert "preferredXReacquireDirection(opposingCommandX: commandX)" in content
+    assert "preferredXReacquireDirection(opposingCommandX: commandDx)" in content
+    assert "resetVisualCalibrationSession(prefix: \"swift-probe\")" in content
+    assert "func resetVisualCalibrationSession" in client
+    assert '"visual_calibration_session_reset"' in client
+
+
 def test_removed_bridge_routes_and_red_detection_support_are_absent() -> None:
     server = _read(ROOT / "plotter_vision" / "bridge" / "server.py")
     paper = _read(ROOT / "plotter_vision" / "calibration" / "paper.py")
