@@ -160,6 +160,34 @@ def test_bridge_contract_requires_api_3_and_gates_build_mismatch() -> None:
     assert "hasLifecycleBuildMismatch { return \"Motion blocked" in model
     assert "guard let rawVersion = cleanBridgeMetadata(bridgeApiVersion)" in model
     assert "return true" in model.split("var hasBridgeApiMismatch", 1)[1].split("var hasBridgeContractMismatch", 1)[0]
+    assert "private func liveMachineCommandBlockReason" in model
+    assert "var canRunLiveRelativeMotionCommand" in model
+    assert "private func liveRelativeMotionBlockReason" in model
+    assert "hasBridgeApiMismatch { return \"Motion blocked" in model.split(
+        "private func liveMachineCommandBlockReason",
+        1,
+    )[1]
+    assert "hasLifecycleBuildMismatch { return \"Motion blocked" in model.split(
+        "private func liveMachineCommandBlockReason",
+        1,
+    )[1]
+    assert "liveMachineCommandBlockReason(allowBusy: allowBusy)" in model.split(
+        "private func liveRelativeMotionBlockReason",
+        1,
+    )[1]
+    assert "guard canRunLiveRelativeMotionCommand else" in model.split(
+        "func visualRelativeMove",
+        1,
+    )[1].split("func dotMarkCurrentPosition", 1)[0]
+    assert "guard canRunLiveRelativeMotionCommand else" in model.split(
+        "func relativeMarkCurrentPosition",
+        1,
+    )[1].split("func stopMachine", 1)[0]
+    assert "if let blockReason = liveMachineCommandBlockReason" in model.split(
+        "private func runMachineCommand",
+        1,
+    )[1]
+    assert '"can_run_visual_relative_motion": canRunLiveRelativeMotionCommand' in model
 
 
 def test_wizard_drives_visual_position_binding_loop() -> None:

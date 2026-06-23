@@ -94,6 +94,10 @@ final class PlotterBridgeModel: ObservableObject {
         isOnline && !isDryRun
     }
 
+    var canRunLiveRelativeMotionCommand: Bool {
+        liveRelativeMotionBlockReason() == nil
+    }
+
     var fastTravelFeedMmMin: Double {
         min(machineMaxFeedMmMin, manualFeedMmMin)
     }
@@ -407,6 +411,41 @@ final class PlotterBridgeModel: ObservableObject {
         return "Live motion enabled"
     }
 
+    private func liveMachineCommandBlockReason(allowBusy: Bool = false) -> String? {
+        if !isOnline { return "Motion blocked: bridge offline" }
+        if hasBridgeApiMismatch { return "Motion blocked: bridge API mismatch; restart safe bridge" }
+        if hasLifecycleBuildMismatch { return "Motion blocked: app/bridge build mismatch; restart both from the same checkout" }
+        if isMockBridge { return "Preview bridge only; start hardware standby to connect" }
+        if !hasControllerPort { return "Controller not connected; connect or arm to auto-detect" }
+        if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
+        if isMachineAlarm { return "Motion blocked: machine alarm" }
+        if !allowBusy && (isMachineBusy || isRunning) { return "Motion busy: \(activeAction)" }
+        return nil
+    }
+
+    private func liveRelativeMotionBlockReason(allowBusy: Bool = false) -> String? {
+        if let blockReason = liveMachineCommandBlockReason(allowBusy: allowBusy) {
+            return blockReason
+        }
+        if !hasPaperLock { return "Visual relative motion blocked: visual field missing" }
+        return nil
+    }
+
+    private func blockLiveRelativeMotionCommand(
+        event: String,
+        details: [String: Any] = [:]
+    ) {
+        let reason = liveRelativeMotionBlockReason(allowBusy: false) ?? motionGateMessage
+        shortStatus = isOnline ? "BLOCK" : "OFF"
+        statusText = reason
+        machineStatus = reason
+        var payload = details
+        payload["reason"] = reason
+        payload["build_mismatch"] = hasLifecycleBuildMismatch
+        payload["api_mismatch"] = hasBridgeApiMismatch
+        diagnosticsEvent(event, payload, snapshot: true)
+    }
+
     var drawPreflightMessage: String {
         if !isOnline { return "Bridge offline" }
         if hasBridgeApiMismatch { return "Bridge API mismatch" }
@@ -570,7 +609,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "can_arm_hardware": canArmHardware,
                 "can_disarm_hardware": canDisarmHardware,
                 "can_run_absolute_drawing": canRunAbsoluteDrawing,
-                "can_run_visual_relative_motion": isLiveMotionMode && hasPaperLock && !bindingMarkPreviewPoints.isEmpty
+                "can_run_visual_relative_motion": canRunLiveRelativeMotionCommand && !bindingMarkPreviewPoints.isEmpty
             ]
         ]
     }
@@ -1799,14 +1838,10 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func learningJog(axis: String, distanceMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
-        guard isLiveMotionMode else {
-            shortStatus = isOnline ? "DRY" : "OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent(
-                "learning_jog_blocked",
-                ["axis": axis, "distance_mm": distanceMm, "reason": motionGateMessage],
-                snapshot: true
+        guard canRunLiveRelativeMotionCommand else {
+            blockLiveRelativeMotionCommand(
+                event: "learning_jog_blocked",
+                details: ["axis": axis, "distance_mm": distanceMm]
             )
             return nil
         }
@@ -1969,11 +2004,11 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func visualRelativeMove(xMm: Double, yMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
-        guard isLiveMotionMode else {
-            shortStatus = isOnline ? "DRY" : "OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent("visual_relative_move_blocked", ["x_mm": xMm, "y_mm": yMm, "reason": motionGateMessage], snapshot: true)
+        guard canRunLiveRelativeMotionCommand else {
+            blockLiveRelativeMotionCommand(
+                event: "visual_relative_move_blocked",
+                details: ["x_mm": xMm, "y_mm": yMm]
+            )
             return nil
         }
 
@@ -2032,11 +2067,8 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func dotMarkCurrentPosition() async -> Bool {
-        guard isLiveMotionMode else {
-            shortStatus = isOnline ? "DRY" : "OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent("dot_mark_blocked", ["reason": motionGateMessage], snapshot: true)
+        guard canRunLiveRelativeMotionCommand else {
+            blockLiveRelativeMotionCommand(event: "dot_mark_blocked")
             return false
         }
 
@@ -2089,11 +2121,11 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func relativeMarkCurrentPosition(markSizeMm: Double, drawFeedMmMin: Double) async -> Bool {
-        guard isLiveMotionMode else {
-            shortStatus = isOnline ? "DRY" : "OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent("relative_mark_blocked", ["reason": motionGateMessage], snapshot: true)
+        guard canRunLiveRelativeMotionCommand else {
+            blockLiveRelativeMotionCommand(
+                event: "relative_mark_blocked",
+                details: ["mark_size_mm": markSizeMm, "draw_feed_mm_min": drawFeedMmMin]
+            )
             return false
         }
 
@@ -2660,11 +2692,20 @@ final class PlotterBridgeModel: ObservableObject {
         action: String,
         operation: () async throws -> MachineCommandResponse
     ) async {
-        guard isLiveMotionMode else {
-            shortStatus = isOnline ? "DRY" : "OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent("machine_command_blocked", ["action": action, "reason": motionGateMessage], snapshot: true)
+        if let blockReason = liveMachineCommandBlockReason(allowBusy: false) {
+            shortStatus = isOnline ? "BLOCK" : "OFF"
+            statusText = blockReason
+            machineStatus = blockReason
+            diagnosticsEvent(
+                "machine_command_blocked",
+                [
+                    "action": action,
+                    "reason": blockReason,
+                    "build_mismatch": hasLifecycleBuildMismatch,
+                    "api_mismatch": hasBridgeApiMismatch
+                ],
+                snapshot: true
+            )
             return
         }
 
