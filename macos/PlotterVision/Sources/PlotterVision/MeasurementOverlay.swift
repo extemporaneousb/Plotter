@@ -6,8 +6,8 @@ struct MeasurementOverlay: View {
     let visualMoveIntent: VisualMoveIntent?
     let motionTracks: [MotionTrack]
     let expectedPathSegments: [ExpectedPathSegment]
-    let dotTestPreviewSegments: [DotTestPreviewSegment]
-    let dotTestPreviewPoints: [DotTestPreviewPoint]
+    let bindingMarkPreviewSegments: [BindingMarkPreviewSegment]
+    let bindingMarkPreviewPoints: [BindingMarkPreviewPoint]
     let paperTransform: PaperRegistrationSnapshot?
     let plotterOverlay: PlotterOverlaySettings
     let pathRevealProgress: Double
@@ -29,7 +29,7 @@ struct MeasurementOverlay: View {
                 drawVisualMoveIntent(registration: paperTransform, mapper: mapper, in: &context)
             }
 
-            drawDotTestPreview(mapper: mapper, in: &context)
+            drawBindingMarkPreview(mapper: mapper, in: &context)
 
             if let carriageMarker {
                 draw(carriageMarker: carriageMarker, mapper: mapper, in: &context)
@@ -227,15 +227,15 @@ struct MeasurementOverlay: View {
         context.draw(label, at: CGPoint(x: point.x + 8, y: point.y - 10), anchor: .leading)
     }
 
-    private func drawDotTestPreview(mapper: OverlayMapper, in context: inout GraphicsContext) {
-        guard !dotTestPreviewSegments.isEmpty || !dotTestPreviewPoints.isEmpty else { return }
+    private func drawBindingMarkPreview(mapper: OverlayMapper, in context: inout GraphicsContext) {
+        guard !bindingMarkPreviewSegments.isEmpty || !bindingMarkPreviewPoints.isEmpty else { return }
 
         let pathColor = Color(red: 0.15, green: 0.95, blue: 1.0)
         let pointColor = Color(red: 1.0, green: 0.18, blue: 0.72)
         var hiddenProjectionCount = 0
 
-        if !dotTestPreviewSegments.isEmpty {
-            for segment in dotTestPreviewSegments {
+        if !bindingMarkPreviewSegments.isEmpty {
+            for segment in bindingMarkPreviewSegments {
                 guard let startNorm = visibleNormalizedPoint(segment.startNorm),
                       let endNorm = visibleNormalizedPoint(segment.endNorm) else {
                     hiddenProjectionCount += 1
@@ -264,7 +264,7 @@ struct MeasurementOverlay: View {
             }
         }
 
-        for point in dotTestPreviewPoints {
+        for point in bindingMarkPreviewPoints {
             guard let cameraNorm = visibleNormalizedPoint(point.cameraNorm) else {
                 hiddenProjectionCount += 1
                 continue
@@ -300,10 +300,10 @@ struct MeasurementOverlay: View {
             context.draw(label, at: CGPoint(x: center.x + 14, y: center.y - 13), anchor: .leading)
         }
 
-        guard showMeasurements, let first = dotTestPreviewPoints.first else { return }
+        guard showMeasurements, let first = bindingMarkPreviewPoints.first else { return }
         let anchor = mapper.point(normalizedPoint(first.cameraNorm))
         let suffix = hiddenProjectionCount > 0 ? String(format: "  HIDDEN:%d", hiddenProjectionCount) : ""
-        let label = Text("DOT PREVIEW\(suffix)")
+        let label = Text("BIND MARKS\(suffix)")
             .font(.system(size: 10, weight: .bold, design: .monospaced))
             .foregroundStyle(pathColor.opacity(0.96))
         context.draw(label, at: CGPoint(x: anchor.x + 14, y: anchor.y + 14), anchor: .leading)
@@ -328,16 +328,34 @@ struct MeasurementOverlay: View {
             x: visualMoveIntent.startPaperMm.x / widthMm,
             y: visualMoveIntent.startPaperMm.y / heightMm
         )
-        let endNorm = CGPoint(
-            x: visualMoveIntent.endPaperMm.x / widthMm,
-            y: visualMoveIntent.endPaperMm.y / heightMm
-        )
-        guard let cameraStart = paperToCameraPoint(startNorm, registration: registration),
-              let cameraEnd = paperToCameraPoint(endNorm, registration: registration) else {
+        guard let cameraStart = paperToCameraPoint(startNorm, registration: registration) else {
             return
         }
 
         let start = mapper.point(cameraStart)
+        guard let endPaperMm = visualMoveIntent.endPaperMm else {
+            context.fill(
+                Path(ellipseIn: CGRect(x: start.x - 8, y: start.y - 8, width: 16, height: 16)),
+                with: .color(.black.opacity(0.82))
+            )
+            context.fill(
+                Path(ellipseIn: CGRect(x: start.x - 5, y: start.y - 5, width: 10, height: 10)),
+                with: .color(.orange.opacity(0.98))
+            )
+            guard showMeasurements else { return }
+            let label = Text("\(visualMoveIntent.label) \(visualMoveIntent.detail)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.orange.opacity(0.98))
+            context.draw(label, at: CGPoint(x: start.x + 14, y: start.y - 12), anchor: .leading)
+            return
+        }
+        let endNorm = CGPoint(
+            x: endPaperMm.x / widthMm,
+            y: endPaperMm.y / heightMm
+        )
+        guard let cameraEnd = paperToCameraPoint(endNorm, registration: registration) else {
+            return
+        }
         let end = mapper.point(cameraEnd)
         var path = Path()
         path.move(to: start)

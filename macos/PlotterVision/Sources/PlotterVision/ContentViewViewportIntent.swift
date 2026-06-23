@@ -49,7 +49,7 @@ extension ContentView {
 
     func setVisualMoveIntent(
         start: PaperPointMmSnapshot,
-        end: PaperPointMmSnapshot,
+        end: PaperPointMmSnapshot?,
         label: String,
         detail: String
     ) {
@@ -59,16 +59,20 @@ extension ContentView {
             label: label,
             detail: detail
         )
+        var details: [String: Any] = [
+            "label": label,
+            "detail": detail,
+            "start_x_mm": start.x,
+            "start_y_mm": start.y,
+            "has_projected_end": end != nil
+        ]
+        if let end {
+            details["end_x_mm"] = end.x
+            details["end_y_mm"] = end.y
+        }
         bridge.recordOperatorEvent(
             "visual_move_intent_set",
-            details: [
-                "label": label,
-                "detail": detail,
-                "start_x_mm": start.x,
-                "start_y_mm": start.y,
-                "end_x_mm": end.x,
-                "end_y_mm": end.y
-            ]
+            details: details
         )
     }
 

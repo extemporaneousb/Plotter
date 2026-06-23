@@ -29,6 +29,7 @@ from plotter_vision.calibration.paper import (
     build_paper_frame_registration,
 )
 from plotter_vision.calibration.binding import (
+    ExpectedGeometrySample,
     ObservedGeometrySample,
     VisualPositionBinding,
     create_visual_position_binding,
@@ -53,7 +54,6 @@ from plotter_vision.calibration.readiness import (
     build_visual_readiness_state,
     evaluate_cap_inside_safe_zone,
 )
-from plotter_vision.calibration.session import build_calibration_session
 from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
     LogicalPointMM,
@@ -76,12 +76,9 @@ from plotter_vision.controller.parser import StatusReport
 from plotter_vision.controller.serial_transport import DEFAULT_BAUD, SerialTransport, list_serial_ports
 from plotter_vision.drawing import (
     CapabilityTestKind,
-    DrawingProgram,
     DrawingFrameMM,
     LuminanceRaster,
-    PaperPointNorm as DrawingPaperPointNorm,
     PlannedPolyline,
-    PointMarkPrimitive,
     PortraitContourOptions,
     PortraitContourSummary,
     RasterContourOptions,
@@ -115,10 +112,9 @@ from plotter_vision.motion.simulator import (
     ShapeGeometryEvaluation,
     DrawnSegment,
     SimulatedPath,
-    simulate_plotter_commands,
 )
 
-DotTestPattern = Literal["center", "five", "nine"]
+BindingMarkPointSet = Literal["five"]
 BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
 BRIDGE_API_VERSION = 3
 BRIDGE_SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -277,16 +273,6 @@ class ShapeExecutionResponse(BaseModel):
     error: str | None = None
 
 
-class CalibrationMarkPlanRequest(BaseModel):
-    margin_mm: float = 25.0
-    mark_size_mm: float = 4.0
-    include_homing: bool = False
-    draw_feed_mm_min: float = 180.0
-    travel_feed_mm_min: float = 500.0
-    max_segment_mm: float = 25.0
-    request_id: str | None = None
-
-
 class PaperRegistrationCornerRequest(BaseModel):
     corner: PaperCorner
     observed_norm: CameraPointNorm
@@ -395,30 +381,23 @@ class VisualProbeSampleObservationResponse(BaseModel):
     error: str | None = None
 
 
-class DotTestPreviewRequest(BaseModel):
-    pattern: DotTestPattern = "center"
-    margin_mm: float = 25.0
-    mark_size_mm: float = 4.0
-    include_homing: bool = False
-    draw_feed_mm_min: float = 180.0
-    travel_feed_mm_min: float = 500.0
+class BindingMarkPreviewRequest(BaseModel):
+    point_set: BindingMarkPointSet = "five"
+    margin_mm: float = 40.0
+    mark_size_mm: float = 6.0
+    draw_feed_mm_min: float = 240.0
+    travel_feed_mm_min: float = 1200.0
     max_segment_mm: float = 25.0
-    park_after: bool = True
-    park_offset_mm: float = 50.0
     request_id: str | None = None
 
 
-class DotTestRunRequest(DotTestPreviewRequest):
-    expected_plan_hash: str | None = None
-
-
-class DotTestPreviewPoint(BaseModel):
+class BindingMarkPreviewPoint(BaseModel):
     point_id: str
     paper_mm: PaperPointMM
     camera_norm: CameraPointNorm
 
 
-class DotTestPreviewSegment(BaseModel):
+class BindingMarkPreviewSegment(BaseModel):
     point_id: str
     start_paper_mm: PaperPointMM
     end_paper_mm: PaperPointMM
@@ -427,32 +406,32 @@ class DotTestPreviewSegment(BaseModel):
     length_mm: float
 
 
-class DotTestPreviewResponse(BaseModel):
+class BindingMarkPreviewResponse(BaseModel):
     command_id: str
     status: str
     dry_run: bool
     preview_only: bool = True
     registration_id: str = ""
-    pattern: DotTestPattern = "center"
+    point_set: BindingMarkPointSet = "five"
     point_count: int = 0
     mark_size_mm: float = 0.0
     plan_hash: str = ""
     planned_commands: list[str] = Field(default_factory=list)
     simulation: SimulatedPath | None = None
-    points: list[DotTestPreviewPoint] = Field(default_factory=list)
-    camera_segments: list[DotTestPreviewSegment] = Field(default_factory=list)
+    points: list[BindingMarkPreviewPoint] = Field(default_factory=list)
+    camera_segments: list[BindingMarkPreviewSegment] = Field(default_factory=list)
     event_log: str
     error: str | None = None
 
 
 @dataclass(frozen=True)
-class DotTestPlanBundle:
+class BindingMarkPreviewBundle:
     machine: MachineConfig
     registration: PaperFrameRegistration
     plan: PolygonDrawPlan
     points: list[tuple[str, PaperPointMM]]
-    camera_points: list[DotTestPreviewPoint]
-    camera_segments: list[DotTestPreviewSegment]
+    camera_points: list[BindingMarkPreviewPoint]
+    camera_segments: list[BindingMarkPreviewSegment]
     plan_hash: str
 
 
@@ -590,22 +569,6 @@ class CapabilityTestResponse(PolygonDrawResponse):
     label: str = ""
     residual_roles: list[str] = Field(default_factory=list)
     plan_hash: str = ""
-
-
-class CalibrationMarkPlanResponse(BaseModel):
-    command_id: str
-    status: str
-    dry_run: bool
-    preview_only: bool = False
-    waypoints: list[dict[str, Any]]
-    planned_commands: list[str]
-    simulation: SimulatedPath | None = None
-    summary: PolygonDrawPlanSummary | None = None
-    preview_overlay: PreviewOverlay | None = None
-    event_log: str
-    controller_transcript: str | None = None
-    machine_status: MachineStatusResponse | None = None
-    error: str | None = None
 
 
 class MachineActionRequest(BaseModel):
@@ -1279,7 +1242,7 @@ class PlotterBridge:
                 error=str(exc),
             )
 
-    def preview_polygon(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
+    def preview_draw_program(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
         command_id = request.request_id or f"draw-preview-{uuid.uuid4().hex[:12]}"
 
         try:
@@ -1296,7 +1259,7 @@ class PlotterBridge:
                 machine=machine,
             )
             self.event_log.emit(
-                "draw.polygon_preview_ready",
+                "draw.program_preview_ready",
                 command_id=command_id,
                 status="ready",
                 payload={
@@ -1320,7 +1283,7 @@ class PlotterBridge:
             )
         except Exception as exc:
             self.event_log.emit(
-                "draw.polygon_preview_failed",
+                "draw.program_preview_failed",
                 command_id=command_id,
                 status="failed",
                 payload={"error": str(exc), "preview_only": True},
@@ -1416,7 +1379,7 @@ class PlotterBridge:
                 error=str(exc),
             )
 
-    def draw_polygon(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
+    def draw_program(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
         command_id = request.request_id or f"draw-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
 
@@ -1438,7 +1401,7 @@ class PlotterBridge:
                 machine=machine,
             )
             self.event_log.emit(
-                "draw.polygon_started",
+                "draw.program_started",
                 command_id=command_id,
                 status="running",
                 payload={
@@ -1449,14 +1412,14 @@ class PlotterBridge:
                 },
             )
             machine_response = self._run_machine_action(
-                action="draw_polygon",
+                action="draw_program",
                 command_id=command_id,
                 planned_commands=plan.planned_commands,
                 transcript_path=transcript_path,
             )
             if machine_response.status == "completed":
                 self.event_log.emit(
-                    "draw.polygon_completed",
+                    "draw.program_completed",
                     command_id=command_id,
                     status="completed",
                     payload={
@@ -1467,19 +1430,19 @@ class PlotterBridge:
                 )
             else:
                 self.event_log.emit(
-                    "draw.polygon_failed",
+                    "draw.program_failed",
                     command_id=command_id,
                     status="failed",
                     payload={"error": machine_response.error},
                 )
-            return self._polygon_draw_response(
+            return self._draw_program_response(
                 plan=plan,
                 machine_response=machine_response,
                 preview_overlay=preview_overlay,
             )
         except Exception as exc:
             self.event_log.emit(
-                "draw.polygon_failed",
+                "draw.program_failed",
                 command_id=command_id,
                 status="failed",
                 payload={"error": str(exc)},
@@ -1601,7 +1564,7 @@ class PlotterBridge:
                     "dry_run": self.config.dry_run,
                 },
             )
-            polygon_response = self.draw_polygon(
+            polygon_response = self.draw_program(
                 PolygonDrawRequest(
                     program=program,
                     frame=request.frame,
@@ -1794,7 +1757,7 @@ class PlotterBridge:
                 },
             )
             return CapabilityTestResponse(
-                **self._polygon_draw_response(
+                **self._draw_program_response(
                     plan=plan,
                     machine_response=machine_response,
                     preview_overlay=preview_overlay,
@@ -1818,141 +1781,6 @@ class PlotterBridge:
                 dry_run=self.config.dry_run,
                 preview_only=False,
                 kind=request.kind,
-                planned_commands=[],
-                simulation=locals().get("plan").simulation if "plan" in locals() else None,
-                summary=locals().get("plan").summary if "plan" in locals() else None,
-                preview_overlay=locals().get("preview_overlay"),
-                event_log=str(self.config.event_log_path),
-                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
-                error=str(exc),
-            )
-
-    def preview_calibration_marks(
-        self,
-        request: CalibrationMarkPlanRequest,
-    ) -> CalibrationMarkPlanResponse:
-        command_id = request.request_id or f"cal-preview-{uuid.uuid4().hex[:12]}"
-        try:
-            plan, waypoints = self._build_calibration_mark_plan(
-                request=request,
-                command_id=command_id,
-                safety=SafetyState(dry_run=True),
-            )
-            preview_overlay = self._preview_overlay_for_simulation(
-                command_id=command_id,
-                simulation=plan.simulation,
-                machine=self._load_machine_config(),
-            )
-            self.event_log.emit(
-                "calibration.mark_preview_ready",
-                command_id=command_id,
-                status="ready",
-                payload={
-                    "waypoint_count": len(waypoints),
-                    "draw_segment_count": plan.summary.draw_segment_count,
-                    "dry_run": True,
-                    "preview_only": True,
-                },
-            )
-            return CalibrationMarkPlanResponse(
-                command_id=command_id,
-                status="ready",
-                dry_run=True,
-                preview_only=True,
-                waypoints=[waypoint.model_dump(mode="json") for waypoint in waypoints],
-                planned_commands=plan.command_strings,
-                simulation=plan.simulation,
-                summary=plan.summary,
-                preview_overlay=preview_overlay,
-                event_log=str(self.config.event_log_path),
-                controller_transcript=None,
-            )
-        except Exception as exc:
-            self.event_log.emit(
-                "calibration.mark_preview_failed",
-                command_id=command_id,
-                status="failed",
-                payload={"error": str(exc), "preview_only": True},
-            )
-            return CalibrationMarkPlanResponse(
-                command_id=command_id,
-                status="failed",
-                dry_run=True,
-                preview_only=True,
-                waypoints=[],
-                planned_commands=[],
-                simulation=locals().get("plan").simulation if "plan" in locals() else None,
-                summary=locals().get("plan").summary if "plan" in locals() else None,
-                preview_overlay=locals().get("preview_overlay"),
-                event_log=str(self.config.event_log_path),
-                controller_transcript=None,
-                error=str(exc),
-            )
-
-    def run_calibration_marks(
-        self,
-        request: CalibrationMarkPlanRequest,
-    ) -> CalibrationMarkPlanResponse:
-        command_id = request.request_id or f"cal-run-{uuid.uuid4().hex[:12]}"
-        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
-        try:
-            machine = self._load_machine_config()
-            self._require_axis_model_trusted(machine)
-            plan, waypoints = self._build_calibration_mark_plan(
-                request=request,
-                command_id=command_id,
-                safety=self._safety_state(),
-                machine=machine,
-            )
-            preview_overlay = self._preview_overlay_for_simulation(
-                command_id=command_id,
-                simulation=plan.simulation,
-                machine=machine,
-            )
-            machine_response = self._run_machine_action(
-                action="calibration_marks",
-                command_id=command_id,
-                planned_commands=plan.planned_commands,
-                transcript_path=transcript_path,
-            )
-            self.event_log.emit(
-                (
-                    "calibration.mark_run_completed"
-                    if machine_response.status == "completed"
-                    else "calibration.mark_run_failed"
-                ),
-                command_id=command_id,
-                status=machine_response.status,
-                payload={
-                    "waypoint_count": len(waypoints),
-                    "draw_segment_count": plan.summary.draw_segment_count,
-                    "dry_run": machine_response.dry_run,
-                    "transcript": machine_response.controller_transcript,
-                    "error": machine_response.error,
-                },
-            )
-            return CalibrationMarkPlanResponse(
-                command_id=command_id,
-                status=machine_response.status,
-                dry_run=plan.dry_run,
-                preview_only=False,
-                waypoints=[waypoint.model_dump(mode="json") for waypoint in waypoints],
-                planned_commands=plan.command_strings,
-                simulation=plan.simulation,
-                summary=plan.summary,
-                preview_overlay=preview_overlay,
-                event_log=str(self.config.event_log_path),
-                controller_transcript=machine_response.controller_transcript,
-                machine_status=machine_response.machine_status,
-                error=machine_response.error,
-            )
-        except Exception as exc:
-            return CalibrationMarkPlanResponse(
-                command_id=command_id,
-                status="failed",
-                dry_run=self.config.dry_run,
-                preview_only=False,
-                waypoints=[],
                 planned_commands=[],
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
@@ -2370,127 +2198,95 @@ class PlotterBridge:
                 error=str(exc),
             )
 
-    def preview_dot_test(self, request: DotTestPreviewRequest) -> DotTestPreviewResponse:
-        command_id = request.request_id or f"dot-preview-{uuid.uuid4().hex[:12]}"
+    def preview_binding_marks(
+        self,
+        request: BindingMarkPreviewRequest,
+    ) -> BindingMarkPreviewResponse:
+        command_id = request.request_id or f"binding-preview-{uuid.uuid4().hex[:12]}"
         try:
-            dot_plan = self._build_dot_test_plan(
+            mark_plan = self._build_binding_mark_preview(
                 request=request,
                 command_id=command_id,
                 safety=SafetyState(dry_run=True),
             )
-            response = DotTestPreviewResponse(
+            binding = self._load_or_create_visual_position_binding(
+                registration=mark_plan.registration
+            )
+            binding = upsert_expected_geometry(
+                binding,
+                _binding_mark_expected_geometry(
+                    command_id=command_id,
+                    points=mark_plan.camera_points,
+                ),
+            )
+            self._save_visual_position_binding(binding)
+            response = BindingMarkPreviewResponse(
                 command_id=command_id,
                 status="ready",
                 dry_run=True,
-                registration_id=dot_plan.registration.registration_id,
-                pattern=request.pattern,
-                point_count=len(dot_plan.points),
+                registration_id=mark_plan.registration.registration_id,
+                point_set=request.point_set,
+                point_count=len(mark_plan.points),
                 mark_size_mm=request.mark_size_mm,
-                plan_hash=dot_plan.plan_hash,
-                planned_commands=dot_plan.plan.command_strings,
-                simulation=dot_plan.plan.simulation,
-                points=dot_plan.camera_points,
-                camera_segments=dot_plan.camera_segments,
+                plan_hash=mark_plan.plan_hash,
+                planned_commands=mark_plan.plan.command_strings,
+                simulation=mark_plan.plan.simulation,
+                points=mark_plan.camera_points,
+                camera_segments=mark_plan.camera_segments,
                 event_log=str(self.config.event_log_path),
             )
             self.event_log.emit(
-                "dot_test.preview_ready",
+                "calibration.binding_preview_ready",
                 command_id=command_id,
                 status="ready",
                 payload={
-                    "registration_id": dot_plan.registration.registration_id,
-                    "pattern": request.pattern,
-                    "point_count": len(dot_plan.points),
-                    "camera_segment_count": len(dot_plan.camera_segments),
-                    "plan_hash": dot_plan.plan_hash,
+                    "registration_id": mark_plan.registration.registration_id,
+                    "point_set": request.point_set,
+                    "point_count": len(mark_plan.points),
+                    "camera_segment_count": len(mark_plan.camera_segments),
+                    "plan_hash": mark_plan.plan_hash,
                     "preview_only": True,
                 },
             )
             return response
         except Exception as exc:
             self.event_log.emit(
-                "dot_test.preview_failed",
+                "calibration.binding_preview_failed",
                 command_id=command_id,
                 status="failed",
                 payload={"error": str(exc), "preview_only": True},
             )
-            return DotTestPreviewResponse(
+            return BindingMarkPreviewResponse(
                 command_id=command_id,
                 status="failed",
                 dry_run=True,
-                pattern=request.pattern,
+                point_set=request.point_set,
                 event_log=str(self.config.event_log_path),
                 error=str(exc),
             )
 
-    def run_dot_test(self, request: DotTestRunRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"dot-run-{uuid.uuid4().hex[:12]}"
-        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
-        try:
-            if request.pattern != "center":
-                raise MotionSafetyError("Real dot-test motion currently supports only center pattern.")
-
-            dot_plan = self._build_dot_test_plan(
-                request=request,
-                command_id=command_id,
-                safety=self._safety_state(),
-            )
-            self._require_axis_model_trusted(dot_plan.machine)
-            if request.expected_plan_hash and request.expected_plan_hash != dot_plan.plan_hash:
-                raise MotionSafetyError(
-                    "Dot-test plan changed after preview; preview the center dot again before motion."
-                )
-
-            response = self._run_machine_action(
-                action="dot_test_center",
-                command_id=command_id,
-                planned_commands=dot_plan.plan.planned_commands,
-                transcript_path=transcript_path,
-            )
-            self.event_log.emit(
-                "dot_test.run_completed" if response.status == "completed" else "dot_test.run_failed",
-                command_id=command_id,
-                status=response.status,
-                payload={
-                    "registration_id": dot_plan.registration.registration_id,
-                    "pattern": request.pattern,
-                    "point_count": len(dot_plan.points),
-                    "plan_hash": dot_plan.plan_hash,
-                    "dry_run": response.dry_run,
-                    "error": response.error,
-                },
-            )
-            return response
-        except Exception as exc:
-            return self._machine_command_error(
-                action="dot_test_center",
-                command_id=command_id,
-                transcript_path=transcript_path,
-                error=str(exc),
-            )
-
-    def _build_dot_test_plan(
+    def _build_binding_mark_preview(
         self,
         *,
-        request: DotTestPreviewRequest,
+        request: BindingMarkPreviewRequest,
         command_id: str,
         safety: SafetyState,
-    ) -> DotTestPlanBundle:
+    ) -> BindingMarkPreviewBundle:
         machine = self._load_machine_config()
         registration = self._load_latest_paper_registration()
-        points = _dot_test_points(
+        points = _binding_mark_points(
             registration=registration,
-            pattern=request.pattern,
+            point_set=request.point_set,
             margin_mm=request.margin_mm,
         )
-        polylines, segment_point_ids = _dot_test_polylines(
+        polylines, segment_point_ids = _binding_mark_polylines(
             points=points,
             mark_size_mm=request.mark_size_mm,
         )
         plan = build_polygon_draw_plan(
             request=PolygonDrawRequest(
                 polylines=polylines,
-                include_homing=request.include_homing,
+                include_homing=False,
                 visual_position_trusted=self._visual_ready_to_plot(),
                 draw_feed_mm_min=request.draw_feed_mm_min,
                 travel_feed_mm_min=request.travel_feed_mm_min,
@@ -2501,18 +2297,10 @@ class PlotterBridge:
             safety=safety,
             command_id=command_id,
         )
-        if request.park_after:
-            _append_dot_test_park_commands(
-                plan=plan,
-                machine=machine,
-                point=points[0][1],
-                travel_feed_mm_min=request.travel_feed_mm_min,
-                park_offset_mm=request.park_offset_mm,
-            )
-        _validate_dot_test_simulation(plan=plan, segment_point_ids=segment_point_ids)
+        _validate_binding_mark_simulation(plan=plan, segment_point_ids=segment_point_ids)
 
         camera_points = [
-            DotTestPreviewPoint(
+            BindingMarkPreviewPoint(
                 point_id=point_id,
                 paper_mm=paper_mm,
                 camera_norm=_project_paper_mm_to_camera_norm(
@@ -2531,7 +2319,7 @@ class PlotterBridge:
             )
             for segment, point_id in zip(plan.simulation.drawn_segments, segment_point_ids)
         ]
-        return DotTestPlanBundle(
+        return BindingMarkPreviewBundle(
             machine=machine,
             registration=registration,
             plan=plan,
@@ -3408,51 +3196,6 @@ class PlotterBridge:
             seen.add(key)
             merged.append(record)
         return merged[-100:]
-
-    def _build_calibration_mark_plan(
-        self,
-        *,
-        request: CalibrationMarkPlanRequest,
-        command_id: str,
-        safety: SafetyState,
-        machine: MachineConfig | None = None,
-    ) -> tuple[PolygonDrawPlan, list[Any]]:
-        active_machine = machine or self._load_machine_config()
-        session = build_calibration_session(
-            machine=active_machine,
-            margin_mm=request.margin_mm,
-            travel_feed_mm_min=request.travel_feed_mm_min,
-            include_homing=request.include_homing,
-        )
-        point_marks = []
-        for waypoint in session.waypoints:
-            if waypoint.paper_norm is None:
-                raise MotionSafetyError("Calibration waypoint has no normalized paper position.")
-            point_marks.append(
-                PointMarkPrimitive(
-                    center=DrawingPaperPointNorm(
-                        x=waypoint.paper_norm.x,
-                        y=waypoint.paper_norm.y,
-                    ),
-                    mark_size_mm=request.mark_size_mm,
-                )
-            )
-
-        plan = build_polygon_draw_plan(
-            request=PolygonDrawRequest(
-                program=DrawingProgram(point_marks=point_marks),
-                include_homing=request.include_homing,
-                visual_position_trusted=self._visual_ready_to_plot(),
-                draw_feed_mm_min=request.draw_feed_mm_min,
-                travel_feed_mm_min=request.travel_feed_mm_min,
-                max_segment_mm=request.max_segment_mm,
-                request_id=command_id,
-            ),
-            machine=active_machine,
-            safety=safety,
-            command_id=command_id,
-        )
-        return plan, list(session.waypoints)
 
     def _preview_overlay_for_simulation(
         self,
@@ -4636,7 +4379,7 @@ class PlotterBridge:
             controller_transcript=str(transcript_path) if transcript_path else None,
         )
 
-    def _polygon_draw_response(
+    def _draw_program_response(
         self,
         *,
         plan: PolygonDrawPlan,
@@ -4720,61 +4463,44 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def _dot_test_points(
+def _binding_mark_points(
     *,
     registration: PaperFrameRegistration,
-    pattern: DotTestPattern,
+    point_set: BindingMarkPointSet,
     margin_mm: float,
 ) -> list[tuple[str, PaperPointMM]]:
     width = registration.paper_size_mm.width
     height = registration.paper_size_mm.height
     if margin_mm < 0:
-        raise ValueError("Dot-test margin_mm must be non-negative.")
-    if pattern != "center" and (margin_mm * 2 >= width or margin_mm * 2 >= height):
-        raise ValueError("Dot-test margin_mm leaves no drawable paper area.")
+        raise ValueError("Binding mark margin_mm must be non-negative.")
+    if margin_mm * 2 >= width or margin_mm * 2 >= height:
+        raise ValueError("Binding mark margin_mm leaves no drawable paper area.")
+    if point_set != "five":
+        raise ValueError("Binding mark preview supports only the five-point set.")
 
     center = PaperPointMM(x=width / 2.0, y=height / 2.0)
-    if pattern == "center":
-        return [("P01", center)]
-
     left = margin_mm
     right = width - margin_mm
     bottom = margin_mm
     top = height - margin_mm
-    mid_x = width / 2.0
-    mid_y = height / 2.0
-
-    if pattern == "five":
-        points = [
-            center,
-            PaperPointMM(x=left, y=bottom),
-            PaperPointMM(x=right, y=bottom),
-            PaperPointMM(x=right, y=top),
-            PaperPointMM(x=left, y=top),
-        ]
-    else:
-        points = [
-            center,
-            PaperPointMM(x=left, y=bottom),
-            PaperPointMM(x=mid_x, y=bottom),
-            PaperPointMM(x=right, y=bottom),
-            PaperPointMM(x=right, y=mid_y),
-            PaperPointMM(x=right, y=top),
-            PaperPointMM(x=mid_x, y=top),
-            PaperPointMM(x=left, y=top),
-            PaperPointMM(x=left, y=mid_y),
-        ]
+    points = [
+        center,
+        PaperPointMM(x=left, y=bottom),
+        PaperPointMM(x=right, y=bottom),
+        PaperPointMM(x=right, y=top),
+        PaperPointMM(x=left, y=top),
+    ]
 
     return [(f"P{index:02d}", point) for index, point in enumerate(points, start=1)]
 
 
-def _dot_test_polylines(
+def _binding_mark_polylines(
     *,
     points: list[tuple[str, PaperPointMM]],
     mark_size_mm: float,
 ) -> tuple[list[PlannedPolyline], list[str]]:
     if mark_size_mm <= 0:
-        raise ValueError("Dot-test mark_size_mm must be positive.")
+        raise ValueError("Binding mark_size_mm must be positive.")
 
     half = mark_size_mm / 2.0
     polylines: list[PlannedPolyline] = []
@@ -4798,6 +4524,24 @@ def _dot_test_polylines(
         segment_point_ids.extend([point_id, point_id])
 
     return polylines, segment_point_ids
+
+
+def _binding_mark_expected_geometry(
+    *,
+    command_id: str,
+    points: list[BindingMarkPreviewPoint],
+) -> list[ExpectedGeometrySample]:
+    return [
+        ExpectedGeometrySample(
+            command_id=command_id,
+            point_id=point.point_id,
+            segment_index=index,
+            role="segment_midpoint",
+            expected_paper_mm=point.paper_mm,
+            expected_camera_norm=point.camera_norm,
+        )
+        for index, point in enumerate(points)
+    ]
 
 
 def _relative_cross_mark_commands(
@@ -4907,88 +4651,18 @@ def _relative_cross_mark_commands(
     return commands
 
 
-def _append_dot_test_park_commands(
-    *,
-    plan: PolygonDrawPlan,
-    machine: MachineConfig,
-    point: PaperPointMM,
-    travel_feed_mm_min: float,
-    park_offset_mm: float,
-) -> None:
-    if park_offset_mm < 0 or park_offset_mm > 100:
-        raise MotionSafetyError("Dot-test park_offset_mm must be between 0 and 100 mm.")
-
-    park_x, park_y = _dot_test_park_point(
-        machine=machine,
-        point=point,
-        offset_mm=park_offset_mm,
-    )
-    validate_workspace_point(x_mm=park_x, y_mm=park_y, machine=machine)
-    machine_x, machine_y = machine.logical_to_machine(x_mm=park_x, y_mm=park_y)
-    plan.planned_commands.extend(
-        [
-            PlannedCommand(
-                command=f"G1 F{format_mm(travel_feed_mm_min)}",
-                kind="motion",
-                description="Set observation park feed",
-            ),
-            PlannedCommand(
-                command=(
-                    f"G53 G1 X{format_mm(_zero_near(machine_x))} "
-                    f"Y{format_mm(_zero_near(machine_y))}"
-                ),
-                kind="motion",
-                description="Park pen away from dot-test mark",
-            ),
-        ]
-    )
-    plan.summary.command_count = len(plan.planned_commands)
-    plan.simulation = simulate_plotter_commands(
-        plan.command_strings,
-        machine=machine,
-        pen_up_command=machine.pen.up_command,
-        pen_down_command=machine.pen.down_command,
-    )
-
-
-def _dot_test_park_point(
-    *,
-    machine: MachineConfig,
-    point: PaperPointMM,
-    offset_mm: float,
-) -> tuple[float, float]:
-    if offset_mm <= 1e-9:
-        return (point.x, point.y)
-
-    right_x = point.x + offset_mm
-    left_x = point.x - offset_mm
-    if right_x <= machine.workspace.x_max:
-        return (right_x, point.y)
-    if left_x >= machine.workspace.x_min:
-        return (left_x, point.y)
-
-    up_y = point.y + offset_mm
-    down_y = point.y - offset_mm
-    if up_y <= machine.workspace.y_max:
-        return (point.x, up_y)
-    if down_y >= machine.workspace.y_min:
-        return (point.x, down_y)
-
-    return (point.x, point.y)
-
-
-def _validate_dot_test_simulation(
+def _validate_binding_mark_simulation(
     *,
     plan: PolygonDrawPlan,
     segment_point_ids: list[str],
 ) -> None:
     if plan.simulation.status != "ok":
         raise MotionSafetyError(
-            "Dot-test simulation failed: " + "; ".join(plan.simulation.errors)
+            "Binding mark simulation failed: " + "; ".join(plan.simulation.errors)
         )
     if len(plan.simulation.drawn_segments) != len(segment_point_ids):
         raise MotionSafetyError(
-            "Dot-test simulation did not preserve one segment per planned mark leg."
+            "Binding mark simulation did not preserve one segment per planned mark leg."
         )
 
 
@@ -4998,7 +4672,7 @@ def _project_drawn_segment_to_camera(
     point_id: str,
     machine: MachineConfig,
     registration: PaperFrameRegistration,
-) -> DotTestPreviewSegment:
+) -> BindingMarkPreviewSegment:
     start_paper = PaperPointMM(
         x=machine.axes.x.machine_to_logical(segment.start.x),
         y=machine.axes.y.machine_to_logical(segment.start.y),
@@ -5007,7 +4681,7 @@ def _project_drawn_segment_to_camera(
         x=machine.axes.x.machine_to_logical(segment.end.x),
         y=machine.axes.y.machine_to_logical(segment.end.y),
     )
-    return DotTestPreviewSegment(
+    return BindingMarkPreviewSegment(
         point_id=point_id,
         start_paper_mm=start_paper,
         end_paper_mm=end_paper,
@@ -5192,14 +4866,14 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.draw_shape,
             lambda response: getattr(response, "status", "") == "completed",
         ),
-        "/draw/polygon/preview": PostRoute(
+        "/draw/program/preview": PostRoute(
             PolygonDrawRequest,
-            bridge.preview_polygon,
+            bridge.preview_draw_program,
             lambda response: getattr(response, "status", "") == "ready",
         ),
-        "/draw/polygon": PostRoute(
+        "/draw/program": PostRoute(
             PolygonDrawRequest,
-            bridge.draw_polygon,
+            bridge.draw_program,
             lambda response: getattr(response, "status", "") == "completed",
         ),
         "/draw/image/preview": PostRoute(
@@ -5307,20 +4981,15 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.unlock_machine,
             lambda response: getattr(response, "status", "") == "completed",
         ),
-        "/calibration/preview": PostRoute(
-            CalibrationMarkPlanRequest,
-            bridge.preview_calibration_marks,
-            lambda response: getattr(response, "status", "") == "ready",
-        ),
-        "/calibration/run": PostRoute(
-            CalibrationMarkPlanRequest,
-            bridge.run_calibration_marks,
-            lambda response: getattr(response, "status", "") == "completed",
-        ),
         "/calibration/pen/observe": PostRoute(
             VisualCapObservationRequest,
             bridge.observe_visual_cap,
             lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/calibration/binding/preview": PostRoute(
+            BindingMarkPreviewRequest,
+            bridge.preview_binding_marks,
+            lambda response: getattr(response, "status", "") == "ready",
         ),
         "/calibration/binding/observe": PostRoute(
             VisualBindingObservationRequest,
@@ -5341,16 +5010,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             PaperRegistrationRequest,
             bridge.register_paper,
             lambda response: getattr(response, "status", "") != "failed",
-        ),
-        "/dot-test/preview": PostRoute(
-            DotTestPreviewRequest,
-            bridge.preview_dot_test,
-            lambda response: getattr(response, "status", "") == "ready",
-        ),
-        "/dot-test/run": PostRoute(
-            DotTestRunRequest,
-            bridge.run_dot_test,
-            lambda response: getattr(response, "status", "") == "completed",
         ),
     }
 

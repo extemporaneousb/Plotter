@@ -10,6 +10,9 @@ class MotionSafetyError(ValueError):
     """Raised when a motion request does not satisfy configured safety gates."""
 
 
+WORKSPACE_PROJECTION_EPSILON_MM = 0.01
+
+
 def validate_jog_request(
     *,
     axis: str,
@@ -266,6 +269,8 @@ def _validate_projected_axis(
     command: str,
 ) -> None:
     if minimum <= value <= maximum:
+        return
+    if minimum - WORKSPACE_PROJECTION_EPSILON_MM <= value <= maximum + WORKSPACE_PROJECTION_EPSILON_MM:
         return
     raise MotionSafetyError(
         f"Projected {axis} position {value:.3f} mm for {command!r} is outside workspace "

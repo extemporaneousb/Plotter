@@ -302,7 +302,7 @@ struct BridgeDrawingProgramRequest: Encodable {
     let polylines: [BridgePolylinePrimitiveRequest]
 }
 
-struct BridgePolygonDrawRequest: Encodable {
+struct BridgeDrawProgramRequest: Encodable {
     let program: BridgeDrawingProgramRequest
     let frame: BridgeDrawingFrameRequest?
     let includeHoming: Bool
@@ -380,7 +380,7 @@ struct BridgePortraitContourPreviewRequest: Encodable {
     let maxSegmentMm: Double
 }
 
-struct BridgePolygonDrawSummary: Decodable {
+struct BridgeDrawProgramSummary: Decodable {
     let coordinateFrame: String
     let polylineCount: Int
     let outlinePolylineCount: Int
@@ -438,7 +438,7 @@ struct BridgeFaceRasterDrawResponse: Decodable {
     let dryRun: Bool
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let summary: BridgePolygonDrawSummary?
+    let summary: BridgeDrawProgramSummary?
     let rasterSummary: BridgeRasterPolygonSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
@@ -447,13 +447,13 @@ struct BridgeFaceRasterDrawResponse: Decodable {
     let error: String?
 }
 
-struct BridgePolygonDrawResponse: Decodable {
+struct BridgeDrawProgramResponse: Decodable {
     let commandId: String
     let status: String
     let dryRun: Bool
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let summary: BridgePolygonDrawSummary?
+    let summary: BridgeDrawProgramSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
@@ -469,7 +469,7 @@ struct BridgeImageShapePreviewResponse: Decodable {
     let eligibleForBridgePreview: Bool
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let summary: BridgePolygonDrawSummary?
+    let summary: BridgeDrawProgramSummary?
     let rasterSummary: BridgeRasterContourSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
@@ -485,7 +485,7 @@ struct BridgePortraitContourPreviewResponse: Decodable {
     let eligibleForBridgePreview: Bool
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let summary: BridgePolygonDrawSummary?
+    let summary: BridgeDrawProgramSummary?
     let portraitSummary: BridgePortraitContourSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
@@ -515,7 +515,7 @@ struct BridgeCapabilityTestResponse: Decodable {
     let planHash: String
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let summary: BridgePolygonDrawSummary?
+    let summary: BridgeDrawProgramSummary?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?
@@ -562,52 +562,40 @@ struct HomographySnapshot: Decodable {
     let coefficients: [Double]
 }
 
-struct DotTestPreviewRequest: Encodable {
-    let pattern: String
+struct BindingMarkPreviewRequest: Encodable {
+    let pointSet: String
     let marginMm: Double
     let markSizeMm: Double
-    let includeHoming: Bool
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
 }
 
-struct DotTestRunRequest: Encodable {
-    let pattern: String
-    let marginMm: Double
-    let markSizeMm: Double
-    let includeHoming: Bool
-    let drawFeedMmMin: Double
-    let travelFeedMmMin: Double
-    let maxSegmentMm: Double
-    let expectedPlanHash: String
-}
-
-struct DotTestPreviewResponse: Decodable {
+struct BindingMarkPreviewResponse: Decodable {
     let commandId: String
     let status: String
     let dryRun: Bool
     let previewOnly: Bool
     let registrationId: String
-    let pattern: String
+    let pointSet: String
     let pointCount: Int
     let markSizeMm: Double
     let planHash: String
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
-    let points: [DotTestPreviewPoint]
-    let cameraSegments: [DotTestPreviewSegment]
+    let points: [BindingMarkPreviewPoint]
+    let cameraSegments: [BindingMarkPreviewSegment]
     let eventLog: String
     let error: String?
 }
 
-struct DotTestPreviewPoint: Decodable, Equatable {
+struct BindingMarkPreviewPoint: Decodable, Equatable {
     let pointId: String
     let paperMm: PaperPointMmSnapshot
     let cameraNorm: NormPoint
 }
 
-struct DotTestPreviewSegment: Decodable, Equatable {
+struct BindingMarkPreviewSegment: Decodable, Equatable {
     let pointId: String
     let startPaperMm: PaperPointMmSnapshot
     let endPaperMm: PaperPointMmSnapshot
@@ -933,8 +921,8 @@ final class PlotterBridgeClient {
         try await post(path: "draw/shape/preview", request: request)
     }
 
-    func drawPolygon(_ request: BridgePolygonDrawRequest) async throws -> BridgePolygonDrawResponse {
-        try await post(path: "draw/polygon", request: request)
+    func drawProgram(_ request: BridgeDrawProgramRequest) async throws -> BridgeDrawProgramResponse {
+        try await post(path: "draw/program", request: request)
     }
 
     func drawFaceRaster(_ request: BridgeFaceRasterDrawRequest) async throws -> BridgeFaceRasterDrawResponse {
@@ -984,12 +972,8 @@ final class PlotterBridgeClient {
         return try decoder.decode(PaperRegistrationResponse.self, from: data)
     }
 
-    func previewDotTest(_ request: DotTestPreviewRequest) async throws -> DotTestPreviewResponse {
-        try await post(path: "dot-test/preview", request: request)
-    }
-
-    func runDotTest(_ request: DotTestRunRequest) async throws -> MachineCommandResponse {
-        try await postMachineCommand(path: "dot-test/run", request: request)
+    func previewBindingMarks(_ request: BindingMarkPreviewRequest) async throws -> BindingMarkPreviewResponse {
+        try await post(path: "calibration/binding/preview", request: request)
     }
 
     func machineStatus() async throws -> MachineStatusResponse {
@@ -1132,7 +1116,7 @@ final class PlotterBridgeClient {
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }
-            if let failure = try? decoder.decode(DotTestPreviewResponse.self, from: data),
+            if let failure = try? decoder.decode(BindingMarkPreviewResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }

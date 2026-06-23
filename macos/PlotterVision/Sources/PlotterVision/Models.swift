@@ -173,7 +173,7 @@ struct ConfirmedCapPoint: Identifiable, Equatable {
 struct VisualMoveIntent: Identifiable, Equatable {
     let id = UUID()
     var startPaperMm: PaperPointMmSnapshot
-    var endPaperMm: PaperPointMmSnapshot
+    var endPaperMm: PaperPointMmSnapshot?
     var label: String
     var detail: String
 }

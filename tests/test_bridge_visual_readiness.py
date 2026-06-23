@@ -224,12 +224,8 @@ def test_durable_cap_probe_evidence_does_not_unlock_absolute_drawing(
         assert status["readiness"]["visual_ready_to_plot"] is True
 
         status_code, drawing = client.post(
-            "/calibration/run",
-            {
-                "request_id": "probe-evidence-draw",
-                "include_homing": False,
-                "mark_size_mm": 4.0,
-            },
+            "/draw/program",
+            _draw_program_payload(request_id="probe-evidence-draw"),
         )
 
         assert status_code == 400
@@ -286,12 +282,8 @@ def test_cap_only_visual_readiness_does_not_unlock_absolute_drawing(
         assert binding_status["status"] == "missing"
 
         status_code, drawing = client.post(
-            "/calibration/run",
-            {
-                "request_id": "visual-draw",
-                "include_homing": False,
-                "mark_size_mm": 4.0,
-            },
+            "/draw/program",
+            _draw_program_payload(request_id="visual-draw"),
         )
 
         assert status_code == 400
@@ -319,17 +311,18 @@ def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
     with _running_bridge(bridge) as client:
         _register_and_observe_center_cap(client)
         status_code, preview = client.post(
-            "/calibration/preview",
+            "/calibration/binding/preview",
             {
                 "request_id": "binding-preview",
-                "include_homing": False,
                 "mark_size_mm": 4.0,
+                "margin_mm": 25.0,
             },
         )
         assert status_code == 200
-        assert preview["preview_overlay"]["projected"] is True
-        samples = _binding_observation_samples(preview["preview_overlay"]["primitives"])
-        assert len(samples) >= 5
+        assert preview["status"] == "ready"
+        assert preview["point_set"] == "five"
+        samples = preview["points"]
+        assert len(samples) == 5
 
         for sample in samples:
             status_code, observed = client.post(
@@ -338,7 +331,7 @@ def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
                     "command_id": "binding-preview",
                     "point_id": sample["point_id"],
                     "kind": "ink",
-                    "observed_paper_mm": sample["observed_paper_mm"],
+                    "observed_paper_mm": sample["paper_mm"],
                 },
             )
             assert status_code == 200
@@ -353,12 +346,8 @@ def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
         assert binding["residuals"]["rms_residual_mm"] <= 3.0
 
         status_code, drawing = client.post(
-            "/calibration/run",
-            {
-                "request_id": "visual-binding-draw",
-                "include_homing": False,
-                "mark_size_mm": 4.0,
-            },
+            "/draw/program",
+            _draw_program_payload(request_id="visual-binding-draw"),
         )
 
         assert status_code == 200
@@ -599,26 +588,34 @@ def _trust_sample(
     }
 
 
-def _binding_observation_samples(primitives: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    raw = []
-    for primitive in primitives:
-        raw.append(
-            {
-                "point_id": f"seg-{primitive['segment_index']:04d}-start",
-                "observed_paper_mm": primitive["start_paper_mm"],
-            }
-        )
-        raw.append(
-            {
-                "point_id": f"seg-{primitive['segment_index']:04d}-end",
-                "observed_paper_mm": primitive["end_paper_mm"],
-            }
-        )
-    unique: dict[tuple[float, float], dict[str, Any]] = {}
-    for sample in raw:
-        point = sample["observed_paper_mm"]
-        unique[(round(point["x"], 6), round(point["y"], 6))] = sample
-    return list(unique.values())[:5]
+def _draw_program_payload(*, request_id: str) -> dict[str, Any]:
+    return {
+        "request_id": request_id,
+        "include_homing": False,
+        "program": {
+            "polylines": [
+                {
+                    "role": "contour",
+                    "closed": False,
+                    "points": [
+                        {"x": 0.10, "y": 0.10},
+                        {"x": 0.20, "y": 0.10},
+                        {"x": 0.20, "y": 0.20},
+                    ],
+                }
+            ]
+        },
+        "frame": {
+            "origin_x_mm": 20.0,
+            "origin_y_mm": 20.0,
+            "width_mm": 100.0,
+            "height_mm": 80.0,
+            "flip_y": False,
+        },
+        "draw_feed_mm_min": 180.0,
+        "travel_feed_mm_min": 500.0,
+        "max_segment_mm": 25.0,
+    }
 
 
 def _write_machine_config(tmp_path: Path) -> Path:

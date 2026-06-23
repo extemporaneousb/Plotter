@@ -9,12 +9,10 @@ from plotter_vision.bridge.planner import ShapeExecutionRequest, build_shape_exe
 from plotter_vision.bridge.server import (
     AxisModelTrustRequest,
     AxisModelTrustSample,
+    BindingMarkPreviewRequest,
     BridgeRuntimeConfig,
-    CalibrationMarkPlanRequest,
     ImageShapePreviewRequest,
     MachineArmRequest,
-    DotTestPreviewRequest,
-    DotTestRunRequest,
     MachineCenterRequest,
     MachineHomeRequest,
     MachineJogRequest,
@@ -236,24 +234,6 @@ def test_bridge_mock_live_run_writes_transcript(tmp_path: Path) -> None:
     assert '"payload":"M3 S720"' in text
 
 
-def test_bridge_calibration_mark_preview_is_preview_only(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
-
-    response = bridge.preview_calibration_marks(
-        CalibrationMarkPlanRequest(request_id="cal-preview")
-    )
-
-    assert response.status == "ready"
-    assert response.dry_run is True
-    assert response.preview_only is True
-    assert response.controller_transcript is None
-    assert "$H" not in response.planned_commands
-    assert response.summary is not None
-    assert response.summary.mark_polyline_count == 10
-    assert not (tmp_path / "transcripts" / "cal-preview.jsonl").exists()
-
-
 def test_bridge_image_contour_preview_is_preview_only_without_hatching(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
@@ -346,39 +326,6 @@ def test_bridge_portrait_contour_preview_is_preview_only_and_projected(tmp_path:
     assert not (tmp_path / "transcripts" / "portrait-preview.jsonl").exists()
 
 
-def test_bridge_mock_live_calibration_marks_write_transcript_without_homing(tmp_path: Path) -> None:
-    config_path = tmp_path / "machine_config.json"
-    machine = _machine_with_pen()
-    machine.axis_model_trusted = True
-    machine.homing_trusted = True
-    machine.save_json(config_path)
-    bridge = PlotterBridge(
-        BridgeRuntimeConfig(
-            dry_run=False,
-            mock=True,
-            arm_motion=True,
-            arm_pen=True,
-            arm_homing=False,
-            config_path=config_path,
-            event_log_path=tmp_path / "events.jsonl",
-            transcript_dir=tmp_path / "transcripts",
-            workspace_x_max=533.4,
-            workspace_y_max=215.9,
-        )
-    )
-
-    response = bridge.run_calibration_marks(
-        CalibrationMarkPlanRequest(request_id="cal-run", include_homing=False)
-    )
-
-    assert response.status == "completed"
-    assert response.dry_run is False
-    assert response.controller_transcript is not None
-    text = Path(response.controller_transcript).read_text(encoding="utf-8")
-    assert '"payload":"$H"' not in text
-    assert '"payload":"M3 S720"' in text
-
-
 def test_bridge_paper_registration_solves_and_persists_homography(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
@@ -416,11 +363,11 @@ def test_bridge_paper_registration_solves_and_persists_homography(tmp_path: Path
     assert status.registration["camera_to_paper"]["coefficients"]
 
 
-def test_bridge_dot_test_preview_requires_paper_registration(tmp_path: Path) -> None:
+def test_bridge_binding_mark_preview_requires_paper_registration(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
 
-    response = bridge.preview_dot_test(DotTestPreviewRequest(pattern="center"))
+    response = bridge.preview_binding_marks(BindingMarkPreviewRequest())
 
     assert response.status == "failed"
     assert response.preview_only is True
@@ -428,7 +375,7 @@ def test_bridge_dot_test_preview_requires_paper_registration(tmp_path: Path) -> 
     assert "No paper registration has been saved" in response.error
 
 
-def test_bridge_dot_test_preview_projects_marks_to_camera(tmp_path: Path) -> None:
+def test_bridge_binding_mark_preview_projects_marks_to_camera(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
     bridge.register_paper(
@@ -450,12 +397,13 @@ def test_bridge_dot_test_preview_projects_marks_to_camera(tmp_path: Path) -> Non
         )
     )
 
-    response = bridge.preview_dot_test(
-        DotTestPreviewRequest(pattern="five", mark_size_mm=4.0, margin_mm=25.0)
+    response = bridge.preview_binding_marks(
+        BindingMarkPreviewRequest(mark_size_mm=4.0, margin_mm=25.0)
     )
 
     assert response.status == "ready"
     assert response.preview_only is True
+    assert response.point_set == "five"
     assert response.point_count == 5
     assert response.simulation is not None
     assert response.simulation.status == "ok"
@@ -470,171 +418,6 @@ def test_bridge_dot_test_preview_projects_marks_to_camera(tmp_path: Path) -> Non
     assert response.points[0].camera_norm.y == pytest.approx(expected_center[1], abs=1e-9)
     assert response.camera_segments[0].point_id == "P01"
     assert response.camera_segments[0].start_norm.x < response.camera_segments[0].end_norm.x
-
-
-def test_bridge_dot_test_run_rejects_non_center_pattern(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
-
-    response = bridge.run_dot_test(DotTestRunRequest(pattern="five"))
-
-    assert response.status == "failed"
-    assert response.error is not None
-    assert "supports only center pattern" in response.error
-
-
-def test_bridge_dot_test_run_executes_previewed_center_mark_and_parks(tmp_path: Path) -> None:
-    config_path = tmp_path / "machine_config.json"
-    machine = _machine_with_pen()
-    machine.homing_trusted = True
-    machine.axis_model_trusted = True
-    machine.save_json(config_path)
-    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
-    bridge.register_paper(
-        PaperRegistrationRequest(
-            paper_width_mm=533.4,
-            paper_height_mm=215.9,
-            corners=[
-                PaperRegistrationCornerRequest(
-                    corner=corner,  # type: ignore[arg-type]
-                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
-                )
-                for corner, observed in [
-                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
-                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
-                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
-                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
-                ]
-            ],
-        )
-    )
-    preview = bridge.preview_dot_test(DotTestPreviewRequest(pattern="center"))
-
-    response = bridge.run_dot_test(
-        DotTestRunRequest(
-            pattern="center",
-            expected_plan_hash=preview.plan_hash,
-        )
-    )
-
-    assert response.status == "completed"
-    assert response.dry_run is False
-    assert response.controller_transcript is not None
-    assert "M3 S720" in response.planned_commands
-    assert "M3 S40" in response.planned_commands
-    assert response.planned_commands[-1] == "G53 G1 X-216.7 Y-107.95"
-    transcript = Path(response.controller_transcript)
-    assert transcript.exists()
-    text = transcript.read_text(encoding="utf-8")
-    assert '"payload":"M3 S720"' in text
-    assert '"payload":"G53 G1 X-216.7 Y-107.95"' in text
-
-
-def test_bridge_dot_test_run_rejects_stale_preview_hash(tmp_path: Path) -> None:
-    config_path = tmp_path / "machine_config.json"
-    machine = _machine_with_pen()
-    machine.homing_trusted = True
-    machine.axis_model_trusted = True
-    machine.save_json(config_path)
-    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
-    bridge.register_paper(
-        PaperRegistrationRequest(
-            paper_width_mm=533.4,
-            paper_height_mm=215.9,
-            corners=[
-                PaperRegistrationCornerRequest(
-                    corner=corner,  # type: ignore[arg-type]
-                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
-                )
-                for corner, observed in [
-                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
-                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
-                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
-                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
-                ]
-            ],
-        )
-    )
-
-    response = bridge.run_dot_test(
-        DotTestRunRequest(pattern="center", expected_plan_hash="stale")
-    )
-
-    assert response.status == "failed"
-    assert response.error is not None
-    assert "plan changed after preview" in response.error
-
-
-def test_bridge_dot_test_run_requires_trusted_axis_model(tmp_path: Path) -> None:
-    config_path = tmp_path / "machine_config.json"
-    machine = _machine_with_pen()
-    machine.homing_trusted = True
-    machine.axis_model_trusted = False
-    machine.save_json(config_path)
-    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
-    bridge.register_paper(
-        PaperRegistrationRequest(
-            paper_width_mm=533.4,
-            paper_height_mm=215.9,
-            corners=[
-                PaperRegistrationCornerRequest(
-                    corner=corner,  # type: ignore[arg-type]
-                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
-                )
-                for corner, observed in [
-                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
-                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
-                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
-                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
-                ]
-            ],
-        )
-    )
-    preview = bridge.preview_dot_test(DotTestPreviewRequest(pattern="center"))
-
-    response = bridge.run_dot_test(
-        DotTestRunRequest(pattern="center", expected_plan_hash=preview.plan_hash)
-    )
-
-    assert response.status == "failed"
-    assert response.error is not None
-    assert "axis_model_trusted=true" in response.error
-
-
-def test_bridge_dot_test_run_allows_axis_model_without_homed_position(tmp_path: Path) -> None:
-    config_path = tmp_path / "machine_config.json"
-    machine = _machine_with_pen()
-    machine.homing_trusted = False
-    machine.axis_model_trusted = True
-    machine.save_json(config_path)
-    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
-    bridge.register_paper(
-        PaperRegistrationRequest(
-            paper_width_mm=533.4,
-            paper_height_mm=215.9,
-            corners=[
-                PaperRegistrationCornerRequest(
-                    corner=corner,  # type: ignore[arg-type]
-                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
-                )
-                for corner, observed in [
-                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
-                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
-                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
-                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
-                ]
-            ],
-        )
-    )
-    preview = bridge.preview_dot_test(DotTestPreviewRequest(pattern="center"))
-
-    response = bridge.run_dot_test(
-        DotTestRunRequest(pattern="center", expected_plan_hash=preview.plan_hash)
-    )
-
-    assert response.status == "completed"
-    assert response.error is None
-    assert response.controller_transcript is not None
 
 
 def test_bridge_machine_status_reports_dry_run_without_controller(tmp_path: Path) -> None:

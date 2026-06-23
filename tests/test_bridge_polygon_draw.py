@@ -10,7 +10,7 @@ from plotter_vision.calibration.vision_model import LogicalPointMM
 from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.drawing import (
     DrawingFrameMM,
-    PaperDrawingProgram,
+    DrawingProgram,
     PaperPointNorm,
     PlannedPolyline,
     PolygonPrimitive,
@@ -22,7 +22,7 @@ from plotter_vision.machine.safety import MotionSafetyError
 def test_polygon_draw_plan_maps_paper_frame_to_machine_coordinates() -> None:
     machine = _machine_with_pen()
     request = PolygonDrawRequest(
-        program=PaperDrawingProgram(
+        program=DrawingProgram(
             polygons=[
                 PolygonPrimitive(
                     vertices=[
@@ -90,7 +90,7 @@ def test_polygon_draw_plan_accepts_preplanned_line_polyline_and_splits_long_segm
 def test_shaded_polygon_program_expands_to_hatch_motion() -> None:
     machine = _machine_with_pen()
     request = PolygonDrawRequest(
-        program=PaperDrawingProgram(
+        program=DrawingProgram(
             polygons=[
                 PolygonPrimitive(
                     vertices=[
@@ -132,7 +132,7 @@ def test_simple_shape_primitives_produce_expected_preview_segments(
 ) -> None:
     machine = _machine_with_pen()
     request = PolygonDrawRequest(
-        program=PaperDrawingProgram(
+        program=DrawingProgram(
             simple_shapes=[
                 SimpleShapePrimitive(
                     kind=kind,  # type: ignore[arg-type]
@@ -233,7 +233,7 @@ def test_real_polygon_draw_rejects_homing_without_axis_model_or_binding() -> Non
         )
 
 
-def test_bridge_dry_run_polygon_draw_returns_preview_and_planned_commands(tmp_path: Path) -> None:
+def test_bridge_dry_run_draw_program_returns_preview_and_planned_commands(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = PlotterBridge(
         BridgeRuntimeConfig(
@@ -247,7 +247,7 @@ def test_bridge_dry_run_polygon_draw_returns_preview_and_planned_commands(tmp_pa
         )
     )
 
-    response = bridge.draw_polygon(_line_request(request_id="draw-dry"))
+    response = bridge.draw_program(_line_request(request_id="draw-dry"))
 
     assert response.status == "completed"
     assert response.dry_run is True
@@ -261,7 +261,7 @@ def test_bridge_dry_run_polygon_draw_returns_preview_and_planned_commands(tmp_pa
     assert (tmp_path / "events.jsonl").exists()
 
 
-def test_bridge_mock_live_polygon_draw_writes_transcript(tmp_path: Path) -> None:
+def test_bridge_mock_live_draw_program_writes_transcript(tmp_path: Path) -> None:
     config_path = tmp_path / "machine_config.json"
     machine = _machine_with_pen()
     machine.axis_model_trusted = True
@@ -281,7 +281,7 @@ def test_bridge_mock_live_polygon_draw_writes_transcript(tmp_path: Path) -> None
         )
     )
 
-    response = bridge.draw_polygon(_line_request(request_id="draw-live", include_homing=True))
+    response = bridge.draw_program(_line_request(request_id="draw-live", include_homing=True))
 
     assert response.status == "completed"
     assert response.dry_run is False
@@ -292,7 +292,7 @@ def test_bridge_mock_live_polygon_draw_writes_transcript(tmp_path: Path) -> None
     assert '"payload":"G53 G1 X-523.4 Y-195.9"' in text
 
 
-def test_bridge_mock_live_polygon_draw_requires_trusted_axis_model(tmp_path: Path) -> None:
+def test_bridge_mock_live_draw_program_requires_trusted_axis_model(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = PlotterBridge(
         BridgeRuntimeConfig(
@@ -309,7 +309,7 @@ def test_bridge_mock_live_polygon_draw_requires_trusted_axis_model(tmp_path: Pat
         )
     )
 
-    response = bridge.draw_polygon(_line_request(request_id="draw-blocked", include_homing=True))
+    response = bridge.draw_program(_line_request(request_id="draw-blocked", include_homing=True))
 
     assert response.status == "failed"
     assert response.error is not None

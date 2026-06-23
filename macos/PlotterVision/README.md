@@ -58,8 +58,7 @@ including:
 - `GET /calibration/binding/status`
 - `POST /calibration/binding/observe`
 - `POST /calibration/binding/solve`
-- `POST /dot-test/preview`
-- `POST /dot-test/run`
+- `POST /calibration/binding/preview`
 - `POST /machine/...` actions for arm, reconnect, jog, home, center, pen, stop, resume, and unlock
 
 Real hardware can be connected after the app starts: use the Machine panel's Connect button to
@@ -76,7 +75,7 @@ coordinates when sending motion commands.
 
 - Shows native AVFoundation plotter and face camera previews.
 - Runs Vision passes for line/shape segments, fiducials, carriage markers, and frame-change reports.
-- Renders bridge-planned expected paths, visual field state, dot-test preview points, and
+- Renders bridge-planned expected paths, visual field state, binding mark preview points, and
   observed marks over the camera image.
 - Persists plotter-camera viewport controls, including fit/fill, rotation, video filter, and a
   centered FOV zoom. This zoom is an operator display transform only; `CameraModel` still runs

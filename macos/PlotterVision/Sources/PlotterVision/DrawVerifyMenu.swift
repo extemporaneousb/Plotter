@@ -81,7 +81,7 @@ struct DrawVerifyMenu: View {
 
                 Button("Clear Draw/Verify Overlays") {
                     bridge.clearDrawVerifyOverlay()
-                    bridge.clearDotTestOverlay()
+                    bridge.clearBindingMarkPreviewOverlay()
                     bridge.imagePreviewStatus = "IMG --"
                     bridge.imagePreviewDetail = "VISUAL ONLY"
                     bridge.imagePreviewContourCount = 0
@@ -90,8 +90,8 @@ struct DrawVerifyMenu: View {
                 }
                 .disabled(
                     bridge.expectedPathSegments.isEmpty
-                        && bridge.dotTestPreviewPoints.isEmpty
-                        && bridge.dotTestPreviewSegments.isEmpty
+                        && bridge.bindingMarkPreviewPoints.isEmpty
+                        && bridge.bindingMarkPreviewSegments.isEmpty
                         && bridge.imagePreviewContourCount == 0
                         && bridge.drawVerifyPlanHash.isEmpty
                 )
@@ -101,7 +101,7 @@ struct DrawVerifyMenu: View {
                 systemName: "checkmark.seal",
                 label: "Draw/Verify",
                 isActive: !bridge.expectedPathSegments.isEmpty
-                    || !bridge.dotTestPreviewPoints.isEmpty
+                    || !bridge.bindingMarkPreviewPoints.isEmpty
                     || visualMotionActive
                     || bridge.imagePreviewContourCount > 0
                     || !bridge.drawVerifyPlanHash.isEmpty

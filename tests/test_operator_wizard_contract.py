@@ -173,8 +173,8 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     camera_model = _read(SWIFT_DIR / "CameraModel.swift")
     models = _read(SWIFT_DIR / "Models.swift")
 
-    assert "visualCalibrationMaxMarkAttempts = 4" in runner
-    assert "visualCalibrationParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]" in runner
+    assert "visualBindingMaxMarkAttempts = 4" in runner
+    assert "visualBindingParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]" in runner
     assert "visual_binding_mark_attempt" in runner
     assert "visual_binding_incomplete" in content
     assert "BIND INCOMPLETE" in content
@@ -183,7 +183,7 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert "drawVisualBindingBoundsFrame(points: targets)" in content
     assert "VIS READY" in content
     assert "waitForFreshGreenCapPaperObservation" in content.split("func parkAwayFromMark", 1)[1]
-    assert "visualCalibrationTravelFeedMmMin = 1200.0" in runner
+    assert "visualMotionTravelFeedMmMin = 1200.0" in runner
 
     assert "horizontalDarkFraction" in models
     assert "verticalDarkFraction" in models
@@ -192,8 +192,8 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert "inHorizontalBand" in camera_model
     assert "inVerticalBand" in camera_model
 
-    assert "BridgePolygonDrawRequest" in client
-    assert 'post(path: "draw/polygon"' in client
+    assert "BridgeDrawProgramRequest" in client
+    assert 'post(path: "draw/program"' in client
     assert "func drawVisualBindingBoundsFrame" in model
     assert '"visual_binding_bounds_frame_started"' in model
     assert '"visual_binding_bounds_frame_completed"' in model

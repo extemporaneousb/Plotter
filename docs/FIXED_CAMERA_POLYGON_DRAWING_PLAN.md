@@ -67,7 +67,7 @@ Current implementation:
   raster checks,
 - the optional shaded face route remains available through `POST /draw/face`, but hatch expansion is
   not the baseline portrait representation,
-- capabilities tests, image contours, calibration marks, and shape execution all run through the
+- capabilities tests, image contours, binding marks, and shape execution all run through the
   same drawing program, planner, simulator, video projector, binding, residual, and execution
   infrastructure.
 

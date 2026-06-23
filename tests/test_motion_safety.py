@@ -234,6 +234,17 @@ def test_projected_workspace_motion_rejects_accumulated_relative_x_overrun() -> 
         )
 
 
+def test_projected_workspace_motion_allows_controller_rounding_at_boundary() -> None:
+    machine = MachineConfig()
+    machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)
+
+    validate_projected_workspace_motion(
+        start_mpos_mm=(250.01, 24.994, 0.0),
+        commands=["G21", "G91", "G1 F600", "G1 Y-25", "G90"],
+        machine=machine,
+    )
+
+
 def test_projected_workspace_motion_only_checks_commanded_axes() -> None:
     machine = MachineConfig()
     machine.set_axis_travel(x_travel_mm=533.4, y_travel_mm=215.9)

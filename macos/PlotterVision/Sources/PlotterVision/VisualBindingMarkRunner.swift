@@ -1,35 +1,35 @@
 import Foundation
 
-let visualCalibrationMarkSizeMm = 6.0
-let visualCalibrationRetryMarkSizeMm = 10.0
-let visualCalibrationMaxMarkAttempts = 4
-let visualCalibrationMaxMarkSizeMm = 14.0
-let visualCalibrationInitialMarkDrawFeedMmMin = 240.0
-let visualCalibrationRetryMarkDrawFeedMmMin = 200.0
-let visualCalibrationMinimumMarkDrawFeedMmMin = 160.0
-let visualCalibrationTravelFeedMmMin = 1200.0
-let visualCalibrationParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]
+let visualBindingMarkSizeMm = 6.0
+let visualBindingRetryMarkSizeMm = 10.0
+let visualBindingMaxMarkAttempts = 4
+let visualBindingMaxMarkSizeMm = 14.0
+let visualBindingInitialMarkDrawFeedMmMin = 240.0
+let visualBindingRetryMarkDrawFeedMmMin = 200.0
+let visualBindingMinimumMarkDrawFeedMmMin = 160.0
+let visualMotionTravelFeedMmMin = 1200.0
+let visualBindingParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]
 
 extension ContentView {
     @MainActor
     func runVisualBindingPoint(
         pattern: String,
-        point: DotTestPreviewPoint,
+        point: BindingMarkPreviewPoint,
         index: Int,
         total: Int,
         bindingCommandId: String
     ) async -> Bool {
         var lastInkSummary = "no ink sample"
-        for attempt in 1...visualCalibrationMaxMarkAttempts {
+        for attempt in 1...visualBindingMaxMarkAttempts {
             let label = attempt == 1 ? point.pointId : "\(point.pointId)-try\(attempt)"
-            let markSizeMm = visualCalibrationMarkSize(forAttempt: attempt)
-            let drawFeedMmMin = visualCalibrationMarkDrawFeedMmMin(forAttempt: attempt)
-            let parkDxMm = visualCalibrationParkDx(for: point.paperMm, attemptIndex: attempt)
+            let markSizeMm = visualBindingMarkSize(forAttempt: attempt)
+            let drawFeedMmMin = visualBindingMarkDrawFeedMmMin(forAttempt: attempt)
+            let parkDxMm = visualBindingParkDx(for: point.paperMm, attemptIndex: attempt)
             bridge.visualCenterDotStatus = String(
                 format: "VIS %@ TRY %d/%d",
                 point.pointId,
                 attempt,
-                visualCalibrationMaxMarkAttempts
+                visualBindingMaxMarkAttempts
             )
             calibrationStatusText = String(
                 format: "CAL visual %@ %@ %d/%d try %d mark %.0fmm park %.0fmm",
@@ -124,7 +124,7 @@ extension ContentView {
                 continue
             }
 
-            let inkResult = await inspectInkAt(point, radiusPx: visualCalibrationInkRadiusPx(forAttempt: attempt))
+            let inkResult = await inspectInkAt(point, radiusPx: visualBindingInkRadiusPx(forAttempt: attempt))
             let accepted = inkResult?.isVisible == true
             recordVisualBindingMarkAttempt(
                 pattern: pattern,
@@ -156,30 +156,30 @@ extension ContentView {
         }
 
         bridge.visualCenterDotStatus = String(format: "VIS %@ MISS", point.pointId)
-        calibrationStatusText = "CAL visual \(pattern) \(point.pointId) failed after \(visualCalibrationMaxMarkAttempts) attempts; \(lastInkSummary)"
+        calibrationStatusText = "CAL visual \(pattern) \(point.pointId) failed after \(visualBindingMaxMarkAttempts) attempts; \(lastInkSummary)"
         return false
     }
 
-    func visualCalibrationMarkSize(forAttempt attempt: Int) -> Double {
-        if attempt <= 1 { return visualCalibrationMarkSizeMm }
+    func visualBindingMarkSize(forAttempt attempt: Int) -> Double {
+        if attempt <= 1 { return visualBindingMarkSizeMm }
         let retryGrowthMm = Double(max(0, attempt - 2)) * 2.0
-        return min(visualCalibrationMaxMarkSizeMm, visualCalibrationRetryMarkSizeMm + retryGrowthMm)
+        return min(visualBindingMaxMarkSizeMm, visualBindingRetryMarkSizeMm + retryGrowthMm)
     }
 
-    func visualCalibrationMarkDrawFeedMmMin(forAttempt attempt: Int) -> Double {
-        if attempt <= 1 { return visualCalibrationInitialMarkDrawFeedMmMin }
-        let retryFeed = visualCalibrationRetryMarkDrawFeedMmMin - Double(max(0, attempt - 2)) * 20.0
-        return max(visualCalibrationMinimumMarkDrawFeedMmMin, retryFeed)
+    func visualBindingMarkDrawFeedMmMin(forAttempt attempt: Int) -> Double {
+        if attempt <= 1 { return visualBindingInitialMarkDrawFeedMmMin }
+        let retryFeed = visualBindingRetryMarkDrawFeedMmMin - Double(max(0, attempt - 2)) * 20.0
+        return max(visualBindingMinimumMarkDrawFeedMmMin, retryFeed)
     }
 
-    func visualCalibrationInkRadiusPx(forAttempt attempt: Int) -> Int {
+    func visualBindingInkRadiusPx(forAttempt attempt: Int) -> Int {
         attempt <= 1 ? 14 : 18
     }
 
-    func visualCalibrationParkDx(for markPaperPoint: PaperPointMmSnapshot, attemptIndex: Int) -> Double {
+    func visualBindingParkDx(for markPaperPoint: PaperPointMmSnapshot, attemptIndex: Int) -> Double {
         let clearanceMm = 2.0
-        let requested = visualCalibrationParkOffsetsMm[
-            max(0, attemptIndex - 1) % visualCalibrationParkOffsetsMm.count
+        let requested = visualBindingParkOffsetsMm[
+            max(0, attemptIndex - 1) % visualBindingParkOffsetsMm.count
         ]
         if markPaperPoint.x + requested >= clearanceMm,
            markPaperPoint.x + requested <= bridge.workspaceXMm - clearanceMm {
@@ -200,7 +200,7 @@ extension ContentView {
     @MainActor
     func recordVisualBindingMarkAttempt(
         pattern: String,
-        point: DotTestPreviewPoint,
+        point: BindingMarkPreviewPoint,
         attempt: Int,
         accepted: Bool,
         reason: String,

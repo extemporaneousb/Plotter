@@ -38,7 +38,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var imagePreviewContourCount = 0
     @Published var imagePreviewEligibleForBridgePreview = false
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
-    @Published var dotTestPreviewStatus = "DOT --"
+    @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var visualCenterDotStatus = "VIS --"
     @Published var visualBindingStatus = "BIND --"
@@ -46,11 +46,11 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var visualBindingObservationCount = 0
     @Published var visualBindingValid = false
     @Published var visualProbeEvidenceRunId = "swift-probe-\(UUID().uuidString.lowercased())"
-    @Published var dotTestPreviewPoints: [DotTestPreviewPoint] = []
-    @Published var dotTestPreviewSegments: [DotTestPreviewSegment] = []
-    @Published var dotTestPreviewCommandId = ""
-    @Published var dotTestPreviewPlanHash = ""
-    @Published var dotTestPreviewPattern = ""
+    @Published var bindingMarkPreviewPoints: [BindingMarkPreviewPoint] = []
+    @Published var bindingMarkPreviewSegments: [BindingMarkPreviewSegment] = []
+    @Published var bindingMarkPreviewCommandId = ""
+    @Published var bindingMarkPreviewPlanHash = ""
+    @Published var bindingMarkPreviewPointSet = ""
     @Published var drawVerifyStatus = "DRAW --"
     @Published var drawVerifyDetail = "Preview a capability check before running"
     @Published var drawVerifyKind = ""
@@ -128,7 +128,8 @@ final class PlotterBridgeModel: ObservableObject {
         axis: String,
         preferredDistanceMm: Double,
         minimumDistanceMm: Double,
-        clearanceMm: Double = 2.0
+        clearanceMm: Double = 2.0,
+        allowOpposite: Bool = true
     ) -> Double? {
         guard abs(preferredDistanceMm) > 0.000_001 else { return nil }
         let preferredDirection = preferredDistanceMm >= 0 ? 1.0 : -1.0
@@ -142,6 +143,7 @@ final class PlotterBridgeModel: ObservableObject {
             if bounded >= minimumDistanceMm {
                 return preferredDirection * bounded
             }
+            guard allowOpposite else { return nil }
             let oppositeRoom = availableMachineTravelMm(
                 axis: axis,
                 direction: -preferredDirection,
@@ -164,7 +166,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     func resetVisualCalibrationSession(prefix: String = "swift-probe") -> String {
         let runId = startVisualProbeEvidenceRun(prefix: prefix)
-        clearDotTestOverlay()
+        clearBindingMarkPreviewOverlay()
         adaptiveProbeStatus = "PROBE --"
         visualCenterDotStatus = "VIS --"
         visualBindingStatus = "BIND --"
@@ -369,24 +371,6 @@ final class PlotterBridgeModel: ObservableObject {
             && !isMachineAlarm
     }
 
-    var canRunCenterDotMotion: Bool {
-        canRunAbsoluteDrawing
-            && dotTestPreviewPattern == "center"
-            && !dotTestPreviewPlanHash.isEmpty
-    }
-
-    var canRunVisualRelativeMotion: Bool {
-        isLiveMotionMode
-            && !hasBridgeContractMismatch
-            && hasPaperLock
-            && dotTestPreviewPattern == "center"
-            && !dotTestPreviewPoints.isEmpty
-            && !isCalibrating
-            && !isRunning
-            && !isMachineBusy
-            && !isMachineAlarm
-    }
-
     var motionModeLabel: String {
         if !isOnline { return "OFF" }
         if isMockBridge { return isDryRun ? "MOCK" : "MOCK LIVE" }
@@ -557,10 +541,10 @@ final class PlotterBridgeModel: ObservableObject {
                 "image_contours": imagePreviewContourCount,
                 "image_bridge_preview_eligible": imagePreviewEligibleForBridgePreview,
                 "expected_path_segments": expectedPathSegments.count,
-                "dot": dotTestPreviewStatus,
-                "dot_pattern": dotTestPreviewPattern,
-                "dot_points": dotTestPreviewPoints.count,
-                "dot_segments": dotTestPreviewSegments.count,
+                "binding_mark_preview": bindingMarkPreviewStatus,
+                "binding_mark_point_set": bindingMarkPreviewPointSet,
+                "binding_mark_points": bindingMarkPreviewPoints.count,
+                "binding_mark_segments": bindingMarkPreviewSegments.count,
                 "draw_verify": drawVerifyStatus,
                 "draw_verify_kind": drawVerifyKind,
                 "draw_verify_command_id": drawVerifyCommandId,
@@ -585,8 +569,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "can_arm_hardware": canArmHardware,
                 "can_disarm_hardware": canDisarmHardware,
                 "can_run_absolute_drawing": canRunAbsoluteDrawing,
-                "can_run_center_dot_motion": canRunCenterDotMotion,
-                "can_run_visual_relative_motion": canRunVisualRelativeMotion
+                "can_run_visual_relative_motion": isLiveMotionMode && hasPaperLock && !bindingMarkPreviewPoints.isEmpty
             ]
         ]
     }
@@ -1243,7 +1226,7 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func drawVisualBindingBoundsFrame(points: [DotTestPreviewPoint]) async -> Bool {
+    func drawVisualBindingBoundsFrame(points: [BindingMarkPreviewPoint]) async -> Bool {
         guard canRunAbsoluteDrawing else {
             drawVerifyStatus = "DRAW BLOCK"
             drawVerifyDetail = drawPreflightMessage
@@ -1302,8 +1285,8 @@ final class PlotterBridgeModel: ObservableObject {
         }
 
         do {
-            let response = try await client.drawPolygon(
-                BridgePolygonDrawRequest(
+            let response = try await client.drawProgram(
+                BridgeDrawProgramRequest(
                     program: BridgeDrawingProgramRequest(
                         polylines: [
                             BridgePolylinePrimitiveRequest(
@@ -2197,67 +2180,66 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func previewDotTestOverlay(pattern: String = "center") async -> DotTestPreviewResponse? {
+    func previewBindingMarks(pointSet: String = "five") async -> BindingMarkPreviewResponse? {
         guard !isCalibrating else { return nil }
         guard isOnline else {
-            dotTestPreviewStatus = "DOT OFF"
+            bindingMarkPreviewStatus = "BIND OFF"
             statusText = "Bridge offline"
-            diagnosticsEvent("dot_preview_blocked", ["pattern": pattern, "reason": "bridge_offline"], snapshot: true)
+            diagnosticsEvent("binding_mark_preview_blocked", ["point_set": pointSet, "reason": "bridge_offline"], snapshot: true)
             return nil
         }
         if !hasPaperLock {
             await refreshPaperStatus()
             if !hasPaperLock {
-                dotTestPreviewStatus = "DOT NEED PAPER"
+                bindingMarkPreviewStatus = "BIND NEED PAPER"
                 statusText = "Paper homography required"
-                diagnosticsEvent("dot_preview_blocked", ["pattern": pattern, "reason": "paper_homography_required"], snapshot: true)
+                diagnosticsEvent("binding_mark_preview_blocked", ["point_set": pointSet, "reason": "paper_homography_required"], snapshot: true)
                 return nil
             }
         }
 
         isCalibrating = true
-        activeAction = "dot-preview"
-        dotTestPreviewStatus = "DOT PREVIEW"
-        statusText = "Previewing dot-test overlay"
-        diagnosticsEvent("dot_preview_started", ["pattern": pattern], snapshot: true)
+        activeAction = "binding-preview"
+        bindingMarkPreviewStatus = "BIND MARKS"
+        statusText = "Previewing binding mark overlay"
+        diagnosticsEvent("binding_mark_preview_started", ["point_set": pointSet], snapshot: true)
         defer {
             isCalibrating = false
             activeAction = ""
         }
 
         do {
-            let response = try await client.previewDotTest(
-                DotTestPreviewRequest(
-                    pattern: pattern,
-                    marginMm: pattern == "center" ? 35.0 : 40.0,
+            let response = try await client.previewBindingMarks(
+                BindingMarkPreviewRequest(
+                    pointSet: pointSet,
+                    marginMm: 40.0,
                     markSizeMm: 6.0,
-                    includeHoming: false,
                     drawFeedMmMin: shapeDrawFeedMmMin,
                     travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0
                 )
             )
-            dotTestPreviewPoints = response.points
-            dotTestPreviewSegments = response.cameraSegments
-            dotTestPreviewCommandId = response.commandId
-            dotTestPreviewPlanHash = response.planHash
-            dotTestPreviewPattern = response.pattern
+            bindingMarkPreviewPoints = response.points
+            bindingMarkPreviewSegments = response.cameraSegments
+            bindingMarkPreviewCommandId = response.commandId
+            bindingMarkPreviewPlanHash = response.planHash
+            bindingMarkPreviewPointSet = response.pointSet
             expectedPathSegments = []
-            dotTestPreviewStatus = String(
-                format: "DOT %@ %dP %dS %@",
-                response.pattern.uppercased(),
+            bindingMarkPreviewStatus = String(
+                format: "BIND %@ %dP %dS %@",
+                response.pointSet.uppercased(),
                 response.pointCount,
                 response.cameraSegments.count,
                 String(response.planHash.prefix(6))
             )
-            statusText = "\(response.commandId) preview \(response.pattern)"
+            statusText = "\(response.commandId) preview \(response.pointSet)"
             diagnosticsEvent(
-                "dot_preview_completed",
+                "binding_mark_preview_completed",
                 [
                     "command_id": response.commandId,
                     "status": response.status,
                     "dry_run": response.dryRun,
-                    "pattern": response.pattern,
+                    "point_set": response.pointSet,
                     "point_count": response.pointCount,
                     "segment_count": response.cameraSegments.count,
                     "plan_hash_prefix": String(response.planHash.prefix(8))
@@ -2266,26 +2248,26 @@ final class PlotterBridgeModel: ObservableObject {
             )
             return response
         } catch {
-            dotTestPreviewPoints = []
-            dotTestPreviewSegments = []
-            dotTestPreviewCommandId = ""
-            dotTestPreviewPlanHash = ""
-            dotTestPreviewPattern = ""
-            dotTestPreviewStatus = "DOT ERR"
+            bindingMarkPreviewPoints = []
+            bindingMarkPreviewSegments = []
+            bindingMarkPreviewCommandId = ""
+            bindingMarkPreviewPlanHash = ""
+            bindingMarkPreviewPointSet = ""
+            bindingMarkPreviewStatus = "BIND ERR"
             statusText = error.localizedDescription
-            diagnosticsEvent("dot_preview_failed", ["pattern": pattern, "error": error.localizedDescription], snapshot: true)
+            diagnosticsEvent("binding_mark_preview_failed", ["point_set": pointSet, "error": error.localizedDescription], snapshot: true)
             return nil
         }
     }
 
-    func clearDotTestOverlay() {
-        dotTestPreviewPoints = []
-        dotTestPreviewSegments = []
-        dotTestPreviewCommandId = ""
-        dotTestPreviewPlanHash = ""
-        dotTestPreviewPattern = ""
-        dotTestPreviewStatus = "DOT --"
-        diagnosticsEvent("dot_preview_cleared", snapshot: true)
+    func clearBindingMarkPreviewOverlay() {
+        bindingMarkPreviewPoints = []
+        bindingMarkPreviewSegments = []
+        bindingMarkPreviewCommandId = ""
+        bindingMarkPreviewPlanHash = ""
+        bindingMarkPreviewPointSet = ""
+        bindingMarkPreviewStatus = "BIND --"
+        diagnosticsEvent("binding_mark_preview_cleared", snapshot: true)
     }
 
     func refreshVisualBindingStatus() async {
@@ -2318,7 +2300,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     func observeVisualBindingPoint(
         commandId: String,
-        point: DotTestPreviewPoint,
+        point: BindingMarkPreviewPoint,
         observedPaperMm: PaperPointMmSnapshot,
         observedCameraNorm: NormPoint?,
         kind: String,
@@ -2418,97 +2400,6 @@ final class PlotterBridgeModel: ObservableObject {
             x: paperNormX * registration.paperSizeMm.width,
             y: paperNormY * registration.paperSizeMm.height
         )
-    }
-
-    func runCenterDotTestMotion() async -> Bool {
-        guard dotTestPreviewPattern == "center", !dotTestPreviewPlanHash.isEmpty else {
-            dotTestPreviewStatus = "DOT PREVIEW FIRST"
-            statusText = "Preview center dot before motion"
-            diagnosticsEvent("dot_run_blocked", ["reason": "preview_required"], snapshot: true)
-            return false
-        }
-        guard hasPaperLock else {
-            dotTestPreviewStatus = "DOT NEED PAPER"
-            statusText = "Paper homography required"
-            diagnosticsEvent("dot_run_blocked", ["reason": "paper_homography_required"], snapshot: true)
-            return false
-        }
-        guard isLiveMotionMode else {
-            dotTestPreviewStatus = isOnline ? "DOT DRY" : "DOT OFF"
-            statusText = motionGateMessage
-            machineStatus = motionGateMessage
-            diagnosticsEvent("dot_run_blocked", ["reason": motionGateMessage], snapshot: true)
-            return false
-        }
-        guard machineAxisModelTrusted else {
-            dotTestPreviewStatus = "DOT AXIS BLOCK"
-            statusText = "Axis geometry is not trusted"
-            machineStatus = drawPreflightMessage
-            diagnosticsEvent("dot_run_blocked", ["reason": "axis_geometry_not_trusted"], snapshot: true)
-            return false
-        }
-        guard machineHomingTrusted else {
-            dotTestPreviewStatus = "DOT POSITION BLOCK"
-            statusText = "Absolute position is not trusted"
-            machineStatus = drawPreflightMessage
-            diagnosticsEvent("dot_run_blocked", ["reason": "absolute_position_not_trusted"], snapshot: true)
-            return false
-        }
-        guard !isRunning && !isMachineBusy && !isMachineAlarm else {
-            dotTestPreviewStatus = "DOT BUSY"
-            statusText = motionGateMessage
-            diagnosticsEvent("dot_run_blocked", ["reason": "machine_busy_or_alarm"], snapshot: true)
-            return false
-        }
-
-        let expectedHash = dotTestPreviewPlanHash
-        isRunning = true
-        isMachineBusy = true
-        activeAction = "dot"
-        shortStatus = "RUN"
-        dotTestPreviewStatus = "DOT RUN"
-        statusText = "Running center dot motion"
-        diagnosticsEvent("dot_run_started", ["plan_hash_prefix": String(expectedHash.prefix(8))], snapshot: true)
-        defer {
-            isRunning = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.runDotTest(
-                DotTestRunRequest(
-                    pattern: "center",
-                    marginMm: 35.0,
-                    markSizeMm: 6.0,
-                    includeHoming: false,
-                    drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: fastTravelFeedMmMin,
-                    maxSegmentMm: 25.0,
-                    expectedPlanHash: expectedHash
-                )
-            )
-            if let machineStatus = response.machineStatus {
-                applyMachineStatus(machineStatus)
-            } else {
-                await refreshMachineStatus()
-            }
-            isOnline = true
-            isDryRun = response.dryRun
-            shortStatus = response.dryRun ? "DRY" : "DONE"
-            dotTestPreviewStatus = String(format: "DOT RUN %@", String(expectedHash.prefix(6)))
-            statusText = "\(response.action) \(response.status)"
-            diagnosticsEvent("dot_run_completed", commandPayload(response), snapshot: true)
-            return response.status == "completed"
-        } catch {
-            shortStatus = "ERR"
-            dotTestPreviewStatus = "DOT ERR"
-            statusText = error.localizedDescription
-            machineStatus = error.localizedDescription
-            isMachineBusy = false
-            await refreshMachineStatus()
-            diagnosticsEvent("dot_run_failed", errorPayload(error), snapshot: true)
-            return false
-        }
     }
 
     private func applyPaperRegistrationStatus(_ response: PaperRegistrationResponse) {

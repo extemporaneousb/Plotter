@@ -6,7 +6,7 @@ from plotter_vision.calibration.vision_model import LogicalPointMM
 from plotter_vision.config import MachineConfig
 from plotter_vision.drawing import (
     DrawingFrameMM,
-    PaperDrawingProgram,
+    DrawingProgram,
     PaperPointNorm,
     PointMarkPrimitive,
     PolylinePrimitive,
@@ -43,7 +43,7 @@ def test_flipped_y_frame_maps_image_top_to_workspace_top() -> None:
 
 
 def test_shaded_polygon_expands_to_outline_and_hatch_polylines() -> None:
-    program = PaperDrawingProgram(
+    program = DrawingProgram(
         polygons=[
             PolygonPrimitive(
                 vertices=[
@@ -98,7 +98,7 @@ def test_planned_polylines_validate_against_machine_workspace() -> None:
 
 def test_point_mark_maps_to_cross_mark_polylines() -> None:
     frame = DrawingFrameMM(origin_x_mm=0.0, origin_y_mm=0.0, width_mm=100.0, height_mm=50.0)
-    program = PaperDrawingProgram(
+    program = DrawingProgram(
         point_marks=[
             PointMarkPrimitive(center=PaperPointNorm(x=0.5, y=0.5), mark_size_mm=10.0)
         ]
@@ -115,7 +115,7 @@ def test_point_mark_maps_to_cross_mark_polylines() -> None:
 
 def test_polyline_contour_maps_without_hatching() -> None:
     frame = DrawingFrameMM(origin_x_mm=10.0, origin_y_mm=20.0, width_mm=100.0, height_mm=50.0)
-    program = PaperDrawingProgram(
+    program = DrawingProgram(
         polylines=[
             PolylinePrimitive(
                 role="contour",
@@ -140,7 +140,7 @@ def test_polyline_contour_maps_without_hatching() -> None:
 def test_simple_triangle_and_square_primitives_make_outline_segments() -> None:
     frame = DrawingFrameMM(origin_x_mm=0.0, origin_y_mm=0.0, width_mm=100.0, height_mm=100.0)
     triangle = build_polygon_polylines(
-        program=PaperDrawingProgram(
+        program=DrawingProgram(
             simple_shapes=[
                 SimpleShapePrimitive(
                     kind="triangle",
@@ -152,7 +152,7 @@ def test_simple_triangle_and_square_primitives_make_outline_segments() -> None:
         frame=frame,
     )
     square = build_polygon_polylines(
-        program=PaperDrawingProgram(
+        program=DrawingProgram(
             simple_shapes=[
                 SimpleShapePrimitive(
                     kind="square",
@@ -170,8 +170,8 @@ def test_simple_triangle_and_square_primitives_make_outline_segments() -> None:
     assert len(square[0].points) == 5
 
 
-def _square_program(*, shade: float) -> PaperDrawingProgram:
-    return PaperDrawingProgram(
+def _square_program(*, shade: float) -> DrawingProgram:
+    return DrawingProgram(
         polygons=[
             PolygonPrimitive(
                 vertices=[

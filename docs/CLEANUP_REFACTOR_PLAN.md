@@ -48,7 +48,7 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
   extensions without changing public behavior.
 - Split `ContentView.swift` into camera panes, menu groups, calibration wizard, image preview, and
   visual-motion coordinator.
-- Replace string-parsed Swift status gates with typed paper, dot-test, and machine status state.
+- Replace string-parsed Swift status gates with typed paper, binding-mark, and machine status state.
 - Centralize camera/viewport coordinate mapping so click layers and overlays use one transform.
 - Consolidate duplicate paper point models across calibration, drawing, and bridge code with
   compatibility aliases for persisted schemas.

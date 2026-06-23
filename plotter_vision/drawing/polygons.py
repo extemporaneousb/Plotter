@@ -179,10 +179,6 @@ class DrawingProgram(BaseModel):
         return self
 
 
-class PaperDrawingProgram(DrawingProgram):
-    """Backward-compatible persisted paper-space spelling of DrawingProgram."""
-
-
 class PlannedPolyline(BaseModel):
     role: PolylineRole
     points: list[LogicalPointMM]
