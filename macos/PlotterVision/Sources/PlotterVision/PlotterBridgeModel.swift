@@ -1516,7 +1516,7 @@ final class PlotterBridgeModel: ObservableObject {
                 from: response.portraitOverlay,
                 sample: raster,
                 commandId: response.commandId
-            )
+            ) ?? makeFallbackFaceContourPreviewOverlay(from: raster, commandId: response.commandId)
             imagePreviewStatus = String(format: "IMG %dC %dS", contours, segments)
             imagePreviewDetail = response.previewOnly ? "PREVIEW ONLY" : "EXECUTION"
             previewStatus = "SIM IMAGE \(response.status.uppercased())"
@@ -1576,6 +1576,206 @@ final class PlotterBridgeModel: ObservableObject {
         }
         guard !contours.isEmpty else { return nil }
         return FaceContourPreviewOverlay(commandId: commandId, faceBounds: bounds, contours: contours)
+    }
+
+    private func makeFallbackFaceContourPreviewOverlay(
+        from sample: FaceRasterSample,
+        commandId: String
+    ) -> FaceContourPreviewOverlay? {
+        guard let values = normalizedFallbackRasterValues(sample.samples),
+              values.count >= 2,
+              values[0].count >= 2 else {
+            return nil
+        }
+
+        let maxContours = 700
+        let minLengthNorm = 0.035
+        var contours: [FaceContourPreviewPolyline] = []
+
+        for levelIndex in 0..<8 {
+            let level = Double(levelIndex + 1) / 9.0
+            for contour in fallbackContours(values: values, level: level) {
+                guard contour.points.count >= 4,
+                      fallbackPolylineLength(contour.points, closed: contour.closed) >= minLengthNorm else {
+                    continue
+                }
+                let points = contour.points.map { point in
+                    CGPoint(
+                        x: sample.faceBounds.minX + point.x * sample.faceBounds.width,
+                        y: sample.faceBounds.minY + point.y * sample.faceBounds.height
+                    )
+                }
+                contours.append(
+                    FaceContourPreviewPolyline(
+                        id: contours.count,
+                        points: points,
+                        closed: contour.closed
+                    )
+                )
+                if contours.count >= maxContours {
+                    return FaceContourPreviewOverlay(
+                        commandId: commandId,
+                        faceBounds: sample.faceBounds,
+                        contours: contours
+                    )
+                }
+            }
+        }
+
+        guard !contours.isEmpty else { return nil }
+        return FaceContourPreviewOverlay(commandId: commandId, faceBounds: sample.faceBounds, contours: contours)
+    }
+
+    private func normalizedFallbackRasterValues(_ samples: [[Double]]) -> [[Double]]? {
+        let flat = samples.flatMap { row in row.filter(\.isFinite) }
+        guard flat.count >= 4 else { return nil }
+        let sorted = flat.sorted()
+        let low = percentile(sorted, quantile: 0.18)
+        let high = percentile(sorted, quantile: 0.92)
+        guard high - low > 0.0001 else { return nil }
+        return samples.map { row in
+            row.map { value in
+                clampDouble((value - low) / (high - low), min: 0.0, max: 1.0)
+            }
+        }
+    }
+
+    private func percentile(_ sorted: [Double], quantile: Double) -> Double {
+        guard let first = sorted.first else { return 0.0 }
+        guard sorted.count > 1 else { return first }
+        let position = clampDouble(quantile, min: 0.0, max: 1.0) * Double(sorted.count - 1)
+        let lower = Int(floor(position))
+        let upper = Int(ceil(position))
+        if lower == upper {
+            return sorted[lower]
+        }
+        let fraction = position - Double(lower)
+        return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
+    }
+
+    private func fallbackContours(
+        values: [[Double]],
+        level: Double
+    ) -> [(points: [CGPoint], closed: Bool)] {
+        let height = values.count
+        let width = values[0].count
+        guard height >= 2, width >= 2 else { return [] }
+
+        var segments: [(CGPoint, CGPoint)] = []
+        for rowIndex in 0..<(height - 1) {
+            for columnIndex in 0..<(width - 1) {
+                let x0 = CGFloat(columnIndex) / CGFloat(width - 1)
+                let x1 = CGFloat(columnIndex + 1) / CGFloat(width - 1)
+                let yTop = 1.0 - CGFloat(rowIndex) / CGFloat(height - 1)
+                let yBottom = 1.0 - CGFloat(rowIndex + 1) / CGFloat(height - 1)
+                let corners = [
+                    (CGPoint(x: x0, y: yTop), values[rowIndex][columnIndex]),
+                    (CGPoint(x: x1, y: yTop), values[rowIndex][columnIndex + 1]),
+                    (CGPoint(x: x1, y: yBottom), values[rowIndex + 1][columnIndex + 1]),
+                    (CGPoint(x: x0, y: yBottom), values[rowIndex + 1][columnIndex])
+                ]
+                let edges = [
+                    (corners[0], corners[1]),
+                    (corners[1], corners[2]),
+                    (corners[2], corners[3]),
+                    (corners[3], corners[0])
+                ]
+                let points = fallbackDedupePoints(edges.compactMap { edge in
+                    fallbackEdgeCrossing(edge.0, edge.1, level: level)
+                })
+                if points.count == 2 {
+                    segments.append((points[0], points[1]))
+                } else if points.count == 4 {
+                    segments.append((points[0], points[1]))
+                    segments.append((points[2], points[3]))
+                }
+            }
+        }
+        return fallbackStitchSegments(segments)
+    }
+
+    private func fallbackEdgeCrossing(
+        _ start: (CGPoint, Double),
+        _ end: (CGPoint, Double),
+        level: Double
+    ) -> CGPoint? {
+        guard start.1 != end.1,
+              (start.1 < level && level <= end.1) || (end.1 < level && level <= start.1) else {
+            return nil
+        }
+        let fraction = CGFloat((level - start.1) / (end.1 - start.1))
+        return CGPoint(
+            x: start.0.x + fraction * (end.0.x - start.0.x),
+            y: start.0.y + fraction * (end.0.y - start.0.y)
+        )
+    }
+
+    private func fallbackDedupePoints(_ points: [CGPoint]) -> [CGPoint] {
+        var seen: Set<String> = []
+        var unique: [CGPoint] = []
+        for point in points {
+            let key = fallbackPointKey(point)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            unique.append(point)
+        }
+        return unique
+    }
+
+    private func fallbackStitchSegments(_ segments: [(CGPoint, CGPoint)]) -> [(points: [CGPoint], closed: Bool)] {
+        var unused = segments
+        var contours: [(points: [CGPoint], closed: Bool)] = []
+        while let segment = unused.popLast() {
+            var points = [segment.0, segment.1]
+            var changed = true
+            while changed {
+                changed = false
+                for index in unused.indices {
+                    let candidate = unused[index]
+                    if fallbackSamePoint(candidate.1, points[0]) {
+                        points.insert(candidate.0, at: 0)
+                    } else if fallbackSamePoint(candidate.0, points[0]) {
+                        points.insert(candidate.1, at: 0)
+                    } else if fallbackSamePoint(candidate.0, points[points.count - 1]) {
+                        points.append(candidate.1)
+                    } else if fallbackSamePoint(candidate.1, points[points.count - 1]) {
+                        points.append(candidate.0)
+                    } else {
+                        continue
+                    }
+                    unused.remove(at: index)
+                    changed = true
+                    break
+                }
+            }
+
+            let closed = points.count > 2 && fallbackSamePoint(points[0], points[points.count - 1])
+            if closed {
+                points.removeLast()
+            }
+            contours.append((points: points, closed: closed))
+        }
+        return contours
+    }
+
+    private func fallbackSamePoint(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
+        fallbackPointKey(lhs) == fallbackPointKey(rhs)
+    }
+
+    private func fallbackPointKey(_ point: CGPoint) -> String {
+        "\(Int((point.x * 1_000_000).rounded())):\(Int((point.y * 1_000_000).rounded()))"
+    }
+
+    private func fallbackPolylineLength(_ points: [CGPoint], closed: Bool) -> CGFloat {
+        guard points.count >= 2 else { return 0 }
+        var length: CGFloat = 0
+        for index in 1..<points.count {
+            length += hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y)
+        }
+        if closed, let first = points.first, let last = points.last {
+            length += hypot(first.x - last.x, first.y - last.y)
+        }
+        return length
     }
 
     func replayExpectedPath() {

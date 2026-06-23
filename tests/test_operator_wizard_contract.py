@@ -111,6 +111,8 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "faceContourPreviewOverlay" in model
     assert "makeFaceContourPreviewOverlay(" in model
     assert "response.portraitOverlay" in model
+    assert "makeFallbackFaceContourPreviewOverlay(from: raster" in model
+    assert "fallbackContours(values: values" in model
     assert "PortraitContourPreviewOverlay(" in content
     assert "struct PortraitContourPreviewOverlay" in overlays
     portrait_preview_block = model.split("func previewPortraitContours", 1)[1].split(
