@@ -98,8 +98,11 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     portrait_panel = _read(SWIFT_DIR / "PortraitPanel.swift")
 
     assert "Preview Portrait Contours" not in draw_verify
-    assert "Create Contour Drawing" in portrait_panel
+    assert 'Label("Create \\(bridge.portraitContourSettings.technique.captureLabel) Drawing"' in portrait_panel
     assert "PortraitPanel(" in content
+    assert "portraitPanelVisible" in content
+    assert "portraitPanelVisible.toggle()" in content
+    assert "canCreateContourDrawing: faceCamera.isRunning && !bridge.isCalibrating" in content
     assert "portraitContourMonitorEnabled" in content
     assert "runPortraitContourMonitor" in content
     assert "captureFaceRaster(" in content
@@ -107,11 +110,21 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "updatesStatus: false" in content
     assert "PortraitCaptureThumbnail" in portrait_panel
     assert "captureFaceRasterBurst(columns: 28, rows: 36)" in content
+    assert "bridge.expectedPathSegments = []" in content
+    assert "technique: technique" in content
+    assert "portraitContourMonitorEnabled = false" in content
     assert "func captureFaceRasterBurst" in camera_model
     assert "targetFrames: Int = 24" in camera_model
     assert "previewPortraitContours(" in content
     assert "settings: bridge.portraitContourSettings" in content
     assert "func previewPortraitContours" in model
+    assert "enum PortraitRenderTechnique" in models
+    assert "case hatch" in models
+    assert "case crosshatch" in models
+    assert "case facets" in models
+    assert "case stipple" in models
+    assert "Picker(\"Mode\"" in portrait_panel
+    assert "settingsTechniqueBinding()" in portrait_panel
     assert "BridgePortraitContourPreviewRequest" in client
     assert "BridgePortraitContourOverlay" in client
     assert "portraitOverlay" in client
@@ -126,6 +139,9 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "makeFallbackFaceContourPreviewOverlay(" in model
     assert "settings: settings" in model
     assert "updateLivePortraitContourPreview" in model
+    assert "fallbackHatchPolylines(" in model
+    assert "fallbackFacetPolylines(" in model
+    assert "fallbackStipplePolylines(" in model
     assert "fallbackContours(values: values" in model
     assert "PortraitContourPreviewOverlay(" in content
     assert "struct PortraitContourPreviewOverlay" in overlays

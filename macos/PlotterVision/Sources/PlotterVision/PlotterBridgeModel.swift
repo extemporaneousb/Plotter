@@ -1648,29 +1648,34 @@ final class PlotterBridgeModel: ObservableObject {
 
     func updateLivePortraitContourPreview(
         from sample: FaceRasterSample,
+        commandId providedCommandId: String? = nil,
         settings: PortraitContourSettings? = nil
     ) -> Bool {
         let settings = settings ?? portraitContourSettings
+        let isCapturedPreview = providedCommandId != nil
         guard let overlay = makeFallbackFaceContourPreviewOverlay(
             from: sample,
-            commandId: "portrait-live-\(sample.frameNumber)",
+            commandId: providedCommandId ?? "portrait-live-\(sample.frameNumber)",
             settings: settings
         ) else {
             faceContourPreviewOverlay = nil
             imagePreviewStatus = "IMG LIVE --"
-            imagePreviewDetail = "NO CONTOUR"
+            imagePreviewDetail = "NO DRAWING"
             imagePreviewContourCount = 0
             return false
         }
         faceContourPreviewOverlay = overlay
-        imagePreviewStatus = String(format: "IMG LIVE %dC", overlay.contours.count)
-        imagePreviewDetail = "LIVE CONTOUR"
+        imagePreviewStatus = isCapturedPreview
+            ? String(format: "IMG %dC", overlay.contours.count)
+            : String(format: "IMG LIVE %dC", overlay.contours.count)
+        imagePreviewDetail = "\(isCapturedPreview ? "CAPTURE" : "LIVE") \(settings.technique.captureLabel.uppercased())"
         imagePreviewContourCount = overlay.contours.count
         imagePreviewEligibleForBridgePreview = false
         return true
     }
 
     func restorePortraitCapture(_ item: PortraitCaptureItem) {
+        portraitContourSettings.technique = item.technique
         faceContourPreviewOverlay = item.overlay
         expectedPathSegments = item.expectedPathSegments
         imagePreviewStatus = item.status
@@ -1682,6 +1687,7 @@ final class PlotterBridgeModel: ObservableObject {
             "portrait_capture_restored",
             [
                 "capture_id": item.id.uuidString,
+                "technique": item.technique.rawValue,
                 "contours": item.contourCount,
                 "preview_segments": item.expectedPathSegments.count
             ],
@@ -1725,10 +1731,58 @@ final class PlotterBridgeModel: ObservableObject {
             return nil
         }
 
-        let maxContours = settings.maxContours
-        let minLengthNorm = CGFloat(settings.minContourLengthNorm)
+        let localContours: [(points: [CGPoint], closed: Bool)]
+        switch settings.technique {
+        case .contours:
+            localContours = fallbackContourPolylines(values: values, settings: settings)
+        case .hatch:
+            localContours = fallbackHatchPolylines(values: values, settings: settings, crosshatch: false)
+        case .crosshatch:
+            localContours = fallbackHatchPolylines(values: values, settings: settings, crosshatch: true)
+        case .facets:
+            localContours = fallbackFacetPolylines(values: values, settings: settings)
+        case .stipple:
+            localContours = fallbackStipplePolylines(values: values, settings: settings)
+        }
+
+        let minLengthNorm = settings.technique == .contours
+            ? CGFloat(settings.minContourLengthNorm)
+            : CGFloat(0.004)
         var contours: [FaceContourPreviewPolyline] = []
 
+        for contour in localContours {
+            guard contour.points.count >= 2,
+                  fallbackPolylineLength(contour.points, closed: contour.closed) >= minLengthNorm else {
+                continue
+            }
+            let points = contour.points.map { point in
+                CGPoint(
+                    x: sample.faceBounds.minX + point.x * sample.faceBounds.width,
+                    y: sample.faceBounds.minY + point.y * sample.faceBounds.height
+                )
+            }
+            contours.append(
+                FaceContourPreviewPolyline(
+                    id: contours.count,
+                    points: points,
+                    closed: contour.closed
+                )
+            )
+            if contours.count >= settings.maxContours {
+                break
+            }
+        }
+
+        guard !contours.isEmpty else { return nil }
+        return FaceContourPreviewOverlay(commandId: commandId, faceBounds: sample.faceBounds, contours: contours)
+    }
+
+    private func fallbackContourPolylines(
+        values: [[Double]],
+        settings: PortraitContourSettings
+    ) -> [(points: [CGPoint], closed: Bool)] {
+        var contours: [(points: [CGPoint], closed: Bool)] = []
+        let minLengthNorm = CGFloat(settings.minContourLengthNorm)
         for levelIndex in 0..<settings.contourLevels {
             let level = Double(levelIndex + 1) / Double(settings.contourLevels + 1)
             for contour in fallbackContours(values: values, level: level) {
@@ -1736,31 +1790,163 @@ final class PlotterBridgeModel: ObservableObject {
                       fallbackPolylineLength(contour.points, closed: contour.closed) >= minLengthNorm else {
                     continue
                 }
-                let points = contour.points.map { point in
-                    CGPoint(
-                        x: sample.faceBounds.minX + point.x * sample.faceBounds.width,
-                        y: sample.faceBounds.minY + point.y * sample.faceBounds.height
-                    )
-                }
-                contours.append(
-                    FaceContourPreviewPolyline(
-                        id: contours.count,
-                        points: points,
-                        closed: contour.closed
-                    )
-                )
-                if contours.count >= maxContours {
-                    return FaceContourPreviewOverlay(
-                        commandId: commandId,
-                        faceBounds: sample.faceBounds,
-                        contours: contours
-                    )
+                contours.append(contour)
+                if contours.count >= settings.maxContours {
+                    return contours
                 }
             }
         }
+        return contours
+    }
 
-        guard !contours.isEmpty else { return nil }
-        return FaceContourPreviewOverlay(commandId: commandId, faceBounds: sample.faceBounds, contours: contours)
+    private func fallbackHatchPolylines(
+        values: [[Double]],
+        settings: PortraitContourSettings,
+        crosshatch: Bool
+    ) -> [(points: [CGPoint], closed: Bool)] {
+        let height = values.count
+        let width = values[0].count
+        guard height >= 2, width >= 2 else { return [] }
+
+        let cellWidth = CGFloat(1.0 / Double(width - 1))
+        let cellHeight = CGFloat(1.0 / Double(height - 1))
+        var lines: [(points: [CGPoint], closed: Bool)] = []
+        for rowIndex in 0..<height {
+            for columnIndex in 0..<width {
+                let darkness = 1.0 - values[rowIndex][columnIndex]
+                guard darkness > 0.18 else { continue }
+
+                let density = clampDouble((darkness - 0.18) / 0.82, min: 0.0, max: 1.0)
+                let skip = density > 0.72 ? 1 : density > 0.44 ? 2 : 3
+                guard (rowIndex + columnIndex).isMultiple(of: skip) else { continue }
+
+                let center = fallbackGridPoint(row: rowIndex, column: columnIndex, height: height, width: width)
+                let scale = CGFloat(0.28 + 0.26 * density)
+                let dx = cellWidth * scale
+                let dy = cellHeight * scale
+                lines.append((
+                    points: [
+                        fallbackClampedPoint(x: center.x - dx, y: center.y + dy),
+                        fallbackClampedPoint(x: center.x + dx, y: center.y - dy)
+                    ],
+                    closed: false
+                ))
+
+                if crosshatch, darkness > 0.42, (rowIndex * 2 + columnIndex).isMultiple(of: max(1, skip - 1)) {
+                    lines.append((
+                        points: [
+                            fallbackClampedPoint(x: center.x - dx, y: center.y - dy),
+                            fallbackClampedPoint(x: center.x + dx, y: center.y + dy)
+                        ],
+                        closed: false
+                    ))
+                }
+
+                if lines.count >= settings.maxContours {
+                    return lines
+                }
+            }
+        }
+        return lines
+    }
+
+    private func fallbackFacetPolylines(
+        values: [[Double]],
+        settings: PortraitContourSettings
+    ) -> [(points: [CGPoint], closed: Bool)] {
+        let height = values.count
+        let width = values[0].count
+        guard height >= 2, width >= 2 else { return [] }
+
+        var facets: [(points: [CGPoint], closed: Bool)] = []
+        for rowIndex in 0..<(height - 1) {
+            for columnIndex in 0..<(width - 1) {
+                let topLeft = values[rowIndex][columnIndex]
+                let topRight = values[rowIndex][columnIndex + 1]
+                let bottomRight = values[rowIndex + 1][columnIndex + 1]
+                let bottomLeft = values[rowIndex + 1][columnIndex]
+                let local = [topLeft, topRight, bottomRight, bottomLeft]
+                let avgDarkness = 1.0 - (local.reduce(0.0, +) / 4.0)
+                let contrast = (local.max() ?? 0.0) - (local.min() ?? 0.0)
+                guard avgDarkness > 0.22 || contrast > 0.11 else { continue }
+
+                let p0 = fallbackGridPoint(row: rowIndex, column: columnIndex, height: height, width: width)
+                let p1 = fallbackGridPoint(row: rowIndex, column: columnIndex + 1, height: height, width: width)
+                let p2 = fallbackGridPoint(row: rowIndex + 1, column: columnIndex + 1, height: height, width: width)
+                let p3 = fallbackGridPoint(row: rowIndex + 1, column: columnIndex, height: height, width: width)
+                if topLeft + bottomRight <= topRight + bottomLeft {
+                    facets.append((points: [p0, p1, p2], closed: true))
+                    if avgDarkness > 0.40 || contrast > 0.18 {
+                        facets.append((points: [p0, p2, p3], closed: true))
+                    }
+                } else {
+                    facets.append((points: [p0, p1, p3], closed: true))
+                    if avgDarkness > 0.40 || contrast > 0.18 {
+                        facets.append((points: [p1, p2, p3], closed: true))
+                    }
+                }
+
+                if facets.count >= settings.maxContours {
+                    return facets
+                }
+            }
+        }
+        return facets
+    }
+
+    private func fallbackStipplePolylines(
+        values: [[Double]],
+        settings: PortraitContourSettings
+    ) -> [(points: [CGPoint], closed: Bool)] {
+        let height = values.count
+        let width = values[0].count
+        guard height >= 2, width >= 2 else { return [] }
+
+        let cellWidth = CGFloat(1.0 / Double(width - 1))
+        let cellHeight = CGFloat(1.0 / Double(height - 1))
+        let baseRadius = min(cellWidth, cellHeight)
+        var marks: [(points: [CGPoint], closed: Bool)] = []
+        for rowIndex in 0..<height {
+            for columnIndex in 0..<width {
+                let darkness = 1.0 - values[rowIndex][columnIndex]
+                guard darkness > 0.24 else { continue }
+
+                let density = clampDouble((darkness - 0.24) / 0.76, min: 0.0, max: 1.0)
+                let skip = density > 0.78 ? 2 : density > 0.48 ? 3 : 4
+                guard (rowIndex * 5 + columnIndex * 3).isMultiple(of: skip) else { continue }
+
+                let center = fallbackGridPoint(row: rowIndex, column: columnIndex, height: height, width: width)
+                let radius = baseRadius * CGFloat(0.16 + 0.26 * density)
+                marks.append((
+                    points: [
+                        fallbackClampedPoint(x: center.x, y: center.y + radius),
+                        fallbackClampedPoint(x: center.x + radius, y: center.y),
+                        fallbackClampedPoint(x: center.x, y: center.y - radius),
+                        fallbackClampedPoint(x: center.x - radius, y: center.y)
+                    ],
+                    closed: true
+                ))
+
+                if marks.count >= settings.maxContours {
+                    return marks
+                }
+            }
+        }
+        return marks
+    }
+
+    private func fallbackGridPoint(row: Int, column: Int, height: Int, width: Int) -> CGPoint {
+        CGPoint(
+            x: CGFloat(column) / CGFloat(max(width - 1, 1)),
+            y: 1.0 - CGFloat(row) / CGFloat(max(height - 1, 1))
+        )
+    }
+
+    private func fallbackClampedPoint(x: CGFloat, y: CGFloat) -> CGPoint {
+        CGPoint(
+            x: CGFloat(clampDouble(Double(x), min: 0.0, max: 1.0)),
+            y: CGFloat(clampDouble(Double(y), min: 0.0, max: 1.0))
+        )
     }
 
     private func normalizedFallbackRasterValues(

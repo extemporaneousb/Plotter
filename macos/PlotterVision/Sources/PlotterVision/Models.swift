@@ -207,7 +207,48 @@ struct FaceContourPreviewOverlay: Equatable {
     let contours: [FaceContourPreviewPolyline]
 }
 
+enum PortraitRenderTechnique: String, CaseIterable, Identifiable {
+    case contours
+    case hatch
+    case crosshatch
+    case facets
+    case stipple
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .contours:
+            return "Lines"
+        case .hatch:
+            return "Hatch"
+        case .crosshatch:
+            return "XHatch"
+        case .facets:
+            return "Facets"
+        case .stipple:
+            return "Dots"
+        }
+    }
+
+    var captureLabel: String {
+        switch self {
+        case .contours:
+            return "Contour"
+        case .hatch:
+            return "Hatch"
+        case .crosshatch:
+            return "XHatch"
+        case .facets:
+            return "Facets"
+        case .stipple:
+            return "Dots"
+        }
+    }
+}
+
 struct PortraitContourSettings: Equatable {
+    var technique = PortraitRenderTechnique.contours
     var contourLevels = 8
     var lowQuantile = 0.18
     var highQuantile = 0.92
@@ -225,6 +266,7 @@ struct PortraitContourSettings: Equatable {
 struct PortraitCaptureItem: Identifiable, Equatable {
     let id: UUID
     let createdAt: Date
+    let technique: PortraitRenderTechnique
     let status: String
     let detail: String
     let contourCount: Int

@@ -29,6 +29,7 @@ struct ContentView: View {
     @State var calibrationStatusText = "CAL idle"
     @State private var showCalibrationWizard = false
     @State private var showImageProcessingPanel = true
+    @State private var portraitPanelVisible = true
     @State private var portraitContourMonitorEnabled = true
     @State private var portraitContourMonitorStatus = "LIVE --"
     @State private var portraitCaptures: [PortraitCaptureItem] = []
@@ -137,25 +138,49 @@ struct ContentView: View {
     private var cameraWorkspace: some View {
         GeometryReader { geometry in
             let horizontal = geometry.size.width >= geometry.size.height
-            switch cameraLayout {
-            case .both:
-                if horizontal {
-                    HStack(spacing: 1) {
-                        plotterCameraPane
-                        faceCameraPane
-                    }
-                } else {
-                    VStack(spacing: 1) {
-                        plotterCameraPane
-                        faceCameraPane
-                    }
+            let portraitInspectorWidth = min(CGFloat(360), max(CGFloat(300), geometry.size.width * 0.28))
+            HStack(spacing: 1) {
+                cameraWorkspaceContent(horizontal: horizontal)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if portraitPanelVisible {
+                    portraitInspectorPane
+                        .frame(width: portraitInspectorWidth)
                 }
-            case .plotter:
-                plotterCameraPane
-            case .face:
-                faceCameraPane
             }
         }
+    }
+
+    @ViewBuilder
+    private func cameraWorkspaceContent(horizontal: Bool) -> some View {
+        switch cameraLayout {
+        case .both:
+            if horizontal {
+                HStack(spacing: 1) { plotterCameraPane; faceCameraPane }
+            } else {
+                VStack(spacing: 1) { plotterCameraPane; faceCameraPane }
+            }
+        case .plotter:
+            plotterCameraPane
+        case .face:
+            faceCameraPane
+        }
+    }
+
+    private var portraitInspectorPane: some View {
+        PortraitPanel(
+            bridge: bridge, monitorEnabled: $portraitContourMonitorEnabled,
+            monitorStatus: portraitContourMonitorStatus, captures: portraitCaptures,
+            selectedCaptureID: selectedPortraitCaptureID,
+            canCreateContourDrawing: faceCamera.isRunning && !bridge.isCalibrating,
+            createContourDrawing: {
+                Task { await createPortraitContourDrawing() }
+            },
+            selectCapture: selectPortraitCapture
+        )
+        .padding(.top, 70)
+        .padding(.bottom, 58)
+        .background(Color.black.opacity(0.88))
+        .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 
     private var plotterCameraPane: some View {
@@ -259,18 +284,6 @@ struct ContentView: View {
                 )
             }
 
-            PortraitPanel(
-                bridge: bridge,
-                monitorEnabled: $portraitContourMonitorEnabled,
-                monitorStatus: portraitContourMonitorStatus,
-                captures: portraitCaptures,
-                selectedCaptureID: selectedPortraitCaptureID,
-                createContourDrawing: {
-                    Task { await createPortraitContourDrawing() }
-                },
-                selectCapture: selectPortraitCapture
-            )
-
             CameraPaneBadge(camera: faceCamera)
         }
         .clipped()
@@ -309,15 +322,10 @@ struct ContentView: View {
         bridge.recordOperatorEvent("face_draw_capture_started")
         do {
             let raster = try await faceCamera.captureFaceRaster(columns: 14, rows: 18)
-            let rect = drawingFrame.rect(
-                workspaceXMm: bridge.workspaceXMm,
-                workspaceYMm: bridge.workspaceYMm
-            )
+            let rect = drawingFrame.rect(workspaceXMm: bridge.workspaceXMm, workspaceYMm: bridge.workspaceYMm)
             let frame = BridgeDrawingFrameRequest(
-                originXMm: Double(rect.minX) * bridge.workspaceXMm,
-                originYMm: Double(rect.minY) * bridge.workspaceYMm,
-                widthMm: Double(rect.width) * bridge.workspaceXMm,
-                heightMm: Double(rect.height) * bridge.workspaceYMm,
+                originXMm: Double(rect.minX) * bridge.workspaceXMm, originYMm: Double(rect.minY) * bridge.workspaceYMm,
+                widthMm: Double(rect.width) * bridge.workspaceXMm, heightMm: Double(rect.height) * bridge.workspaceYMm,
                 flipY: false
             )
             let completed = await bridge.drawFaceRaster(raster, frame: frame)
@@ -337,30 +345,33 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func previewImageFromCurrentFrame() async {
+    private func previewImageFromCurrentFrame() async -> Bool {
         bridge.recordOperatorEvent("portrait_preview_capture_started")
         do {
             faceCamera.segmentationEnabled = true
             let raster = try await faceCamera.captureFaceRasterBurst(columns: 28, rows: 36)
-            let rect = drawingFrame.rect(
-                workspaceXMm: bridge.workspaceXMm,
-                workspaceYMm: bridge.workspaceYMm
-            )
+            let settings = bridge.portraitContourSettings
+            let rect = drawingFrame.rect(workspaceXMm: bridge.workspaceXMm, workspaceYMm: bridge.workspaceYMm)
             let frame = BridgeDrawingFrameRequest(
-                originXMm: Double(rect.minX) * bridge.workspaceXMm,
-                originYMm: Double(rect.minY) * bridge.workspaceYMm,
-                widthMm: Double(rect.width) * bridge.workspaceXMm,
-                heightMm: Double(rect.height) * bridge.workspaceYMm,
+                originXMm: Double(rect.minX) * bridge.workspaceXMm, originYMm: Double(rect.minY) * bridge.workspaceYMm,
+                widthMm: Double(rect.width) * bridge.workspaceXMm, heightMm: Double(rect.height) * bridge.workspaceYMm,
                 flipY: false
             )
-            let completed = await bridge.previewPortraitContours(
-                raster,
-                frame: frame,
-                settings: bridge.portraitContourSettings
-            )
-            calibrationStatusText = completed
-                ? "VERIFY \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
-                : "VERIFY \(bridge.imagePreviewStatus)"
+            let bridgeCanPreview = settings.technique == .contours && bridge.isOnline && !bridge.isRunning && !bridge.isMachineBusy && !bridge.isCalibrating
+            if bridgeCanPreview {
+                _ = await bridge.previewPortraitContours(raster, frame: frame, settings: settings)
+                if bridge.faceContourPreviewOverlay != nil {
+                    calibrationStatusText = "VERIFY \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
+                    return true
+                }
+            }
+
+            bridge.expectedPathSegments = []
+            let updated = bridge.updateLivePortraitContourPreview(from: raster, commandId: "portrait-capture-\(UUID().uuidString.lowercased())", settings: settings)
+            calibrationStatusText = updated
+                ? "PORTRAIT \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
+                : "PORTRAIT IMG NO DRAWING"
+            return updated
         } catch {
             faceCamera.statusText = error.localizedDescription
             bridge.statusText = error.localizedDescription
@@ -371,20 +382,21 @@ struct ContentView: View {
                 "portrait_preview_capture_failed",
                 details: ["error": error.localizedDescription]
             )
+            return false
         }
     }
 
     @MainActor
     private func createPortraitContourDrawing() async {
-        let beforeCommandId = bridge.faceContourPreviewOverlay?.commandId
-        await previewImageFromCurrentFrame()
-        guard let overlay = bridge.faceContourPreviewOverlay,
-              overlay.commandId != beforeCommandId || !bridge.expectedPathSegments.isEmpty else {
+        let technique = bridge.portraitContourSettings.technique
+        let completed = await previewImageFromCurrentFrame()
+        guard completed, let overlay = bridge.faceContourPreviewOverlay else {
             return
         }
         let item = PortraitCaptureItem(
             id: UUID(),
             createdAt: Date(),
+            technique: technique,
             status: bridge.imagePreviewStatus,
             detail: bridge.imagePreviewDetail,
             contourCount: overlay.contours.count,
@@ -393,14 +405,16 @@ struct ContentView: View {
         )
         selectedPortraitCaptureID = item.id
         portraitCaptures.insert(item, at: 0)
+        portraitContourMonitorEnabled = false
         if portraitCaptures.count > 12 {
             portraitCaptures.removeLast(portraitCaptures.count - 12)
         }
-        calibrationStatusText = "PORTRAIT saved \(item.contourCount) contours"
+        calibrationStatusText = "PORTRAIT saved \(technique.captureLabel.lowercased()) \(item.contourCount)"
         bridge.recordOperatorEvent(
             "portrait_capture_saved",
             details: [
                 "capture_id": item.id.uuidString,
+                "technique": technique.rawValue,
                 "contours": item.contourCount,
                 "preview_segments": item.expectedPathSegments.count
             ]
@@ -410,8 +424,9 @@ struct ContentView: View {
     @MainActor
     private func selectPortraitCapture(_ item: PortraitCaptureItem) {
         selectedPortraitCaptureID = item.id
+        portraitContourMonitorEnabled = false
         bridge.restorePortraitCapture(item)
-        calibrationStatusText = "PORTRAIT selected \(item.contourCount) contours"
+        calibrationStatusText = "PORTRAIT selected \(item.technique.captureLabel.lowercased()) \(item.contourCount)"
     }
 
     @MainActor
@@ -2652,13 +2667,16 @@ struct ContentView: View {
                     systemName: "person.crop.rectangle",
                     label: "Portrait",
                     help: "Show face contour monitor and portrait controls",
-                    isActive: portraitContourMonitorEnabled || !portraitCaptures.isEmpty
+                    isActive: portraitPanelVisible
                 ) {
-                    cameraLayout = .face
-                    if !faceCamera.isRunning {
-                        faceCamera.start()
+                    portraitPanelVisible.toggle()
+                    if portraitPanelVisible {
+                        cameraLayout = .face
+                        if !faceCamera.isRunning {
+                            faceCamera.start()
+                        }
+                        portraitContourMonitorEnabled = true
                     }
-                    portraitContourMonitorEnabled = true
                 }
 
                 VisualControlsMenu(

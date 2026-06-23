@@ -6,21 +6,14 @@ struct PortraitPanel: View {
     let monitorStatus: String
     let captures: [PortraitCaptureItem]
     let selectedCaptureID: UUID?
+    let canCreateContourDrawing: Bool
     let createContourDrawing: () -> Void
     let selectCapture: (PortraitCaptureItem) -> Void
 
     var body: some View {
-        VStack {
-            HStack(alignment: .top) {
-                panelContent
-                Spacer(minLength: 0)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 72)
-        .padding(.leading, 18)
-        .padding(.bottom, 18)
-        .padding(.trailing, 18)
+        panelContent
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var panelContent: some View {
@@ -41,15 +34,15 @@ struct PortraitPanel: View {
             Button {
                 createContourDrawing()
             } label: {
-                Label("Create Contour Drawing", systemImage: "camera.aperture")
+                Label("Create \(bridge.portraitContourSettings.technique.captureLabel) Drawing", systemImage: "camera.aperture")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning || bridge.isMachineBusy)
-            .help("Capture a burst portrait and create a bridge preview drawing")
+            .disabled(!canCreateContourDrawing)
+            .help("Capture a burst portrait and create a portrait drawing preview")
 
-            Toggle("Contour Monitor", isOn: $monitorEnabled)
+            Toggle("Live Monitor", isOn: $monitorEnabled)
                 .toggleStyle(.switch)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.82))
@@ -58,7 +51,7 @@ struct PortraitPanel: View {
 
             captureStrip
         }
-        .frame(width: 330)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
@@ -69,6 +62,14 @@ struct PortraitPanel: View {
 
     private var parameterControls: some View {
         VStack(alignment: .leading, spacing: 7) {
+            Picker("Mode", selection: settingsTechniqueBinding()) {
+                ForEach(PortraitRenderTechnique.allCases) { technique in
+                    Text(technique.title).tag(technique)
+                }
+            }
+            .pickerStyle(.segmented)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+
             HStack(spacing: 10) {
                 Stepper("Levels \(bridge.portraitContourSettings.contourLevels)", value: settingsIntBinding(\.contourLevels), in: 2...16)
                 Stepper("Smooth \(bridge.portraitContourSettings.smoothingRadius)", value: settingsIntBinding(\.smoothingRadius), in: 0...4)
@@ -139,6 +140,14 @@ struct PortraitPanel: View {
                 }
                 .frame(height: 74)
             }
+        }
+    }
+
+    private func settingsTechniqueBinding() -> Binding<PortraitRenderTechnique> {
+        Binding {
+            bridge.portraitContourSettings.technique
+        } set: { value in
+            bridge.portraitContourSettings.technique = value
         }
     }
 
@@ -221,9 +230,12 @@ private struct PortraitCaptureThumbnail: View {
                     .stroke(selected ? Color.cyan.opacity(0.95) : Color.white.opacity(0.18), lineWidth: selected ? 2 : 1)
             )
 
-            Text("\(item.contourCount)C")
+            Text("\(item.technique.title) \(item.contourCount)")
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(selected ? .cyan.opacity(0.95) : .white.opacity(0.56))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .frame(width: 62)
         }
     }
 
