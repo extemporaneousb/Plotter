@@ -1,0 +1,389 @@
+schema: plotter_operator_ui_manifest
+schema_version: 1
+status: draft_review_contract
+source_of_truth: SwiftUI implementation under macos/PlotterVision/Sources/PlotterVision
+purpose: >
+  Text-reviewable manifest for Plotter operator UI structure. Reviewers can mark
+  visible controls for keep, removal, rename, move, or panel promotion without
+  relying on ambiguous prose.
+
+review_semantics:
+  decision_values:
+    keep: Leave the visible UI item in its current role.
+    remove: Remove the visible UI item only, unless cleanup says otherwise.
+    rename: Keep the item but change its operator-facing label.
+    move: Keep the item but move it to move_to.
+    merge: Combine this item into merge_with.
+    split: Split this item into separate controls or surfaces.
+    promote_to_panel: Make this a fixed panel or inspector instead of a menu item.
+    demote_to_menu: Keep this only as a secondary menu setting.
+    question: Needs explicit human review before implementation.
+
+  cleanup_values:
+    preserve_shared_code: Remove or move UI references only. Keep shared state, bridge routes, planners, models, tests, and helpers.
+    ui_only: Delete only the visible SwiftUI item and direct view wiring.
+    delete_related_code: >
+      Delete the visible item and code exclusively serving that item. This includes
+      private SwiftUI helper views, local state, local bindings, menu sections, and
+      tests whose only purpose was that item. Do not delete shared bridge routes,
+      safety gates, drawing planners, calibration artifacts, or model fields unless
+      they are proven exclusive and separately named in related_code_candidates.
+    backend_review_required: >
+      Do not delete implementation code automatically. First review Python bridge,
+      planner, calibration, persisted artifact, and route usage.
+
+  exclusivity_rules:
+    exclusive_when:
+      - The symbol is private to one view file and only serves the removed UI item.
+      - The state is only read or written by the removed UI path.
+      - The test asserts only the existence or behavior of the removed UI item.
+      - The helper has no bridge, planner, calibration, safety, or execution role.
+    not_exclusive_when:
+      - The symbol is part of bridge request or response compatibility.
+      - The symbol participates in DrawingProgram, planner, simulator, calibration, binding, or machine safety.
+      - The same state feeds another panel, app diagnostic surface, test route, or persisted artifact.
+      - The code names a durable operator workflow even if one current button is removed.
+    required_evidence_for_delete_related_code:
+      - rg usage scan for each related_code_candidate.
+      - confirmation that no active route, persisted artifact, or non-UI test depends on the code.
+      - focused tests proving the remaining UI and bridge contract still build and run.
+
+  implementation_defaults:
+    decision: question
+    cleanup: preserve_shared_code
+    validation:
+      - YAML parses.
+      - Swift app builds after implementation changes.
+      - Focused operator UI contract tests are updated.
+      - make check passes when code behavior changes.
+
+layout_model:
+  primary_workspace:
+    owner: ContentView
+    role: Camera/video workspace and projected drawing evidence.
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
+      - macos/PlotterVision/Sources/PlotterVision/CameraOverlaySupportViews.swift
+      - macos/PlotterVision/Sources/PlotterVision/MeasurementOverlay.swift
+    decision: keep
+    cleanup: preserve_shared_code
+
+  top_bar:
+    owner: ContentView.topBar
+    placement: top_overlay
+    role: App-level navigation and high-frequency operator actions.
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
+      - macos/PlotterVision/Sources/PlotterVision/ToolbarControls.swift
+    decision: question
+    cleanup: preserve_shared_code
+    controls:
+      - id: app_brand
+        label: Plotter Vision
+        type: static_label
+        action: none
+        decision: keep
+        cleanup: ui_only
+
+      - id: camera_layout
+        label: camera layout selector
+        type: segmented_control
+        options: [both, plotter, face]
+        action: choose visible camera panes
+        decision: question
+        cleanup: preserve_shared_code
+
+      - id: plotter_camera_selector
+        label: plotter camera
+        type: picker
+        action: choose plotter camera device
+        decision: keep
+        cleanup: preserve_shared_code
+
+      - id: face_camera_selector
+        label: face camera
+        type: picker
+        action: choose face camera device
+        decision: keep
+        cleanup: preserve_shared_code
+
+      - id: start_cameras
+        label: Cameras
+        type: button
+        action: start visible camera streams
+        decision: question
+        cleanup: ui_only
+        related_code_candidates:
+          - ContentView.startVisibleCameras
+
+      - id: bridge_connection
+        label: connection
+        type: status_button
+        action: refresh or reconnect bridge state
+        decision: keep
+        cleanup: preserve_shared_code
+
+      - id: rotate_plotter_video
+        label: Rotate
+        type: button
+        action: rotate plotter camera display by 90 degrees
+        decision: question
+        cleanup: preserve_shared_code
+
+      - id: focus_plotter_video
+        label: Plotter FOV / Original
+        type: toggle_button
+        shortcut: command-f
+        action: toggle persisted plotter camera viewport focus
+        decision: keep
+        cleanup: preserve_shared_code
+
+      - id: visual_field_setup
+        label: Field
+        type: button
+        action: open Visual Field Setup
+        decision: promote_to_panel
+        cleanup: preserve_shared_code
+        move_to: visual_field_setup_panel
+
+      - id: portrait
+        label: Portrait
+        type: toggle_button
+        action: show or hide fixed portrait panel
+        decision: keep
+        cleanup: preserve_shared_code
+        move_to: portrait_panel
+
+      - id: visuals_menu
+        label: Visuals
+        type: menu
+        action: open visual overlays and video settings
+        decision: demote_to_menu
+        cleanup: preserve_shared_code
+        move_to: visual_settings_menu
+
+      - id: draw_verify_menu
+        label: Draw/Verify
+        type: menu
+        action: open drawing preview and verification actions
+        decision: question
+        cleanup: preserve_shared_code
+        proposed_change: consider fixed draw_verify_panel
+
+      - id: machine_window
+        label: Machine
+        type: button
+        action: open machine controls window
+        decision: keep
+        cleanup: preserve_shared_code
+
+      - id: top_status_lights
+        label: status lights
+        type: status_cluster
+        action: display bridge, paper, draw, and safety state
+        decision: keep
+        cleanup: preserve_shared_code
+
+  visual_settings_menu:
+    owner: VisualControlsMenu
+    placement: top_bar_menu
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/VisualControlsMenu.swift
+      - macos/PlotterVision/Sources/PlotterVision/CameraOverlaySupportViews.swift
+    role: Secondary camera overlays, viewport, video filter, and visual reset settings.
+    decision: question
+    cleanup: preserve_shared_code
+    sections:
+      - id: overlays
+        label: Overlays
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: calibrated_grid, label: Calibrated Grid, type: toggle, decision: keep, cleanup: preserve_shared_code }
+          - { id: measurements, label: Measurements, type: toggle, decision: keep, cleanup: preserve_shared_code }
+          - { id: segmentation, label: Segmentation, type: toggle, decision: question, cleanup: preserve_shared_code }
+          - { id: motion_detection, label: Motion Detection, type: toggle, decision: question, cleanup: preserve_shared_code }
+          - { id: overlay_alpha, label: Overlay Alpha, type: slider, decision: keep, cleanup: preserve_shared_code }
+
+      - id: video_filter
+        label: Video Filter
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: plotter_video_filter, label: Filter, type: picker, decision: keep, cleanup: preserve_shared_code }
+
+      - id: plotter_view
+        label: Plotter View
+        decision: question
+        cleanup: preserve_shared_code
+        controls:
+          - { id: original_video, label: Original Video, type: button, decision: merge, merge_with: focus_plotter_video, cleanup: ui_only }
+          - { id: viewport_status_text, label: Viewport status, type: readout, decision: question, cleanup: ui_only }
+
+      - id: cap_marker
+        label: Cap Marker
+        decision: move
+        move_to: visual_field_setup_panel
+        cleanup: preserve_shared_code
+        controls:
+          - { id: sample_cap_color, label: Sample Cap Color, type: button, decision: move, move_to: visual_field_setup_panel, cleanup: preserve_shared_code }
+          - { id: reset_cap_color, label: Reset Cap Color, type: button, decision: move, move_to: visual_field_setup_panel, cleanup: preserve_shared_code }
+
+      - id: image_baseline
+        label: Image Baseline
+        decision: question
+        cleanup: preserve_shared_code
+        controls:
+          - { id: face_contours, label: Face Contours, type: toggle, decision: move, move_to: portrait_panel, cleanup: preserve_shared_code }
+          - { id: image_panel, label: Image Panel, type: toggle, decision: question, cleanup: preserve_shared_code }
+
+      - id: reset
+        label: Reset
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: reset_visual_controls, label: Reset Visual Controls, type: button, decision: keep, cleanup: preserve_shared_code }
+
+  draw_verify_menu:
+    owner: DrawVerifyMenu
+    placement: top_bar_menu
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/DrawVerifyMenu.swift
+      - macos/PlotterVision/Sources/PlotterVision/DrawVerifyCoordinator.swift
+      - macos/PlotterVision/Sources/PlotterVision/PlotterBridgeModel.swift
+      - plotter_vision/bridge/server.py
+      - plotter_vision/bridge/planner.py
+    role: Preview and run capability checks, shape previews, and expected-path overlays.
+    authority_boundary: Python owns planning, simulation, execution gates, and trust.
+    decision: question
+    cleanup: preserve_shared_code
+    proposed_change: consider fixed draw_verify_panel
+    sections:
+      - id: capability_checks
+        label: Capability Checks
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: preview_center_crosshair, label: Preview Center Crosshair, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: preview_line_length, label: Preview Line Length, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: preview_square_closure, label: Preview Square Closure, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: preview_triangle, label: Preview Triangle, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: preview_coordinate_sheet, label: Preview Coordinate Sheet, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: run_verified_capability, label: Run Verified Capability, type: button, decision: keep, cleanup: preserve_shared_code }
+
+      - id: verified_plan
+        label: Verified Plan
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: verified_plan_label, label: Plan Label, type: readout, decision: keep, cleanup: preserve_shared_code }
+          - { id: verified_command_id, label: Command ID, type: readout, decision: keep, cleanup: preserve_shared_code }
+          - { id: verified_plan_hash, label: Plan Hash, type: readout, decision: keep, cleanup: preserve_shared_code }
+
+      - id: shape_preview
+        label: Shape Preview
+        decision: question
+        cleanup: preserve_shared_code
+        controls:
+          - { id: preview_triangle_shape, label: Preview Triangle Shape, type: button, decision: question, cleanup: preserve_shared_code }
+          - { id: preview_square_shape, label: Preview Square Shape, type: button, decision: question, cleanup: preserve_shared_code }
+
+      - id: overlay
+        label: Overlay
+        decision: keep
+        cleanup: preserve_shared_code
+        controls:
+          - { id: replay_expected_path, label: Replay Expected Path, type: button, decision: keep, cleanup: preserve_shared_code }
+          - { id: clear_draw_verify_overlays, label: Clear Draw/Verify Overlays, type: button, decision: keep, cleanup: preserve_shared_code }
+
+  portrait_panel:
+    owner: PortraitPanel
+    placement: fixed_right_panel
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/PortraitPanel.swift
+      - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
+      - macos/PlotterVision/Sources/PlotterVision/Models.swift
+      - macos/PlotterVision/Sources/PlotterVision/PlotterBridgeModel.swift
+      - plotter_vision/drawing/raster.py
+      - plotter_vision/bridge/server.py
+    role: Live portrait preview, portrait rendering controls, capture strip, and portrait drawing creation.
+    decision: keep
+    cleanup: preserve_shared_code
+    controls:
+      - { id: create_portrait_drawing, label: Create <Technique> Drawing, type: button, decision: keep, cleanup: preserve_shared_code }
+      - { id: live_monitor, label: Live Monitor, type: toggle, decision: keep, cleanup: preserve_shared_code }
+      - { id: portrait_mode, label: Mode, type: segmented_picker, options: [Lines, Hatch, XHatch, Facets, Dots], decision: keep, cleanup: preserve_shared_code }
+      - { id: contour_levels, label: Levels, type: stepper, decision: keep, cleanup: preserve_shared_code }
+      - { id: smoothing, label: Smooth, type: stepper, decision: keep, cleanup: preserve_shared_code }
+      - { id: low_quantile, label: Low, type: slider, decision: rename, suggested_label: Shadow Floor, cleanup: preserve_shared_code }
+      - { id: high_quantile, label: High, type: slider, decision: rename, suggested_label: Highlight Ceiling, cleanup: preserve_shared_code }
+      - { id: min_length, label: Min Len, type: slider, decision: rename, suggested_label: Minimum Stroke, cleanup: preserve_shared_code }
+      - { id: illumination, label: Light, type: slider, decision: rename, suggested_label: Light Normalize, cleanup: preserve_shared_code }
+      - { id: captures_strip, label: Captures, type: thumbnail_strip, decision: keep, cleanup: preserve_shared_code }
+
+  visual_field_setup_panel:
+    owner: CalibrationWizardView
+    placement: floating_overlay
+    proposed_placement: fixed_left_or_right_panel
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/CalibrationWizardView.swift
+      - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
+      - plotter_vision/calibration/readiness.py
+      - plotter_vision/calibration/binding.py
+      - plotter_vision/bridge/server.py
+    role: Visual field setup, cap confirmation, motion calibration, and drawing calibration.
+    authority_boundary: Swift displays and collects observations. Python persists registration, probe evidence, binding solves, and trust state.
+    decision: keep
+    cleanup: preserve_shared_code
+    steps:
+      - { id: fiducials, label: Fiducials, decision: keep, cleanup: preserve_shared_code }
+      - { id: green_cap, label: Green Cap, decision: keep, cleanup: preserve_shared_code }
+      - { id: motion_calibration, label: Motion Calibration, decision: keep, cleanup: preserve_shared_code }
+      - { id: drawing_calibration, label: Drawing Calibration, decision: keep, cleanup: preserve_shared_code }
+    controls:
+      - { id: primary_action, label: dynamic, type: button, decision: keep, cleanup: preserve_shared_code }
+      - { id: confirm_setup, label: Confirm Setup, type: button, decision: keep, cleanup: preserve_shared_code }
+      - { id: reset_setup, label: Reset, type: button, decision: keep, cleanup: preserve_shared_code }
+      - { id: hide_setup, label: close, type: icon_button, decision: question, cleanup: ui_only }
+
+  machine_window:
+    owner: MachineControlPanel
+    placement: separate_window
+    source_files:
+      - macos/PlotterVision/Sources/PlotterVision/MachineControlPanel.swift
+      - macos/PlotterVision/Sources/PlotterVision/AppMain.swift
+      - macos/PlotterVision/Sources/PlotterVision/PlotterBridgeModel.swift
+      - plotter_vision/bridge/server.py
+    role: Machine status, stop, pen, jog, arming, and bridge/controller action surface.
+    decision: keep
+    cleanup: preserve_shared_code
+    note: Keep machine actions separate from visual rendering and portrait controls.
+
+review_examples:
+  remove_button_only:
+    edit:
+      decision: remove
+      cleanup: ui_only
+    meaning: Delete the visible control and direct view wiring only.
+
+  remove_button_and_exclusive_helpers:
+    edit:
+      decision: remove
+      cleanup: delete_related_code
+      related_code_candidates:
+        - SomeView.privateHelperUsedOnlyByThisButton
+        - SomeView.localStateUsedOnlyByThisButton
+    meaning: Delete visible control plus listed exclusive helpers after rg evidence.
+
+  move_setting_to_panel:
+    edit:
+      decision: move
+      move_to: portrait_panel
+      cleanup: ui_only
+    meaning: Move visible control wiring. Preserve shared state and backend behavior.
+
+  backend_cleanup_requires_extra_review:
+    edit:
+      decision: remove
+      cleanup: backend_review_required
+    meaning: Do not delete Python route, planner, persisted model, or bridge DTO until separately reviewed.
