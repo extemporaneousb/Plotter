@@ -35,10 +35,10 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 The physical paper fiducials are manually clicked in the wizard for camera-to-paper registration.
 They are not enough by themselves
-to prove machine motion. Machine motion still needs pen-tip or drawn-mark observations paired with
+to prove machine motion. Machine motion still needs drawn binding-mark observations paired with
 commanded logical millimeter points. The cap marker provides live carriage evidence, but cap-only
-motion is still relative session evidence; absolute paper-plane drawing needs ink or pen-tip
-observations with residuals.
+motion is still relative session evidence; absolute paper-plane drawing needs ink observations with
+residuals.
 
 ## Image Processing
 

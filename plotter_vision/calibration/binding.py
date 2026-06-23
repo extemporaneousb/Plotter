@@ -16,7 +16,7 @@ from plotter_vision.drawing.pipeline import PreviewOverlay
 
 
 BindingValidationStatus = Literal["collecting", "validated", "blocked", "stale"]
-ObservedGeometryKind = Literal["ink", "pen_tip"]
+ObservedGeometryKind = Literal["ink"]
 ExpectedGeometryRole = Literal["segment_start", "segment_end", "segment_midpoint"]
 FIRST_UNLOCK_MIN_OBSERVATIONS = 5
 FIRST_UNLOCK_MAX_RMS_RESIDUAL_MM = 3.0
@@ -32,7 +32,7 @@ class CapToTipModel(BaseModel):
     model_type: Literal["offset_mm"] = "offset_mm"
     offset_x_mm: float = 0.0
     offset_y_mm: float = 0.0
-    source: Literal["unsolved", "residual_solver", "operator_measurement"] = "unsolved"
+    source: Literal["unsolved", "residual_solver"] = "unsolved"
 
 
 class AffineTransform2D(BaseModel):
@@ -172,7 +172,7 @@ def create_visual_position_binding(
             current_camera_id=camera_id,
         ),
         blockers=[
-            f"Needs at least {FIRST_UNLOCK_MIN_OBSERVATIONS} ink or pen-tip observations."
+            f"Needs at least {FIRST_UNLOCK_MIN_OBSERVATIONS} binding mark observations."
         ],
     )
 
@@ -238,7 +238,7 @@ def solve_visual_position_binding(
 
     if observation_count < FIRST_UNLOCK_MIN_OBSERVATIONS:
         blockers.append(
-            f"Needs at least {FIRST_UNLOCK_MIN_OBSERVATIONS} ink or pen-tip observations; "
+            f"Needs at least {FIRST_UNLOCK_MIN_OBSERVATIONS} binding mark observations; "
             f"got {observation_count}."
         )
     if not {"X", "Y"}.issubset(set(axes)):

@@ -47,7 +47,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var visualBindingDetail = "No binding observations"
     @Published var visualBindingObservationCount = 0
     @Published var visualBindingValid = false
-    @Published var toolCapToTipModel: BridgeCapToTipModel?
+    @Published var learnedCapToTipModel: BridgeCapToTipModel?
     @Published var drawableSafeZone: BridgeDrawingSafeZone?
     @Published var visualProbeEvidenceRunId = "swift-probe-\(UUID().uuidString.lowercased())"
     @Published var bindingMarkPreviewPoints: [BindingMarkPreviewPoint] = []
@@ -205,7 +205,7 @@ final class PlotterBridgeModel: ObservableObject {
             let response = try await client.resetCalibrationSetup(BridgeSetupResetRequest())
             paperRegistrationSnapshot = nil
             paperTransformStatus = "PAPER --"
-            toolCapToTipModel = nil
+            learnedCapToTipModel = nil
             drawableSafeZone = nil
             _ = resetVisualCalibrationSession(prefix: "swift-reset")
             drawVerifyStatus = "DRAW --"
@@ -789,7 +789,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     private func applyVisualBindingStatus(_ response: BridgeVisualPositionBindingResponse) {
         if let binding = response.binding {
-            toolCapToTipModel = binding.capToTipModel.source == "unsolved" ? nil : binding.capToTipModel
+            learnedCapToTipModel = binding.capToTipModel.source == "unsolved" ? nil : binding.capToTipModel
             drawableSafeZone = binding.safeZone
             let observationCount = binding.residuals.observationCount
             visualBindingObservationCount = observationCount
@@ -804,14 +804,14 @@ final class PlotterBridgeModel: ObservableObject {
             } else if let blocker = binding.blockers.first {
                 visualBindingDetail = blocker
             } else {
-                visualBindingDetail = "Need ink or pen-tip observations"
+                visualBindingDetail = "Need binding mark observations"
             }
             return
         }
 
         visualBindingObservationCount = 0
         visualBindingValid = false
-        toolCapToTipModel = nil
+        learnedCapToTipModel = nil
         drawableSafeZone = nil
         visualBindingStatus = response.status == "missing" ? "BIND --" : "BIND ERR"
         visualBindingDetail = response.error ?? "No binding observations"

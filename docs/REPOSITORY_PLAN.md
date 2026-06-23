@@ -101,7 +101,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
   same `DrawingProgram` contract.
 - The simulator is the source for expected pen motion. The video projector maps that expected motion
   into the plotter camera view before execution, and the residual solver compares video-observed ink
-  or pen-tip marks against the projected expectation.
+  marks against the projected expectation.
 
 ## Coordinate Spaces And Authority
 

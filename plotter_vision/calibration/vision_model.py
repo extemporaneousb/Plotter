@@ -62,7 +62,7 @@ class VisionCalibrationObservation(BaseModel):
     created_at: str = Field(default_factory=utc_now_iso)
     command_id: str
     point_id: str
-    role: str = "pen_tip_waypoint"
+    role: str = "calibration_waypoint"
     observation_source: Literal[
         "manual_click",
         "camera_detection",

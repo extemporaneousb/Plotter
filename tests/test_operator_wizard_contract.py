@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SWIFT_DIR = ROOT / "macos" / "PlotterVision" / "Sources" / "PlotterVision"
+BRIDGE_SERVER = ROOT / "plotter_vision" / "bridge" / "server.py"
 
 
 def _read(path: Path) -> str:
@@ -315,6 +316,7 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     content = _read(SWIFT_DIR / "ContentView.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    server = _read(BRIDGE_SERVER)
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
@@ -346,8 +348,13 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     assert "estimateToolOffset(" not in content + model
     assert "BridgeToolEstimateRequest" not in client
     assert 'post(path: "calibration/tool/estimate"' not in client
+    assert "ToolEstimateRequest" not in server
+    assert "estimate_tool_offset" not in server
+    assert '"/calibration/tool/estimate"' not in server
     assert "@Published var bindingExtraPaddingMm = 40.0" in model
-    assert 'binding.capToTipModel.source == "unsolved" ? nil : binding.capToTipModel' in model
+    assert "learnedCapToTipModel" in model
+    assert "toolCapToTipModel" not in content + model
+    assert "Need binding mark observations" in model
 
 
 def test_visual_machine_setup_uses_clearance_aware_motion() -> None:

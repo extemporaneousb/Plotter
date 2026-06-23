@@ -461,7 +461,7 @@ class VisualReadinessResponse(BaseModel):
 class VisualBindingObservationRequest(TraceContextFields):
     command_id: str
     point_id: str | None = None
-    kind: Literal["ink", "pen_tip"] = "ink"
+    kind: Literal["ink"] = "ink"
     observed_norm: CameraPointNorm | None = None
     observed_paper_mm: PaperPointMM | None = None
     expected_paper_mm: PaperPointMM | None = None
@@ -532,30 +532,6 @@ class CalibrationSetupResetResponse(BaseModel):
     preserve_history: bool = True
     cleared_files: list[str] = Field(default_factory=list)
     missing_files: list[str] = Field(default_factory=list)
-    event_log: str
-    error: str | None = None
-
-
-class ToolEstimatePointRequest(BaseModel):
-    observed_norm: CameraPointNorm | None = None
-    paper_mm: PaperPointMM | None = None
-
-
-class ToolEstimateRequest(TraceContextFields):
-    cap: ToolEstimatePointRequest
-    tip: ToolEstimatePointRequest
-    source: Literal["operator_measurement"] = "operator_measurement"
-    extra_padding_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM
-    request_id: str | None = None
-
-
-class ToolEstimateResponse(BaseModel):
-    status: str
-    dry_run: bool
-    cap_to_tip_model: CapToTipModel | None = None
-    safe_zone: DrawingSafeZone | None = None
-    binding: VisualPositionBinding | None = None
-    binding_file: str = ""
     event_log: str
     error: str | None = None
 
@@ -2260,78 +2236,6 @@ class PlotterBridge:
                 preserve_history=request.preserve_history,
                 cleared_files=cleared,
                 missing_files=missing,
-                event_log=str(self.config.event_log_path),
-                error=str(exc),
-            )
-
-    def estimate_tool_offset(self, request: ToolEstimateRequest) -> ToolEstimateResponse:
-        command_id = request.request_id or request.trace_id or f"tool-estimate-{uuid.uuid4().hex[:12]}"
-        try:
-            machine = self._load_machine_config()
-            registration = self._load_latest_paper_registration()
-            cap = self._tool_estimate_point_paper_mm(request.cap, registration=registration)
-            tip = self._tool_estimate_point_paper_mm(request.tip, registration=registration)
-            model = CapToTipModel(
-                offset_x_mm=tip.x - cap.x,
-                offset_y_mm=tip.y - cap.y,
-                source=request.source,
-            )
-            safe_zone = self._drawing_safe_zone(
-                machine=machine,
-                cap_to_tip_model=model,
-                extra_padding_mm=request.extra_padding_mm,
-            )
-            binding = self._load_or_create_visual_position_binding(registration=registration)
-            binding.cap_to_tip_model = model
-            binding.safe_zone = safe_zone
-            binding.updated_at = _utc_now_iso()
-            self._save_visual_position_binding(binding)
-
-            readiness = self._load_latest_visual_readiness_or_none()
-            if readiness is not None and readiness.latest_cap_observation is not None:
-                evaluation = evaluate_cap_inside_safe_zone(
-                    observation=readiness.latest_cap_observation,
-                    safe_zone=safe_zone,
-                )
-                readiness = self._visual_state_from_evidence(
-                    cap=readiness.latest_cap_observation,
-                    safe_zone_evaluation=evaluation,
-                    previous=readiness,
-                )
-                self._save_visual_readiness(readiness)
-
-            self.event_log.emit(
-                "calibration.tool_estimate_saved",
-                command_id=command_id,
-                status="ready",
-                payload={
-                    "binding_id": binding.binding_id,
-                    "offset_x_mm": model.offset_x_mm,
-                    "offset_y_mm": model.offset_y_mm,
-                    "extra_padding_mm": safe_zone.extra_padding_mm,
-                    "safe_zone_margins_mm": safe_zone.margins_mm.model_dump(mode="json"),
-                },
-            )
-            return ToolEstimateResponse(
-                status="ready",
-                dry_run=self.config.dry_run,
-                cap_to_tip_model=model,
-                safe_zone=safe_zone,
-                binding=binding,
-                binding_file=str(self._latest_visual_position_binding_path()),
-                event_log=str(self.config.event_log_path),
-            )
-        except Exception as exc:
-            self.event_log.emit(
-                "calibration.tool_estimate_failed",
-                command_id=command_id,
-                status="failed",
-                payload={"error": str(exc)},
-            )
-            return ToolEstimateResponse(
-                status="failed",
-                dry_run=self.config.dry_run,
-                binding_file=str(self._latest_visual_position_binding_path()),
                 event_log=str(self.config.event_log_path),
                 error=str(exc),
             )
@@ -4817,18 +4721,6 @@ class PlotterBridge:
             paper_registration_id=registration.registration_id,
         )
 
-    def _tool_estimate_point_paper_mm(
-        self,
-        point: ToolEstimatePointRequest,
-        *,
-        registration: PaperFrameRegistration,
-    ) -> PaperPointMM:
-        if point.paper_mm is not None:
-            return point.paper_mm
-        if point.observed_norm is not None:
-            return registration.camera_norm_to_paper_mm(point.observed_norm)
-        raise ValueError("Tool estimate points require paper_mm or observed_norm.")
-
     def _drawing_safe_zone(
         self,
         *,
@@ -5848,11 +5740,6 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             CalibrationSetupResetRequest,
             bridge.reset_calibration_setup,
             lambda response: getattr(response, "status", "") == "reset",
-        ),
-        "/calibration/tool/estimate": PostRoute(
-            ToolEstimateRequest,
-            bridge.estimate_tool_offset,
-            lambda response: getattr(response, "status", "") == "ready",
         ),
         "/calibration/binding/preview": PostRoute(
             BindingMarkPreviewRequest,

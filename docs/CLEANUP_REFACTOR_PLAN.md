@@ -57,8 +57,8 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 
 ## Higher-Risk Refactors
 
-- Extend the typed overlay/projection model with richer operator selection tools for observed ink
-  marks and pen-tip marks.
+- Extend the typed overlay/projection model with richer operator selection tools for observed
+  binding marks.
 - Move visual relative motion and center-dot learning out of `ContentView` into a dedicated state
   machine or actor.
 - Generate or share bridge DTO contracts from Python/Pydantic instead of manually maintaining Swift

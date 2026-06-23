@@ -3020,7 +3020,7 @@ struct ContentView: View {
         visualMotionSamples = []
         visualCenterDotTaskActive = false
         frameLearning = .idle
-        bridge.toolCapToTipModel = nil
+        bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
     }
@@ -3100,7 +3100,7 @@ struct ContentView: View {
     }
 
     private var penLampValue: String {
-        if bridge.toolCapToTipModel != nil { return "TOOL" }
+        if bridge.learnedCapToTipModel != nil { return "OFFSET" }
         guard let confirmedCapPoint else { return "--" }
         return confirmedCapPoint.paperMm == nil ? "CAM" : "MM"
     }
@@ -3116,10 +3116,10 @@ struct ContentView: View {
         guard let confirmedCapPoint else { return "Cap marker not confirmed" }
         if let paperMm = confirmedCapPoint.paperMm {
             let toolSuffix: String
-            if let model = bridge.toolCapToTipModel {
-                toolSuffix = String(format: " TOOL dx%.1f dy%.1f", model.offsetXMm, model.offsetYMm)
+            if let model = bridge.learnedCapToTipModel {
+                toolSuffix = String(format: " OFFSET dx%.1f dy%.1f", model.offsetXMm, model.offsetYMm)
             } else {
-                toolSuffix = " TOOL --"
+                toolSuffix = " OFFSET --"
             }
             return String(
                 format: "CAP cam x%.3f y%.3f paper x%.1f y%.1f mm %@%@",
@@ -3191,7 +3191,7 @@ struct ContentView: View {
         manualFiducialMode = false
         manualCapColorMode = false
         confirmedCapPoint = nil
-        bridge.toolCapToTipModel = nil
+        bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
         calibrationStatusText = bridge.hasPaperLock
             ? "FIELD click cap marker on plotter view"
@@ -3226,7 +3226,7 @@ struct ContentView: View {
             cameraPoint: cameraPoint,
             paperMm: paperMm
         )
-        bridge.toolCapToTipModel = nil
+        bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
         manualPenMode = false
         manualFiducialMode = false
@@ -3264,7 +3264,7 @@ struct ContentView: View {
             cameraPoint: normalizedCamera,
             paperMm: paperMm
         )
-        bridge.toolCapToTipModel = nil
+        bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
 
         if let paperMm {

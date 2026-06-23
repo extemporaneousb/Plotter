@@ -170,7 +170,7 @@ def test_setup_reset_clears_latest_authority_but_preserves_history(tmp_path: Pat
         assert binding_after_reset["status"] == "missing"
 
 
-def test_tool_estimate_persists_cap_to_tip_offset_and_safe_region(tmp_path: Path) -> None:
+def test_manual_tool_estimate_route_is_removed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
@@ -191,25 +191,9 @@ def test_tool_estimate_persists_cap_to_tip_offset_and_safe_region(tmp_path: Path
             },
         )
 
-        assert status_code == 200
-        assert response["status"] == "ready"
-        model = response["cap_to_tip_model"]
-        assert model["source"] == "operator_measurement"
-        assert model["offset_x_mm"] == pytest.approx(10.0)
-        assert model["offset_y_mm"] == pytest.approx(-4.0)
-        safe_zone = response["safe_zone"]
-        assert safe_zone["extra_padding_mm"] == pytest.approx(40.0)
-        assert safe_zone["mark_clearance_mm"] == pytest.approx(7.0)
-        assert safe_zone["park_clearance_mm"] == pytest.approx(44.0)
-        assert safe_zone["observation_clearance_mm"] == pytest.approx(4.0)
-        assert safe_zone["cap_to_tip_offset_x_mm"] == pytest.approx(10.0)
-        assert safe_zone["cap_to_tip_offset_y_mm"] == pytest.approx(-4.0)
-        assert safe_zone["margins_mm"]["left"] == pytest.approx(105.0)
-        assert safe_zone["margins_mm"]["right"] == pytest.approx(95.0)
-        assert safe_zone["margins_mm"]["bottom"] == pytest.approx(51.0)
-        assert safe_zone["margins_mm"]["top"] == pytest.approx(55.0)
-        assert response["binding"]["cap_to_tip_model"] == model
-        assert Path(response["binding_file"]).exists()
+        assert status_code == 404
+        assert response["error"] == "not found"
+        assert not (tmp_path / "calibration" / "latest_visual_position_binding.json").exists()
 
 
 def test_persisted_visual_probe_samples_survive_bridge_reload(tmp_path: Path) -> None:

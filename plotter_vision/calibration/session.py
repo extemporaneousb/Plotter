@@ -27,7 +27,7 @@ CalibrationSessionStatus = Literal[
 
 class CalibrationWaypoint(BaseModel):
     point_id: str
-    role: str = "pen_tip_waypoint"
+    role: str = "calibration_waypoint"
     logical_mm: LogicalPointMM
     paper_norm: PaperPointNorm | None = None
     machine_mm: MachinePointMM

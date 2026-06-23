@@ -58,7 +58,7 @@ def test_visual_position_binding_blocks_collinear_observations() -> None:
             ObservedGeometrySample(
                 command_id="cmd-line",
                 point_id=f"P{index}",
-                kind="pen_tip",
+                kind="ink",
                 expected_paper_mm=PaperPointMM(x=x_mm, y=25.0),
                 observed_paper_mm=PaperPointMM(x=x_mm, y=25.0),
                 camera_id="cam-1",
