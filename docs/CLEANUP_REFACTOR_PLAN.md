@@ -10,7 +10,7 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 - Preview is separate from execution, and preview routes must stay dry-run even on a live bridge.
 - Obsolete compatibility routes, DTOs, UI actions, and event names should be removed or renamed into
   canonical drawing concepts instead of preserved for their own sake.
-- Simple shapes belong to the Draw/Verify capability-check lane.
+- Simple shape examples are backend capability-check fixtures for now, not current operator UI.
 
 ## Completed In This Pass
 
@@ -46,7 +46,7 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 
 - Split `PlotterBridgeClient.swift` into DTOs, HTTP client, observable bridge model, and operation
   extensions without changing public behavior.
-- Split `ContentView.swift` into camera panes, menu groups, calibration wizard, image preview, and
+- Split `ContentView.swift` into camera panes, window panels, calibration wizard, image preview, and
   visual-motion coordinator.
 - Replace string-parsed Swift status gates with typed paper, binding-mark, and machine status state.
 - Centralize camera/viewport coordinate mapping so click layers and overlays use one transform.
@@ -74,7 +74,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 ## Acceptance Criteria For The Next Architecture Pass
 
-- The main operator path is app launch, Visual Field Setup, paper fiducials or Confirm Setup against
+- The main operator path is app launch, Setup, paper fiducials or Confirm Setup against
   an already locked visual field, green cap confirmation, Motion Calibration, Drawing Calibration,
   persisted binding, then drawing.
 - Plotter-camera FOV zoom remains persisted Swift display state. Current segmentation and motion

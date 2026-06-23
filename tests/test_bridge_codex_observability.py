@@ -37,6 +37,34 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
                     "selected_panel": "machine",
                     "paper_locked": True,
                     "last_bridge_label": "Preview Bridge",
+                    "ui": {
+                        "workspace": {
+                            "plotter_camera_visible": False,
+                            "face_camera_visible": False,
+                            "split_plane": False,
+                            "empty": True,
+                        },
+                        "windows": {
+                            "machine_controls": True,
+                            "setup_panel": False,
+                            "plotter_video_panel": False,
+                            "face_video_panel": True,
+                        },
+                        "cameras": {
+                            "plotter": {
+                                "visible": False,
+                                "running": False,
+                                "receiving_frames": False,
+                                "selected": "Plotter Camera",
+                            },
+                            "face": {
+                                "visible": False,
+                                "running": False,
+                                "receiving_frames": False,
+                                "selected": "Face Camera",
+                            },
+                        },
+                    },
                 },
             },
         )
@@ -79,6 +107,10 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
         if event["source"] == "bridge"
     ] == ["app.diagnostics_ingested", "app.diagnostics_ingested"]
     assert snapshot["state_summary"]["bridge_build_id"] == snapshot["health"]["bridge_build_id"]
+    assert snapshot["state_summary"]["ui"]["workspace"]["empty"] is True
+    assert snapshot["state_summary"]["ui"]["windows"]["machine_controls"] is True
+    assert snapshot["state_summary"]["ui"]["windows"]["face_video_panel"] is True
+    assert snapshot["state_summary"]["ui"]["cameras"]["plotter"]["visible"] is False
     assert "paper_registration_missing" in snapshot["exact_blockers"]
     assert "binding_untrusted" in snapshot["exact_blockers"]
     assert any(trace["trace_id"] == "trace-panel" for trace in snapshot["recent_traces"])

@@ -84,66 +84,6 @@ struct CalibrationWizardStepRow: View {
     }
 }
 
-enum CameraLayoutMode: String, CaseIterable, Identifiable {
-    case both
-    case plotter
-    case face
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .both:
-            return "Both"
-        case .plotter:
-            return "Plotter"
-        case .face:
-            return "Face"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .both:
-            return "rectangle.split.2x1"
-        case .plotter:
-            return "rectangle.dashed"
-        case .face:
-            return "person.crop.rectangle"
-        }
-    }
-}
-
-struct CameraLayoutControl: View {
-    @Binding var selection: CameraLayoutMode
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(CameraLayoutMode.allCases) { mode in
-                Button {
-                    selection = mode
-                } label: {
-                    Label(mode.title, systemImage: mode.icon)
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(selection == mode ? Color.black : Color.white.opacity(0.84))
-                        .frame(width: 30, height: 30)
-                        .background(selection == mode ? Color.cyan : Color.white.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help("Show \(mode.title.lowercased()) camera view")
-            }
-        }
-        .padding(4)
-        .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 1)
-        )
-    }
-}
-
 struct PlotterViewportTransform<Content: View>: View {
     let settings: PlotterViewportSettings
     let content: Content

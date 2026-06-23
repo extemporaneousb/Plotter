@@ -13,10 +13,14 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
+def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
-    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
-    visual_controls = _read(SWIFT_DIR / "VisualControlsMenu.swift")
+    app_main = _read(SWIFT_DIR / "AppMain.swift")
+    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
+    plotter_panel = _read(SWIFT_DIR / "PlotterVideoPanel.swift")
+    face_panel = _read(SWIFT_DIR / "FaceVideoPanel.swift")
+    workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
+    window_support = _read(SWIFT_DIR / "OperatorWindowSupport.swift")
     removed_labels = [
         "Triangle Residual Runner Pending",
         "Square Residual Runner Pending",
@@ -39,12 +43,46 @@ def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
     for label in removed_labels:
         assert label not in content
     assert "private var calibrationMenu" not in content
-    assert "VisualControlsMenu(" in content
-    assert "DrawVerifyMenu(" in content
-    assert "struct VisualControlsMenu" in visual_controls
-    assert "struct DrawVerifyMenu" in draw_verify
-    assert "Sample Cap Color" in visual_controls
-    assert "Reset Cap Color" in visual_controls
+    assert "VisualControlsMenu(" not in content
+    assert "DrawVerifyMenu(" not in content
+    assert not (SWIFT_DIR / "VisualControlsMenu.swift").exists()
+    assert not (SWIFT_DIR / "DrawVerifyMenu.swift").exists()
+    assert not (SWIFT_DIR / "ToolbarControls.swift").exists()
+    assert (SWIFT_DIR / "SetupPanel.swift").exists()
+    assert (SWIFT_DIR / "PlotterVideoPanel.swift").exists()
+    assert (SWIFT_DIR / "FaceVideoPanel.swift").exists()
+    assert (SWIFT_DIR / "OperatorWorkspaceState.swift").exists()
+    assert (SWIFT_DIR / "OperatorWindowSupport.swift").exists()
+    assert 'static let machineControls = "machine-controls"' in window_support
+    assert 'static let setupPanel = "setup-panel"' in window_support
+    assert 'static let plotterVideoPanel = "plotter-video-panel"' in window_support
+    assert 'static let faceVideoPanel = "face-video-panel"' in window_support
+    assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" in app_main
+    assert "Window(PlotterWindowConfiguration.plotterVideoTitle, id: OperatorWindowID.plotterVideoPanel)" in app_main
+    assert "Window(PlotterWindowConfiguration.faceVideoTitle, id: OperatorWindowID.faceVideoPanel)" in app_main
+    assert "SetupPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert "PlotterVideoPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert "FaceVideoPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert "CalibrationWizardView(" in setup_panel
+    assert "workspace.requestSetupCommand(.primary)" in setup_panel
+    assert "Drawing examples are intentionally removed" in setup_panel
+    assert "Sample Cap Color" in plotter_panel
+    assert "Reset Cap Color" in plotter_panel
+    assert "PortraitPanel(" in face_panel
+    assert "CameraLayoutMode" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
+    assert "CameraSelector(camera: plotterCamera)" in content
+    assert "CameraSelector(camera: faceCamera)" in content
+    assert "toggleCameraVisibility(plotterCamera, source: \"top_bar\")" in content
+    assert "toggleCameraVisibility(faceCamera, source: \"top_bar\")" in content
+    assert "if workspace.plotterCameraVisible && workspace.faceCameraVisible" in content
+    assert "else if workspace.plotterCameraVisible" in content
+    assert "else if workspace.faceCameraVisible" in content
+    assert "emptyCameraWorkspace" in content
+    assert "NO CAMERA SELECTED" in content
+    assert "@Published var plotterCameraVisible = false" in workspace
+    assert "@Published var faceCameraVisible = false" in workspace
+    assert '"split_plane": plotterCameraVisible && faceCameraVisible' in workspace
+    assert '"empty": !plotterCameraVisible && !faceCameraVisible' in workspace
     assert "Sample Cap Color" not in _read(SWIFT_DIR / "CalibrationWizardView.swift")
     assert "startCalibrationWizard" in content
     assert "Confirm Setup" in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
@@ -77,37 +115,46 @@ def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
     assert grep.returncode == 1, grep.stdout
 
 
-def test_draw_verify_operator_surface_replaces_tests_menu() -> None:
+def test_draw_verify_examples_are_removed_from_operator_surface() -> None:
     swift_text = "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
-    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
-    assert "Draw/Verify" in draw_verify
-    assert "Run Verified Capability" in draw_verify
-    assert "previewDrawVerifyCapability" in model
-    assert "runVerifiedDrawVerifyCapability" in model
-    assert "expectedPlanHash: expectedHash" in model
-    assert 'label: "Tests"' not in swift_text
+    assert not (SWIFT_DIR / "DrawVerifyMenu.swift").exists()
+    assert not (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
+    assert "DrawVerifyMenu(" not in swift_text
+    assert "DrawVerifyCoordinator" not in swift_text
+    assert "previewDrawVerifyCapability" not in model
+    assert "runVerifiedDrawVerifyCapability" not in model
+    assert "previewShapeOverlay(" not in model
+    assert "drawTriangle(" not in model
+    assert "BridgeShapeExecutionRequest" not in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    assert "drawFaceRaster(" not in model
+    assert "BridgeFaceRasterDrawRequest" not in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    assert "Preview Triangle Shape" not in swift_text
+    assert "Preview Square Shape" not in swift_text
+    assert "Run Verified Capability" not in swift_text
     assert "drawingTestsMenu" not in swift_text
     assert "TEST " not in swift_text
+    assert "drawVisualBindingBoundsFrame" in model
 
 
 def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_route() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     camera_model = _read(SWIFT_DIR / "CameraModel.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
-    draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
+    face_panel = _read(SWIFT_DIR / "FaceVideoPanel.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     models = _read(SWIFT_DIR / "Models.swift")
     overlays = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
     portrait_panel = _read(SWIFT_DIR / "PortraitPanel.swift")
 
-    assert "Preview Portrait Contours" not in draw_verify
+    assert "Preview Portrait Contours" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert 'Label("Create \\(bridge.portraitContourSettings.technique.captureLabel) Drawing"' in portrait_panel
-    assert "PortraitPanel(" in content
-    assert "portraitPanelVisible" in content
-    assert "portraitPanelVisible.toggle()" in content
-    assert "canCreateContourDrawing: faceCamera.isRunning && !bridge.isCalibrating" in content
+    assert "PortraitPanel(" in face_panel
+    assert "portraitPanelVisible" not in content
+    assert "canCreateContourDrawing: workspace.faceCamera.isRunning && !bridge.isCalibrating" in face_panel
+    assert "workspace.requestPanelCommand(.createPortraitDrawing)" in face_panel
+    assert "workspace.requestPanelCommand(.selectPortraitCapture(item.id))" in face_panel
     assert "portraitContourMonitorEnabled" in content
     assert "runPortraitContourMonitor" in content
     assert "captureFaceRaster(" in content
@@ -167,7 +214,7 @@ def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> Non
 
     assert (SWIFT_DIR / "CalibrationWizardView.swift").exists()
     assert (SWIFT_DIR / "CameraOverlaySupportViews.swift").exists()
-    assert (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
+    assert not (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
     assert "final class PlotterBridgeModel" not in client
     assert "final class PlotterBridgeModel" in model
     assert len(content.splitlines()) < 3700
@@ -330,7 +377,7 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     assert "Click Pen Tip" not in wizard
     assert "Move Field" not in wizard
     assert "onSelect" not in support
-    assert "Button {" not in support.split("struct CalibrationWizardStepRow", 1)[1].split("enum CameraLayoutMode", 1)[0]
+    assert "Button {" not in support.split("struct CalibrationWizardStepRow", 1)[1].split("struct PlotterViewportTransform", 1)[0]
 
     assert "private func startManualPenTipClick" not in content
     assert "private func recordConfirmedPenTip" not in content
@@ -378,7 +425,7 @@ def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
 def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     models = _read(SWIFT_DIR / "Models.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
-    visual_controls = _read(SWIFT_DIR / "VisualControlsMenu.swift")
+    plotter_panel = _read(SWIFT_DIR / "PlotterVideoPanel.swift")
     content = _read(SWIFT_DIR / "ContentView.swift")
     viewport_intent = _read(SWIFT_DIR / "ContentViewViewportIntent.swift")
     camera_model = _read(SWIFT_DIR / "CameraModel.swift")
@@ -398,13 +445,13 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "let unzoomed = CGPoint" in support
     assert "point.x - zoomOffset.width - center.x" in support
 
-    assert "Section(\"Plotter View\")" in visual_controls
-    assert "Original Video" in visual_controls
-    assert "Zoom In" not in visual_controls
-    assert "Zoom Out" not in visual_controls
-    assert "Reset FOV" not in visual_controls
+    assert "panelSectionTitle(\"Viewport\")" in plotter_panel
+    assert "Original Video" in plotter_panel
+    assert "Fit Field" in plotter_panel
+    assert "Zoom In" not in plotter_panel
+    assert "Zoom Out" not in plotter_panel
+    assert "Reset FOV" not in plotter_panel
     assert "togglePlotterFocusMode()" in viewport_intent
-    assert ".keyboardShortcut(\"f\", modifiers: [.command])" in content
     assert "focusPlotterVideoOnPaper(source: \"wizard_fiducials_solved\")" in content
     assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" in content
 
@@ -425,12 +472,14 @@ def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
 
 def test_visual_move_intent_is_projected_on_video() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     viewport_intent = _read(SWIFT_DIR / "ContentViewViewportIntent.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
     models = _read(SWIFT_DIR / "Models.swift")
 
     assert "struct VisualMoveIntent" in models
-    assert "@State var visualMoveIntent" in content
+    assert "@Published var visualMoveIntent" in workspace
+    assert "var visualMoveIntent: VisualMoveIntent?" in content
     assert "visualMoveIntent: visualMoveIntent" in content
     assert '"visual_move_intent_set"' in viewport_intent
     assert '"visual_move_intent_cleared"' in viewport_intent
@@ -448,6 +497,10 @@ def test_main_window_placement_only_filters_main_window_candidates() -> None:
     assert "window.title != PlotterWindowConfiguration.machineTitle" not in app_main
     assert "window.identifier == PlotterWindowConfiguration.mainIdentifier" in app_main
     assert "window.title == PlotterWindowConfiguration.mainTitle" in app_main
+    assert "OperatorWindowID.machineControls" in app_main
+    assert "OperatorWindowID.setupPanel" in app_main
+    assert "OperatorWindowID.plotterVideoPanel" in app_main
+    assert "OperatorWindowID.faceVideoPanel" in app_main
 
 
 def test_visual_probe_reacquires_cap_before_stopping() -> None:

@@ -204,34 +204,6 @@ func shortBuildId(_ value: String?) -> String? {
     return String(value.prefix(10))
 }
 
-struct BridgeShapeExecutionRequest: Encodable {
-    let pattern: String
-    let includeHoming: Bool
-    let includeCentering: Bool
-    let sideMm: Double
-    let centerXMm: Double
-    let centerYMm: Double
-    let drawFeedMmMin: Double
-    let travelFeedMmMin: Double
-    let traceId: String? = nil
-    let spanId: String? = nil
-    let parentSpanId: String? = nil
-}
-
-struct BridgeShapeExecutionResponse: Decodable {
-    let commandId: String
-    let status: String
-    let dryRun: Bool
-    let pattern: String
-    let plannedCommands: [String]
-    let simulation: BridgeShapeSimulation?
-    let evaluation: BridgeShapeEvaluation?
-    let previewOverlay: BridgePreviewOverlay?
-    let eventLog: String
-    let controllerTranscript: String?
-    let error: String?
-}
-
 struct BridgeShapeSimulation: Decodable {
     let status: String
     let previewSegments: [ExpectedPathSegment]
@@ -359,19 +331,6 @@ struct BridgePortraitContourOptionsRequest: Encodable {
     let maxPoints: Int
 }
 
-struct BridgeFaceRasterDrawRequest: Encodable {
-    let raster: BridgeLuminanceRasterRequest
-    let frame: BridgeDrawingFrameRequest
-    let options: BridgeRasterPolygonOptionsRequest
-    let includeHoming: Bool
-    let drawFeedMmMin: Double
-    let travelFeedMmMin: Double
-    let maxSegmentMm: Double
-    let traceId: String? = nil
-    let spanId: String? = nil
-    let parentSpanId: String? = nil
-}
-
 struct BridgeImageShapePreviewRequest: Encodable {
     let raster: BridgeLuminanceRasterRequest
     let frame: BridgeDrawingFrameRequest
@@ -458,21 +417,6 @@ struct BridgePortraitContourOverlay: Decodable {
     let rasterWidth: Int
     let rasterHeight: Int
     let contours: [BridgePortraitContourPolyline]
-}
-
-struct BridgeFaceRasterDrawResponse: Decodable {
-    let commandId: String
-    let status: String
-    let dryRun: Bool
-    let plannedCommands: [String]
-    let simulation: BridgeShapeSimulation?
-    let summary: BridgeDrawProgramSummary?
-    let rasterSummary: BridgeRasterPolygonSummary?
-    let previewOverlay: BridgePreviewOverlay?
-    let eventLog: String
-    let controllerTranscript: String?
-    let machineStatus: MachineStatusResponse?
-    let error: String?
 }
 
 struct BridgeDrawProgramResponse: Decodable {
@@ -1078,20 +1022,8 @@ final class PlotterBridgeClient {
         try await get(path: "health")
     }
 
-    func drawShape(_ request: BridgeShapeExecutionRequest) async throws -> BridgeShapeExecutionResponse {
-        try await post(path: "draw/shape", request: request)
-    }
-
-    func previewShape(_ request: BridgeShapeExecutionRequest) async throws -> BridgeShapeExecutionResponse {
-        try await post(path: "draw/shape/preview", request: request)
-    }
-
     func drawProgram(_ request: BridgeDrawProgramRequest) async throws -> BridgeDrawProgramResponse {
         try await post(path: "draw/program", request: request)
-    }
-
-    func drawFaceRaster(_ request: BridgeFaceRasterDrawRequest) async throws -> BridgeFaceRasterDrawResponse {
-        try await post(path: "draw/face", request: request)
     }
 
     func previewImageShape(_ request: BridgeImageShapePreviewRequest) async throws -> BridgeImageShapePreviewResponse {
@@ -1261,14 +1193,6 @@ final class PlotterBridgeClient {
     private func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            if let failure = try? decoder.decode(BridgeShapeExecutionResponse.self, from: data),
-               let error = failure.error {
-                throw BridgeClientError.server(error)
-            }
-            if let failure = try? decoder.decode(BridgeFaceRasterDrawResponse.self, from: data),
-               let error = failure.error {
-                throw BridgeClientError.server(error)
-            }
             if let failure = try? decoder.decode(BridgeImageShapePreviewResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)

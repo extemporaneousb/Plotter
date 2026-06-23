@@ -53,7 +53,7 @@ including:
 - `POST /capabilities/tests/preview`
 - `POST /capabilities/tests/run`
 - `POST /draw/image/preview`
-- `POST /draw/face`
+- `POST /draw/portrait/preview`
 - `POST /paper/register`
 - `GET /calibration/binding/status`
 - `POST /calibration/binding/observe`
@@ -77,34 +77,40 @@ coordinates when sending motion commands.
 - Runs Vision passes for line/shape segments, fiducials, carriage markers, and frame-change reports.
 - Renders bridge-planned expected paths, visual field state, binding mark preview points, and
   observed marks over the camera image.
+- Starts with both camera panes hidden. The Plotter and Face top-bar toggles independently start or
+  stop their streams; enabling both shows a split plane, enabling one shows only that pane, and
+  enabling neither leaves a black empty workspace.
 - Persists plotter-camera viewport controls, including fit/fill, rotation, video filter, and a
   centered FOV zoom. This zoom is an operator display transform only; `CameraModel` still runs
   segmentation and motion analysis against the full camera frame.
 - Exposes the Machine panel as the operator surface for bridge/controller state, arm gates, alarms,
   busy state, stop/resume, pen actions, homing, centering, and jogs.
-- Supports the Visual Field Setup flow: manual paper fiducials, cap marker confirmation,
+- Exposes Setup as a separate window for manual paper fiducials, cap marker confirmation,
   clearance-aware motion calibration, and watched drawing calibration marks. When the bridge already
   reports a locked visual field after restart and the grid still aligns, Confirm Setup reuses that
   registration without re-clicking fiducials.
-- Presents two post-calibration lanes in Draw/Verify: capability checks and portrait/image-to-shape
-  drawing.
+- Exposes Plotter Video and Face Video as separate windows. Plotter Video owns viewport, overlay, and
+  cap-marker controls. Face Video owns the portrait contour monitor, rendering parameters, capture
+  strip, and portrait drawing creation.
+- Emits operator UI state into app diagnostics so `/codex/snapshot` includes camera visibility,
+  split/empty workspace state, and window visibility.
 
 The current true app flow is:
 
 ```text
-launch -> Visual Field Setup -> manual/confirmed fiducials -> cap confirmation
+launch -> Setup -> manual/confirmed fiducials -> cap confirmation
   -> Motion Calibration -> Drawing Calibration
   -> /calibration/binding/observe -> /calibration/binding/solve
-  -> validated VisualPositionBinding -> preview -> Draw/Verify
+  -> validated VisualPositionBinding -> Face Video portrait drawing or future drawing surface
 ```
 
 If the bridge has a current persisted visual field lock on launch, setup may start at Confirm Setup
 instead of manual fiducial capture. This does not create axis trust or a drawing unlock; it only keeps
 the Swift workflow aligned with the bridge-owned paper registration that is already locked.
 
-Draw/Verify capability runs are tied to the latest preview identity returned by the bridge. The app
-displays the command id and plan hash when available, then sends that plan hash back on run; Python
-still owns safety, trust, simulation, execution, and residual validation.
+The old Draw/Verify menu and example buttons are removed from the macOS operator UI. Capability and
+shape examples remain bridge/backend validation surfaces, not current app controls. Any new drawing
+surface should route through the same bridge-owned preview, simulation, execution, and residual gates.
 
 Canonical geometry still belongs in the Python bridge/calibration/drawing layers. Swift overlays are
 views over bridge state and local camera observations; they are not motion authority.

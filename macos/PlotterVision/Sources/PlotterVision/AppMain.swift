@@ -5,10 +5,11 @@ import AppKit
 struct PlotterVisionApp: App {
     @NSApplicationDelegateAdaptor(WindowPlacementDelegate.self) private var windowPlacement
     @StateObject private var bridge = PlotterBridgeModel()
+    @StateObject private var workspace = OperatorWorkspaceState.shared
 
     var body: some Scene {
         WindowGroup(PlotterWindowConfiguration.mainTitle) {
-            ContentView(bridge: bridge)
+            ContentView(bridge: bridge, workspace: workspace)
                 .frame(minWidth: 1120, minHeight: 720)
                 .preferredColorScheme(.dark)
         }
@@ -17,13 +18,68 @@ struct PlotterVisionApp: App {
             CommandGroup(replacing: .newItem) {}
         }
 
-        Window(PlotterWindowConfiguration.machineTitle, id: "machine-controls") {
+        Window(PlotterWindowConfiguration.machineTitle, id: OperatorWindowID.machineControls) {
             MachineControlPanel(bridge: bridge)
                 .frame(width: 320)
                 .padding(14)
                 .preferredColorScheme(.dark)
+                .onAppear {
+                    bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.machineControls])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
+                }
+                .onDisappear {
+                    bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.machineControls])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
+                }
         }
         .defaultSize(width: 360, height: 640)
+        .restorationBehavior(.disabled)
+
+        Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel) {
+            SetupPanel(workspace: workspace, bridge: bridge)
+                .preferredColorScheme(.dark)
+                .onAppear {
+                    workspace.setupWindowActive = true
+                    bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.setupPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
+                }
+                .onDisappear {
+                    workspace.setupWindowActive = false
+                    bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.setupPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
+                }
+        }
+        .defaultSize(width: 460, height: 620)
+        .restorationBehavior(.disabled)
+
+        Window(PlotterWindowConfiguration.plotterVideoTitle, id: OperatorWindowID.plotterVideoPanel) {
+            PlotterVideoPanel(workspace: workspace, bridge: bridge)
+                .preferredColorScheme(.dark)
+                .onAppear {
+                    bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.plotterVideoPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
+                }
+                .onDisappear {
+                    bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.plotterVideoPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
+                }
+        }
+        .defaultSize(width: 380, height: 520)
+        .restorationBehavior(.disabled)
+
+        Window(PlotterWindowConfiguration.faceVideoTitle, id: OperatorWindowID.faceVideoPanel) {
+            FaceVideoPanel(workspace: workspace, bridge: bridge)
+                .preferredColorScheme(.dark)
+                .onAppear {
+                    bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.faceVideoPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
+                }
+                .onDisappear {
+                    bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.faceVideoPanel])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
+                }
+        }
+        .defaultSize(width: 390, height: 720)
         .restorationBehavior(.disabled)
     }
 }
@@ -31,6 +87,9 @@ struct PlotterVisionApp: App {
 private enum PlotterWindowConfiguration {
     static let mainTitle = "Plotter Vision"
     static let machineTitle = "Machine"
+    static let setupTitle = "Setup"
+    static let plotterVideoTitle = "Plotter Video"
+    static let faceVideoTitle = "Face Video"
     static let mainIdentifier = NSUserInterfaceItemIdentifier("plotter-main-window")
     static let mainFrameAutosaveName = NSWindow.FrameAutosaveName("PlotterVisionMainWindow")
 }

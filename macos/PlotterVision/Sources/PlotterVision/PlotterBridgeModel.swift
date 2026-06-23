@@ -56,7 +56,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var bindingMarkPreviewPlanHash = ""
     @Published var bindingMarkPreviewPointSet = ""
     @Published var drawVerifyStatus = "DRAW --"
-    @Published var drawVerifyDetail = "Preview a capability check before running"
+    @Published var drawVerifyDetail = "No drawing run"
     @Published var drawVerifyKind = ""
     @Published var drawVerifyLabel = ""
     @Published var drawVerifyCommandId = ""
@@ -65,13 +65,10 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var workspaceYMm = 215.9
     @Published var machineMaxFeedMmMin = 1200.0
     @Published var machineMaxJogMm = 50.0
-    @Published var shapeSideMm = 35.0
     @Published var bindingExtraPaddingMm = 40.0
     @Published var bindingMaxMarkSizeMm = 14.0
     @Published var bindingParkClearanceMm = 44.0
     @Published var bindingObservationClearanceMm = 4.0
-    @Published var shapeCenterXNorm = 0.5
-    @Published var shapeCenterYNorm = 0.5
     @Published var shapeDrawFeedMmMin = 240.0
     @Published var pathRevealProgress = 1.0
     @Published var pathAnimationStatus = "IDLE"
@@ -82,6 +79,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var manualFeedMmMin = 1200.0
     @Published var machineMPosMm: [Double] = []
     @Published var machineWPosMm: [Double] = []
+    @Published var operatorUIState: [String: Any] = [:]
 
     private let client = PlotterBridgeClient()
     private let diagnostics = AppDiagnostics.shared
@@ -209,7 +207,7 @@ final class PlotterBridgeModel: ObservableObject {
             drawableSafeZone = nil
             _ = resetVisualCalibrationSession(prefix: "swift-reset")
             drawVerifyStatus = "DRAW --"
-            drawVerifyDetail = "Preview a capability check before running"
+            drawVerifyDetail = "No drawing run"
             expectedPathSegments = []
             statusText = "Visual setup reset"
             diagnosticsEvent(
@@ -500,8 +498,13 @@ final class PlotterBridgeModel: ObservableObject {
 
     var drawVerifyStatusLine: String {
         guard !drawVerifyPlanHash.isEmpty else { return drawVerifyStatus }
-        let label = drawVerifyLabel.isEmpty ? DrawVerifyCoordinator.title(for: drawVerifyKind) : drawVerifyLabel
-        return "\(drawVerifyStatus) \(label) \(DrawVerifyCoordinator.shortPlanHash(drawVerifyPlanHash))"
+        let label = drawVerifyLabel.isEmpty ? drawVerifyKind : drawVerifyLabel
+        return "\(drawVerifyStatus) \(label) \(Self.shortPlanHash(drawVerifyPlanHash))"
+    }
+
+    private static func shortPlanHash(_ hash: String) -> String {
+        guard !hash.isEmpty else { return "--" }
+        return String(hash.prefix(8))
     }
 
     private static func lifecycleTitle(for rawValue: String?) -> String? {
@@ -527,6 +530,11 @@ final class PlotterBridgeModel: ObservableObject {
 
     func recordOperatorEvent(_ name: String, details: [String: Any] = [:]) {
         diagnosticsEvent("operator.\(name)", details, snapshot: true)
+    }
+
+    func updateOperatorUIState(_ state: [String: Any], reason: String = "operator_ui_state_changed") {
+        operatorUIState = state
+        diagnosticsEvent(reason, state, snapshot: true)
     }
 
     private func diagnosticsEvent(
@@ -640,6 +648,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "path_animation": pathAnimationStatus,
                 "path_reveal_progress": pathRevealProgress
             ],
+            "ui": operatorUIState,
             "gates": [
                 "connection_title": plotterConnectionTitle,
                 "connection_subtitle": plotterConnectionSubtitle,
@@ -1069,295 +1078,6 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func previewDrawVerifyCapability(kind: String) async -> Bool {
-        guard !isRunning && !isMachineBusy else { return false }
-        guard isOnline else {
-            drawVerifyStatus = "DRAW OFF"
-            drawVerifyDetail = "Bridge offline"
-            statusText = "Bridge offline"
-            diagnosticsEvent("draw_verify_preview_blocked", ["kind": kind, "reason": "bridge_offline"], snapshot: true)
-            return false
-        }
-        guard hasPaperLock else {
-            drawVerifyStatus = "DRAW BLOCK"
-            drawVerifyDetail = "Visual field required"
-            statusText = "Visual field required"
-            diagnosticsEvent("draw_verify_preview_blocked", ["kind": kind, "reason": "visual_field_required"], snapshot: true)
-            return false
-        }
-
-        isCalibrating = true
-        activeAction = "draw-verify-preview"
-        let title = DrawVerifyCoordinator.title(for: kind)
-        drawVerifyStatus = "DRAW PREVIEW"
-        drawVerifyDetail = "Previewing \(title)"
-        statusText = drawVerifyDetail
-        diagnosticsEvent("draw_verify_preview_started", ["kind": kind], snapshot: true)
-        defer {
-            isCalibrating = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.previewCapabilityTest(
-                DrawVerifyCoordinator.request(
-                    kind: kind,
-                    requestId: "draw-verify-preview-\(kind)",
-                    drawFeedMmMin: shapeDrawFeedMmMin
-                )
-            )
-            applyDrawVerifyResponse(response, running: false)
-            diagnosticsEvent(
-                "draw_verify_preview_completed",
-                [
-                    "kind": response.kind,
-                    "command_id": response.commandId,
-                    "plan_hash": response.planHash,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "preview_segments": expectedPathSegments.count
-                ],
-                snapshot: true
-            )
-            return response.status == "ready" || response.status == "completed"
-        } catch {
-            expectedPathSegments = []
-            drawVerifyStatus = "DRAW ERR"
-            drawVerifyDetail = error.localizedDescription
-            statusText = error.localizedDescription
-            diagnosticsEvent("draw_verify_preview_failed", ["kind": kind, "error": error.localizedDescription], snapshot: true)
-            return false
-        }
-    }
-
-    func runVerifiedDrawVerifyCapability() async -> Bool {
-        guard !drawVerifyKind.isEmpty, !drawVerifyPlanHash.isEmpty else {
-            drawVerifyStatus = "DRAW BLOCK"
-            drawVerifyDetail = "Preview a capability check before running"
-            statusText = drawVerifyDetail
-            diagnosticsEvent("draw_verify_run_blocked", ["reason": "preview_required"], snapshot: true)
-            return false
-        }
-        guard canRunAbsoluteDrawing else {
-            drawVerifyStatus = "DRAW BLOCK"
-            drawVerifyDetail = drawPreflightMessage
-            statusText = drawPreflightMessage
-            diagnosticsEvent(
-                "draw_verify_run_blocked",
-                [
-                    "kind": drawVerifyKind,
-                    "reason": drawPreflightMessage,
-                    "plan_hash": drawVerifyPlanHash
-                ],
-                snapshot: true
-            )
-            return false
-        }
-
-        isRunning = true
-        isMachineBusy = true
-        activeAction = "draw-verify-run"
-        shortStatus = isDryRun ? "DRY" : "RUN"
-        drawVerifyStatus = "DRAW RUN"
-        drawVerifyDetail = "Running \(drawVerifyLabel.isEmpty ? DrawVerifyCoordinator.title(for: drawVerifyKind) : drawVerifyLabel)"
-        statusText = drawVerifyDetail
-        let kind = drawVerifyKind
-        let expectedHash = drawVerifyPlanHash
-        diagnosticsEvent(
-            "draw_verify_run_started",
-            ["kind": kind, "expected_plan_hash": expectedHash],
-            snapshot: true
-        )
-        defer {
-            isRunning = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.runCapabilityTest(
-                DrawVerifyCoordinator.request(
-                    kind: kind,
-                    requestId: "draw-verify-run-\(kind)",
-                    drawFeedMmMin: shapeDrawFeedMmMin,
-                    expectedPlanHash: expectedHash
-                )
-            )
-            shortStatus = response.dryRun ? "DRY" : (response.status == "completed" ? "DONE" : "ERR")
-            applyDrawVerifyResponse(response, running: true)
-            isOnline = true
-            await refreshMachineStatus()
-            diagnosticsEvent(
-                "draw_verify_run_completed",
-                [
-                    "kind": response.kind,
-                    "command_id": response.commandId,
-                    "plan_hash": response.planHash,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "preview_segments": expectedPathSegments.count
-                ],
-                snapshot: true
-            )
-            return response.status == "completed"
-        } catch {
-            shortStatus = "ERR"
-            drawVerifyStatus = "DRAW ERR"
-            drawVerifyDetail = error.localizedDescription
-            statusText = error.localizedDescription
-            isMachineBusy = false
-            isMachineAlarm = true
-            diagnosticsEvent("draw_verify_run_failed", ["kind": kind, "error": error.localizedDescription], snapshot: true)
-            return false
-        }
-    }
-
-    func clearDrawVerifyOverlay() {
-        expectedPathSegments = []
-        faceContourPreviewOverlay = nil
-        drawVerifyStatus = "DRAW --"
-        drawVerifyDetail = "Preview a capability check before running"
-        drawVerifyKind = ""
-        drawVerifyLabel = ""
-        drawVerifyCommandId = ""
-        drawVerifyPlanHash = ""
-        previewStatus = "SIM --"
-        diagnosticsEvent("draw_verify_overlay_cleared", snapshot: true)
-    }
-
-    private func applyDrawVerifyResponse(_ response: BridgeCapabilityTestResponse, running: Bool) {
-        drawVerifyKind = response.kind
-        drawVerifyLabel = response.label.isEmpty ? DrawVerifyCoordinator.title(for: response.kind) : response.label
-        drawVerifyCommandId = response.commandId
-        drawVerifyPlanHash = response.planHash
-        expectedPathSegments = response.simulation?.previewSegments ?? []
-        let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
-        animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
-        let status = response.status.uppercased()
-        drawVerifyStatus = running ? "DRAW \(status)" : "VERIFY \(status)"
-        drawVerifyDetail = "\(response.commandId) \(drawVerifyLabel) plan \(DrawVerifyCoordinator.shortPlanHash(response.planHash))"
-        previewStatus = "SIM \(status)"
-        statusText = drawVerifyDetail
-    }
-
-    func previewShapeOverlay(pattern: String) async -> Bool {
-        guard !isRunning && !isMachineBusy else { return false }
-        guard isOnline else {
-            previewStatus = "SIM OFF"
-            statusText = "Bridge offline"
-            diagnosticsEvent("shape_preview_blocked", ["pattern": pattern, "reason": "bridge_offline"], snapshot: true)
-            return false
-        }
-
-        isCalibrating = true
-        activeAction = "shape-preview"
-        previewStatus = "SIM PREVIEW"
-        statusText = "Previewing \(pattern) overlay"
-        diagnosticsEvent("shape_preview_started", ["pattern": pattern], snapshot: true)
-        defer {
-            isCalibrating = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.previewShape(
-                BridgeShapeExecutionRequest(
-                    pattern: pattern,
-                    includeHoming: false,
-                    includeCentering: true,
-                    sideMm: shapeSideMm,
-                    centerXMm: shapeCenterXNorm * workspaceXMm,
-                    centerYMm: shapeCenterYNorm * workspaceYMm,
-                    drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: fastTravelFeedMmMin
-                )
-            )
-            expectedPathSegments = response.simulation?.previewSegments ?? []
-            previewStatus = "SIM \(pattern.uppercased()) \(response.evaluation?.status.uppercased() ?? response.status.uppercased())"
-            let drawnLength = response.simulation?.drawnLengthMm ?? 0.0
-            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
-            statusText = "\(response.commandId) \(Int(shapeSideMm))mm \(pattern) preview"
-            diagnosticsEvent(
-                "shape_preview_completed",
-                [
-                    "pattern": pattern,
-                    "command_id": response.commandId,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "evaluation": response.evaluation?.status ?? "",
-                    "preview_segments": expectedPathSegments.count,
-                    "drawn_length_mm": drawnLength
-                ],
-                snapshot: true
-            )
-            return response.status == "ready" || response.status == "completed"
-        } catch {
-            expectedPathSegments = []
-            previewStatus = "SIM ERR"
-            statusText = error.localizedDescription
-            diagnosticsEvent("shape_preview_failed", ["pattern": pattern, "error": error.localizedDescription], snapshot: true)
-            return false
-        }
-    }
-
-    func drawTriangle(centerXMm: Double? = nil, centerYMm: Double? = nil) async -> Bool {
-        guard !isRunning && !isMachineBusy && !isMachineAlarm else { return false }
-        isRunning = true
-        isMachineBusy = true
-        activeAction = "draw"
-        shortStatus = "RUN"
-        statusText = "Planning triangle"
-        diagnosticsEvent("shape_draw_started", ["pattern": "triangle"], snapshot: true)
-        defer {
-            isRunning = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.drawShape(
-                BridgeShapeExecutionRequest(
-                    pattern: "triangle",
-                    includeHoming: false,
-                    includeCentering: true,
-                    sideMm: shapeSideMm,
-                    centerXMm: centerXMm ?? shapeCenterXNorm * workspaceXMm,
-                    centerYMm: centerYMm ?? shapeCenterYNorm * workspaceYMm,
-                    drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: fastTravelFeedMmMin
-                )
-            )
-            shortStatus = response.dryRun ? "DRY" : "DONE"
-            expectedPathSegments = response.simulation?.previewSegments ?? []
-            previewStatus = "SIM \(response.evaluation?.status.uppercased() ?? response.status.uppercased())"
-            let drawnLength = response.simulation?.drawnLengthMm ?? 0.0
-            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
-            statusText = "\(response.commandId) \(Int(shapeSideMm))mm triangle \(previewStatus)"
-            isOnline = true
-            await refreshMachineStatus()
-            diagnosticsEvent(
-                "shape_draw_completed",
-                [
-                    "pattern": "triangle",
-                    "command_id": response.commandId,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "evaluation": response.evaluation?.status ?? "",
-                    "preview_segments": expectedPathSegments.count,
-                    "drawn_length_mm": drawnLength
-                ],
-                snapshot: true
-            )
-            return response.status == "completed"
-        } catch {
-            shortStatus = "ERR"
-            previewStatus = "SIM ERR"
-            statusText = error.localizedDescription
-            isMachineBusy = false
-            isMachineAlarm = true
-            diagnosticsEvent("shape_draw_failed", errorPayload(error), snapshot: true)
-            return false
-        }
-    }
-
     func drawVisualBindingBoundsFrame(points: [BindingMarkPreviewPoint]) async -> Bool {
         guard canRunAbsoluteDrawing else {
             drawVerifyStatus = "DRAW BLOCK"
@@ -1485,93 +1205,6 @@ final class PlotterBridgeModel: ObservableObject {
             isMachineBusy = false
             isMachineAlarm = true
             diagnosticsEvent("visual_binding_bounds_frame_failed", errorPayload(error), snapshot: true)
-            return false
-        }
-    }
-
-    func drawFaceRaster(
-        _ raster: FaceRasterSample,
-        frame: BridgeDrawingFrameRequest
-    ) async -> Bool {
-        guard !isRunning && !isMachineBusy && !isMachineAlarm else { return false }
-        isRunning = true
-        isMachineBusy = true
-        activeAction = "face"
-        shortStatus = "RUN"
-        statusText = "Planning face raster"
-        diagnosticsEvent(
-            "face_raster_draw_started",
-            [
-                "raster_rows": raster.samples.count,
-                "raster_columns": raster.samples.first?.count ?? 0,
-                "frame_width_mm": frame.widthMm,
-                "frame_height_mm": frame.heightMm
-            ],
-            snapshot: true
-        )
-        defer {
-            isRunning = false
-            activeAction = ""
-        }
-
-        do {
-            let response = try await client.drawFaceRaster(
-                BridgeFaceRasterDrawRequest(
-                    raster: BridgeLuminanceRasterRequest(samples: raster.samples),
-                    frame: frame,
-                    options: BridgeRasterPolygonOptionsRequest(
-                        darknessThreshold: 0.16,
-                        gamma: 1.05,
-                        autoContrast: true,
-                        triangulate: true,
-                        outline: false,
-                        hatchAngleDeg: 35.0,
-                        minHatchSpacingMm: 1.8,
-                        maxHatchSpacingMm: 8.5,
-                        maxHatchSegments: 1600,
-                        maxPolygons: 900
-                    ),
-                    includeHoming: false,
-                    drawFeedMmMin: shapeDrawFeedMmMin,
-                    travelFeedMmMin: fastTravelFeedMmMin,
-                    maxSegmentMm: 25.0
-                )
-            )
-            shortStatus = response.dryRun ? "DRY" : "DONE"
-            expectedPathSegments = response.simulation?.previewSegments ?? []
-            previewStatus = "SIM \(response.status.uppercased())"
-            let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
-            animateExpectedPath(drawnLengthMm: drawnLength, feedMmMin: shapeDrawFeedMmMin)
-            let polygons = response.rasterSummary?.polygonCount ?? 0
-            let segments = response.summary?.drawSegmentCount ?? 0
-            statusText = "\(response.commandId) face \(polygons)p \(segments)s"
-            if let machineStatus = response.machineStatus {
-                applyMachineStatus(machineStatus)
-            } else {
-                await refreshMachineStatus()
-            }
-            isOnline = true
-            diagnosticsEvent(
-                "face_raster_draw_completed",
-                [
-                    "command_id": response.commandId,
-                    "status": response.status,
-                    "dry_run": response.dryRun,
-                    "polygons": polygons,
-                    "segments": segments,
-                    "preview_segments": expectedPathSegments.count,
-                    "drawn_length_mm": drawnLength
-                ],
-                snapshot: true
-            )
-            return response.status == "completed"
-        } catch {
-            shortStatus = "ERR"
-            previewStatus = "SIM ERR"
-            statusText = error.localizedDescription
-            isMachineBusy = false
-            isMachineAlarm = true
-            diagnosticsEvent("face_raster_draw_failed", errorPayload(error), snapshot: true)
             return false
         }
     }

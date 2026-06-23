@@ -563,16 +563,6 @@ struct DrawingFrameSettings: Equatable, Codable {
     }
 }
 
-struct ShapeAssessmentState: Equatable {
-    var status = "WAIT"
-    var detail = "No draw assessed"
-    var changedObjects = 0
-    var changedCells = 0
-    var strength = 0.0
-
-    static let idle = ShapeAssessmentState()
-}
-
 struct FrameLearningState: Equatable {
     var status = "IDLE"
     var detail = "No projection learned"

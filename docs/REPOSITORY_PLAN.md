@@ -71,7 +71,7 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
 The fixed-camera workflow is:
 
 1. Start the app.
-2. Open Visual Field Setup.
+2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Click or confirm paper fiducials, then confirm the visual field. If the bridge already has a
    locked visual field after restart and the visible grid still aligns, use Confirm Setup to reuse
    that registration without re-clicking fiducials.
@@ -83,8 +83,8 @@ The fixed-camera workflow is:
    `/calibration/binding/observe`, solves `/calibration/binding/solve`, learns the cap-to-tip offset
    from mark residuals, and draws the ready frame around the same region.
 7. Use the validated `VisualPositionBinding` as the drawing unlock.
-8. Open Draw/Verify and draw either capability checks or portrait/image-derived programs after
-   bridge preview.
+8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
+   are currently backend tests only and are not exposed in the operator UI.
 
 Both post-calibration drawing lanes use the same pipeline:
 
@@ -117,9 +117,9 @@ and transforms:
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation/FOV zoom and overlay rendering only; it is not motion authority. |
 
-The active bridge surface uses `ShapeExecutionRequest`, `/draw/shape`, `/draw/shape/preview`, and
-`/capabilities/tests/...`. Operator-facing text calls this lane Draw/Verify even while the bridge
-keeps the internal capabilities-test route name.
+The bridge still has shape and capability-test routes for backend validation, but the current macOS
+operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route
+through `DrawingProgram` preview and execution rather than reintroducing ad hoc example buttons.
 
 Current plotter segmentation and motion detection run in `CameraModel` against the full camera frame.
 Restricting processing to a region of interest would be an explicit Swift observation change, not a
@@ -175,7 +175,7 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: implemented around Visual Field Setup plus Motion and Drawing Calibration. Field
+Status: implemented around the Setup window plus Motion and Drawing Calibration. Field
 registration, cap/probe evidence, binding observations, and binding solving are owned by the bridge;
 the Swift app is the operator surface.
 

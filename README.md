@@ -29,14 +29,16 @@ Implemented vertical slices now include:
 - guarded machine actions through typed bridge requests and responses;
 - visual field setup from operator-clicked manual fiducials, with bridge-owned registration artifacts;
 - preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
-- live-gated motion controls in the macOS app, with controller state and safety gates visible.
+- live-gated motion controls in the macOS app, with controller state and safety gates visible;
+- a windowed operator UI with independent plotter/face camera toggles, Setup, Plotter Video, and
+  Face Video panels, plus UI state surfaced in `/codex/snapshot`.
 
 ## Canonical Operator Flow
 
 The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open Visual Field Setup.
+2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Confirm or click the paper fiducials. If the bridge already reports a locked visual field after
    restart and the rendered grid still aligns with the physical setup, use Confirm Setup to reuse
    that registration without re-clicking fiducials.
@@ -53,10 +55,8 @@ The normal development target is the fixed-camera drawing loop:
    drawing programs still require bridge preview before execution.
 8. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
-9. Open Draw/Verify and draw through one of two lanes:
-   - capability checks: simple-to-more-complex shape programs that can include coordinate markup;
-   - portrait drawing: camera capture, contour or polygon extraction, and translation into the
-     drawing program.
+9. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
+   currently removed from the operator UI until the next real drawing surface is defined.
 
 Both drawing lanes must run through the same bridge-owned pipeline before real motion:
 
@@ -75,7 +75,7 @@ segmentation and motion detection run in `CameraModel` on the full camera frame;
 ROI would be a separate app-side observation change and must keep Python-owned safety and calibration
 authority intact.
 
-## Calibration And Draw/Verify Evidence
+## Calibration And Drawing Evidence
 
 The operator sequence should stay explicit:
 
@@ -319,16 +319,15 @@ Interpretation rules:
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.
 
-In the app, use Visual Field Setup as the only setup path: manually clicked paper fiducials establish
+In the app, use Setup as the only setup path: manually clicked paper fiducials establish
 the field, green cap confirmation starts Motion Calibration, and Drawing Calibration learns the
 cap-to-tip offset from watched binding marks. Binding ink marks are placed inside the
 bridge-computed safe drawable region and validate the durable `VisualPositionBinding`.
 Bridge previews simulate the exact command stream and project the expected path into the camera view
 before any real drawing action is enabled. If simulated or observed geometry fails its gate, the
-bridge returns a failed response and does not send the command stream. After binding validation, use
-Draw/Verify for capability-check preview/run and shape or portrait drawing. Draw/Verify displays the
-latest bridge preview identity and only offers matching execution paths while Python safety,
-dry-run/live, paper, and binding gates allow them.
+bridge returns a failed response and does not send the command stream. After binding validation, the
+current operator surface exposes portrait drawing through Face Video. Capability-check examples remain
+available as backend bridge tests, but their old macOS Draw/Verify menu has been removed.
 Stop the background preview bridge with:
 
 ```bash

@@ -395,6 +395,7 @@ class CodexStateSummary(BaseModel):
     active_workflow: str = ""
     latest_visible_error: str | None = None
     exact_blockers: list[str] = Field(default_factory=list)
+    ui: dict[str, Any] = Field(default_factory=dict)
 
 
 class ShapeExecutionResponse(BaseModel):
@@ -3717,6 +3718,7 @@ class PlotterBridge:
         preview_payload = (
             app_payload.get("previews") if isinstance(app_payload.get("previews"), dict) else {}
         )
+        ui_payload = app_payload.get("ui") if isinstance(app_payload.get("ui"), dict) else {}
         app_section = app_payload.get("app") if isinstance(app_payload.get("app"), dict) else {}
         binding_status = "missing"
         binding_trusted = False
@@ -3787,6 +3789,7 @@ class PlotterBridge:
             active_workflow=active_workflow,
             latest_visible_error=latest_error,
             exact_blockers=exact_blockers,
+            ui=ui_payload,
         )
 
     def _latest_visible_error(self, app_diagnostics: AppDiagnosticsSnapshot) -> str | None:

@@ -32,6 +32,20 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
                 "machine": {"state": "DryRun", "pins": "-"},
                 "paper": {"status": "PAPER --"},
                 "gates": {"motion": "Motion blocked: dry-run bridge"},
+                "ui": {
+                    "workspace": {
+                        "plotter_camera_visible": False,
+                        "face_camera_visible": False,
+                        "split_plane": False,
+                        "empty": True,
+                    },
+                    "windows": {
+                        "machine_controls": False,
+                        "setup_panel": True,
+                        "plotter_video_panel": False,
+                        "face_video_panel": False,
+                    },
+                },
             }
         ),
         encoding="utf-8",
@@ -73,6 +87,8 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
     )
     assert snapshot["app_diagnostics"]["latest_event"]["trace_id"] == "bridge.health.completed"
     assert snapshot["state_summary"]["app_build_id"] == "app-build-123"
+    assert snapshot["state_summary"]["ui"]["workspace"]["empty"] is True
+    assert snapshot["state_summary"]["ui"]["windows"]["setup_panel"] is True
     assert not list((tmp_path / "transcripts").glob("status-*.jsonl"))
 
 
@@ -99,6 +115,20 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
                     "lifecycle_label": "Preview Bridge",
                     "machine": {"state": "DryRun"},
                     "paper": {"status": "PAPER --"},
+                    "ui": {
+                        "workspace": {
+                            "plotter_camera_visible": True,
+                            "face_camera_visible": True,
+                            "split_plane": True,
+                            "empty": False,
+                        },
+                        "windows": {
+                            "machine_controls": True,
+                            "setup_panel": False,
+                            "plotter_video_panel": True,
+                            "face_video_panel": True,
+                        },
+                    },
                 },
             },
         )
@@ -130,6 +160,8 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
     )
     assert snapshot["app_diagnostics"]["latest_event"]["event_type"] == "machine.stop.blocked"
     assert snapshot["app_diagnostics"]["latest_event"]["trace_id"] == "trace-stop"
+    assert snapshot["state_summary"]["ui"]["workspace"]["split_plane"] is True
+    assert snapshot["state_summary"]["ui"]["windows"]["plotter_video_panel"] is True
     assert "motion_blocked_dry_run_bridge" in snapshot["exact_blockers"]
     assert app_state_path.exists()
     assert app_event_log_path.exists()

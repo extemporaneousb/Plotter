@@ -11,36 +11,115 @@ private let visualCapProjectionBottomAllowanceMm = 180.0
 private let visualCapProjectionTopAllowanceMm = 12.0
 
 struct ContentView: View {
-    @StateObject private var plotterCamera = CameraModel(role: .plotter)
-    @StateObject private var faceCamera = CameraModel(role: .face)
     @ObservedObject var bridge: PlotterBridgeModel
+    @ObservedObject var workspace: OperatorWorkspaceState
+    @ObservedObject private var plotterCamera: CameraModel
+    @ObservedObject private var faceCamera: CameraModel
     @Environment(\.openWindow) private var openWindow
     @State private var showLiveVideo = true
-    @State private var cameraLayout = CameraLayoutMode.both
-    @State private var plotterOverlay = PlotterOverlaySettings()
-    @State var plotterViewport = PlotterViewportSettings()
-    @State private var drawingFrame = DrawingFrameSettings()
-    @State private var shapeAssessment = ShapeAssessmentState.idle
-    @State private var frameLearning = FrameLearningState.idle
-    @State private var awaitingAssessment = false
     @State private var didLoadSavedFrameState = false
-    @State var calibrationStatusText = "CAL idle"
-    @State private var showCalibrationWizard = false
-    @State private var showImageProcessingPanel = true
-    @State private var portraitPanelVisible = true
-    @State private var portraitContourMonitorEnabled = true
-    @State private var portraitContourMonitorStatus = "LIVE --"
-    @State private var portraitCaptures: [PortraitCaptureItem] = []
-    @State private var selectedPortraitCaptureID: UUID?
-    @State private var manualFiducialMode = false
-    @State private var manualFiducials: [ManualFiducialPoint] = []
-    @State private var manualPenMode = false
-    @State private var manualCapColorMode = false
-    @State private var confirmedCapPoint: ConfirmedCapPoint?
-    @State var visualMoveIntent: VisualMoveIntent?
-    @State private var visualMotionModel: VisualMotionModel?
-    @State private var visualMotionSamples: [VisualMotionSample] = []
-    @State private var visualCenterDotTaskActive = false
+
+    init(bridge: PlotterBridgeModel, workspace: OperatorWorkspaceState) {
+        self.bridge = bridge
+        self.workspace = workspace
+        self.plotterCamera = workspace.plotterCamera
+        self.faceCamera = workspace.faceCamera
+    }
+
+    var plotterOverlay: PlotterOverlaySettings {
+        get { workspace.plotterOverlay }
+        nonmutating set { workspace.plotterOverlay = newValue }
+    }
+
+    var plotterViewport: PlotterViewportSettings {
+        get { workspace.plotterViewport }
+        nonmutating set { workspace.plotterViewport = newValue }
+    }
+
+    var drawingFrame: DrawingFrameSettings {
+        get { workspace.drawingFrame }
+        nonmutating set { workspace.drawingFrame = newValue }
+    }
+
+    var calibrationStatusText: String {
+        get { workspace.calibrationStatusText }
+        nonmutating set { workspace.calibrationStatusText = newValue }
+    }
+
+    var visualMoveIntent: VisualMoveIntent? {
+        get { workspace.visualMoveIntent }
+        nonmutating set { workspace.visualMoveIntent = newValue }
+    }
+
+    private var frameLearning: FrameLearningState {
+        get { workspace.frameLearning }
+        nonmutating set { workspace.frameLearning = newValue }
+    }
+
+    private var showImageProcessingPanel: Bool {
+        get { workspace.showImageProcessingPanel }
+        nonmutating set { workspace.showImageProcessingPanel = newValue }
+    }
+
+    private var portraitContourMonitorEnabled: Bool {
+        get { workspace.portraitContourMonitorEnabled }
+        nonmutating set { workspace.portraitContourMonitorEnabled = newValue }
+    }
+
+    private var portraitContourMonitorStatus: String {
+        get { workspace.portraitContourMonitorStatus }
+        nonmutating set { workspace.portraitContourMonitorStatus = newValue }
+    }
+
+    private var portraitCaptures: [PortraitCaptureItem] {
+        get { workspace.portraitCaptures }
+        nonmutating set { workspace.portraitCaptures = newValue }
+    }
+
+    private var selectedPortraitCaptureID: UUID? {
+        get { workspace.selectedPortraitCaptureID }
+        nonmutating set { workspace.selectedPortraitCaptureID = newValue }
+    }
+
+    private var manualFiducials: [ManualFiducialPoint] {
+        get { workspace.manualFiducials }
+        nonmutating set { workspace.manualFiducials = newValue }
+    }
+
+    private var manualFiducialMode: Bool {
+        get { workspace.manualFiducialMode }
+        nonmutating set { workspace.manualFiducialMode = newValue }
+    }
+
+    private var manualPenMode: Bool {
+        get { workspace.manualPenMode }
+        nonmutating set { workspace.manualPenMode = newValue }
+    }
+
+    private var manualCapColorMode: Bool {
+        get { workspace.manualCapColorMode }
+        nonmutating set { workspace.manualCapColorMode = newValue }
+    }
+
+    private var confirmedCapPoint: ConfirmedCapPoint? {
+        get { workspace.confirmedCapPoint }
+        nonmutating set { workspace.confirmedCapPoint = newValue }
+    }
+
+    private var visualMotionModel: VisualMotionModel? {
+        get { workspace.visualMotionModel }
+        nonmutating set { workspace.visualMotionModel = newValue }
+    }
+
+    private var visualMotionSamples: [VisualMotionSample] {
+        get { workspace.visualMotionSamples }
+        nonmutating set { workspace.visualMotionSamples = newValue }
+    }
+
+    private var visualCenterDotTaskActive: Bool {
+        get { workspace.visualCenterDotTaskActive }
+        nonmutating set { workspace.visualCenterDotTaskActive = newValue }
+    }
 
     var body: some View {
         ZStack {
@@ -56,16 +135,13 @@ struct ContentView: View {
             }
             .padding(18)
 
-            if showCalibrationWizard {
-                calibrationWizardOverlay
-            }
-
         }
         .background(Color.black)
         .onAppear {
             guard !didLoadSavedFrameState else { return }
             didLoadSavedFrameState = true
             loadSavedFrameState()
+            publishOperatorUIState(reason: "operator_ui_main_window_appeared")
             bridge.recordOperatorEvent("content_view_appeared")
         }
         .task {
@@ -93,8 +169,21 @@ struct ContentView: View {
         .task(id: portraitContourMonitorEnabled) {
             await runPortraitContourMonitor()
         }
-        .onChange(of: plotterCamera.changeReport.sequence) { _, _ in
-            updateShapeAssessmentFromCamera()
+        .task {
+            while !Task.isCancelled {
+                refreshSetupSnapshot()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+            }
+        }
+        .onChange(of: workspace.pendingSetupCommand) { _, request in
+            guard let request else { return }
+            handleSetupCommand(request.command)
+            workspace.pendingSetupCommand = nil
+        }
+        .onChange(of: workspace.pendingPanelCommand) { _, request in
+            guard let request else { return }
+            handlePanelCommand(request.command)
+            workspace.pendingPanelCommand = nil
         }
         .onChange(of: plotterOverlay) { _, _ in
             saveFrameState()
@@ -121,49 +210,40 @@ struct ContentView: View {
     private var cameraWorkspace: some View {
         GeometryReader { geometry in
             let horizontal = geometry.size.width >= geometry.size.height
-            let portraitInspectorWidth = min(CGFloat(360), max(CGFloat(300), geometry.size.width * 0.28))
-            HStack(spacing: 1) {
-                cameraWorkspaceContent(horizontal: horizontal)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if portraitPanelVisible {
-                    portraitInspectorPane
-                        .frame(width: portraitInspectorWidth)
-                }
-            }
+            cameraWorkspaceContent(horizontal: horizontal)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     @ViewBuilder
     private func cameraWorkspaceContent(horizontal: Bool) -> some View {
-        switch cameraLayout {
-        case .both:
+        if workspace.plotterCameraVisible && workspace.faceCameraVisible {
             if horizontal {
                 HStack(spacing: 1) { plotterCameraPane; faceCameraPane }
             } else {
                 VStack(spacing: 1) { plotterCameraPane; faceCameraPane }
             }
-        case .plotter:
+        } else if workspace.plotterCameraVisible {
             plotterCameraPane
-        case .face:
+        } else if workspace.faceCameraVisible {
             faceCameraPane
+        } else {
+            emptyCameraWorkspace
         }
     }
 
-    private var portraitInspectorPane: some View {
-        PortraitPanel(
-            bridge: bridge, monitorEnabled: $portraitContourMonitorEnabled,
-            monitorStatus: portraitContourMonitorStatus, captures: portraitCaptures,
-            selectedCaptureID: selectedPortraitCaptureID,
-            canCreateContourDrawing: faceCamera.isRunning && !bridge.isCalibrating,
-            createContourDrawing: {
-                Task { await createPortraitContourDrawing() }
-            },
-            selectCapture: selectPortraitCapture
-        )
-        .padding(.top, 70)
-        .padding(.bottom, 58)
-        .background(Color.black.opacity(0.88))
-        .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    private var emptyCameraWorkspace: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 8) {
+                Image(systemName: "video.slash")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.28))
+                Text("NO CAMERA SELECTED")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.42))
+            }
+        }
     }
 
     private var plotterCameraPane: some View {
@@ -288,43 +368,121 @@ struct ContentView: View {
         )
     }
 
-    private func beginShapeAssessment() {
-        awaitingAssessment = true
-        shapeAssessment = ShapeAssessmentState(
-            status: "ARMED",
-            detail: "Waiting for new ink change",
-            changedObjects: 0,
-            changedCells: 0,
-            strength: 0
-        )
-        plotterCamera.resetChangeBaseline(updateStatus: false)
+    private func publishOperatorUIState(reason: String) {
+        bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: reason)
     }
 
-    @MainActor
-    private func drawFaceFromCurrentFrame() async {
-        bridge.recordOperatorEvent("face_draw_capture_started")
-        do {
-            let raster = try await faceCamera.captureFaceRaster(columns: 14, rows: 18)
-            let rect = drawingFrame.rect(workspaceXMm: bridge.workspaceXMm, workspaceYMm: bridge.workspaceYMm)
-            let frame = BridgeDrawingFrameRequest(
-                originXMm: Double(rect.minX) * bridge.workspaceXMm, originYMm: Double(rect.minY) * bridge.workspaceYMm,
-                widthMm: Double(rect.width) * bridge.workspaceXMm, heightMm: Double(rect.height) * bridge.workspaceYMm,
-                flipY: false
-            )
-            let completed = await bridge.drawFaceRaster(raster, frame: frame)
-            if !completed {
-                awaitingAssessment = false
-            }
-        } catch {
-            awaitingAssessment = false
-            faceCamera.statusText = error.localizedDescription
-            bridge.statusText = error.localizedDescription
-            bridge.previewStatus = "SIM ERR"
-            bridge.recordOperatorEvent(
-                "face_draw_capture_failed",
-                details: ["error": error.localizedDescription]
-            )
+    private func setCameraVisibility(_ camera: CameraModel, visible: Bool, source: String) {
+        let role = camera.role == .plotter ? "plotter" : "face"
+        if camera.role == .plotter {
+            workspace.plotterCameraVisible = visible
+        } else {
+            workspace.faceCameraVisible = visible
         }
+        if visible {
+            if !camera.isRunning { camera.start() }
+        } else {
+            camera.stop()
+        }
+        bridge.recordOperatorEvent(
+            "camera_visibility_changed",
+            details: [
+                "camera": role,
+                "visible": visible,
+                "source": source
+            ]
+        )
+        publishOperatorUIState(reason: "operator_ui_camera_visibility_changed")
+    }
+
+    private func toggleCameraVisibility(_ camera: CameraModel, source: String) {
+        let visible = camera.role == .plotter ? workspace.plotterCameraVisible : workspace.faceCameraVisible
+        setCameraVisibility(camera, visible: !visible, source: source)
+    }
+
+    private func showPlotterCameraForSetup(source: String) {
+        setCameraVisibility(plotterCamera, visible: true, source: source)
+        showLiveVideo = true
+    }
+
+    private func toggleOperatorWindow(id: String, title: String, source: String, beforeOpen: (() -> Void)? = nil) {
+        let didClose = OperatorWindowSupport.closeWindow(title: title, identifier: id)
+        if didClose {
+            bridge.recordOperatorEvent(
+                "window_toggled",
+                details: ["window_id": id, "visible": false, "source": source]
+            )
+            if id == OperatorWindowID.setupPanel {
+                hideCalibrationWizard()
+            }
+            publishOperatorUIState(reason: "operator_ui_window_toggled")
+            return
+        }
+
+        beforeOpen?()
+        openWindow(id: id)
+        bridge.recordOperatorEvent(
+            "window_toggled",
+            details: ["window_id": id, "visible": true, "source": source]
+        )
+        publishOperatorUIState(reason: "operator_ui_window_toggled")
+    }
+
+    private func handleSetupCommand(_ command: SetupPanelCommand) {
+        switch command {
+        case .primary:
+            runCalibrationWizardPrimaryAction()
+        case .confirm:
+            confirmWizardSetupFromExistingRegistration()
+        case .reset:
+            resetCalibrationWizard()
+        case .hide:
+            hideCalibrationWizard()
+        }
+    }
+
+    private func handlePanelCommand(_ command: OperatorPanelCommand) {
+        switch command {
+        case .useOriginalPlotterVideo:
+            useOriginalPlotterVideo(source: "plotter_video_panel")
+        case .togglePlotterFocus:
+            togglePlotterFocusMode()
+        case .sampleCapColor:
+            startCapColorPick()
+        case .resetCapColor:
+            resetCapMarkerColor()
+        case .resetVisualControls:
+            resetVisualControls()
+        case .createPortraitDrawing:
+            Task { await createPortraitContourDrawing() }
+        case .selectPortraitCapture(let id):
+            if let item = portraitCaptures.first(where: { $0.id == id }) {
+                selectPortraitCapture(item)
+            }
+        }
+    }
+
+    private func refreshSetupSnapshot() {
+        workspace.setupSnapshot = SetupPanelSnapshot(
+            instructionText: wizardInstructionText,
+            fiducialDetail: wizardFiducialDetail,
+            fiducialStatus: wizardFiducialStatus,
+            greenCapDetail: wizardGreenCapDetail,
+            greenCapStatus: wizardGreenCapStatus,
+            visualCalibrationDetail: frameLearning.detail,
+            visualCalibrationStatus: wizardMotionProbeStatus,
+            bindingDetail: bridge.visualBindingDetail,
+            bindingStatus: wizardDrawPreflightStatus,
+            primaryActionTitle: wizardPrimaryActionTitle,
+            primaryActionEnabled: wizardPrimaryActionEnabled,
+            primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
+            manualFiducialCount: manualFiducials.count,
+            hasPaperLock: bridge.hasPaperLock,
+            capStateLabel: wizardCapStateLabel,
+            isLiveMotionMode: bridge.isLiveMotionMode,
+            capDetected: currentCarriageMarker != nil,
+            canConfirmSetup: bridge.hasPaperLock
+        )
     }
 
     @MainActor
@@ -444,49 +602,6 @@ struct ContentView: View {
         if message.contains("FACE") { return "NO FACE" }
         if message.contains("FRAME") { return "NO FRAME" }
         return "WAIT"
-    }
-
-    private func updateShapeAssessmentFromCamera() {
-        guard awaitingAssessment else { return }
-        let report = plotterCamera.changeReport
-        guard report.sequence > 0 else { return }
-
-        let status: String
-        let detail: String
-        if report.objectCount == 1 && report.changedCells >= 5 {
-            status = "PASS"
-            detail = "Single changed region detected"
-        } else if report.objectCount > 1 {
-            status = "REVIEW"
-            detail = "Multiple changed regions detected"
-        } else if report.changedCells > 0 {
-            status = "WEAK"
-            detail = "Small change detected"
-        } else {
-            status = "WAIT"
-            detail = "No new ink region yet"
-        }
-
-        shapeAssessment = ShapeAssessmentState(
-            status: status,
-            detail: detail,
-            changedObjects: report.objectCount,
-            changedCells: report.changedCells,
-            strength: report.strongestTrackStrength
-        )
-
-        if status != "WAIT" {
-            awaitingAssessment = false
-            bridge.recordOperatorEvent(
-                "shape_assessment_completed",
-                details: [
-                    "status": status,
-                    "changed_objects": report.objectCount,
-                    "changed_cells": report.changedCells,
-                    "strength": report.strongestTrackStrength
-                ]
-            )
-        }
     }
 
     @MainActor
@@ -2447,96 +2562,84 @@ struct ContentView: View {
                     .frame(height: 22)
                     .overlay(Color.white.opacity(0.22))
 
-                CameraLayoutControl(selection: $cameraLayout)
+                plotterConnectionButton
+
+                controlButton(
+                    systemName: "slider.horizontal.3",
+                    label: "Machine",
+                    help: "Open or close machine controls",
+                    isActive: bridge.isOnline
+                ) {
+                    toggleOperatorWindow(
+                        id: OperatorWindowID.machineControls,
+                        title: "Machine",
+                        source: "top_bar"
+                    )
+                }
 
                 CameraSelector(camera: plotterCamera)
                     .frame(width: 166)
+
+                controlButton(
+                    systemName: workspace.plotterCameraVisible ? "video.fill" : "video.slash",
+                    label: "Plotter",
+                    help: "Show or hide the plotter camera pane",
+                    isActive: workspace.plotterCameraVisible
+                ) {
+                    toggleCameraVisibility(plotterCamera, source: "top_bar")
+                }
+
+                controlButton(
+                    systemName: "rectangle.dashed",
+                    label: "Plot Vid",
+                    help: "Open or close plotter video controls",
+                    isActive: plotterViewport.videoFilter != .normal || plotterViewport.focusMode == .focused || plotterViewport.rotationDegrees != 0
+                ) {
+                    toggleOperatorWindow(
+                        id: OperatorWindowID.plotterVideoPanel,
+                        title: "Plotter Video",
+                        source: "top_bar"
+                    )
+                }
 
                 CameraSelector(camera: faceCamera)
                     .frame(width: 150)
 
                 controlButton(
-                    systemName: "camera.badge.ellipsis",
-                    label: "Cameras",
-                    help: "Start visible camera streams",
-                    isActive: plotterCamera.isRunning && faceCamera.isRunning
+                    systemName: workspace.faceCameraVisible ? "video.fill" : "video.slash",
+                    label: "Face",
+                    help: "Show or hide the face camera pane",
+                    isActive: workspace.faceCameraVisible
                 ) {
-                    startVisibleCameras()
-                }
-
-                plotterConnectionButton
-
-                controlButton(
-                    systemName: "rotate.right",
-                    label: "Rotate",
-                    help: "Rotate plotter camera display by 90 degrees",
-                    isActive: plotterViewport.rotationDegrees != 0
-                ) {
-                    plotterViewport.rotationDegrees = nextQuarterTurn(after: plotterViewport.rotationDegrees)
-                }
-
-                controlButton(
-                    systemName: plotterViewport.focusMode.systemImage,
-                    label: plotterViewport.focusMode.title,
-                    help: "Toggle original video and focused plotter area",
-                    isActive: plotterViewport.focusMode == .focused
-                ) {
-                    togglePlotterFocusMode()
-                }
-                .keyboardShortcut("f", modifiers: [.command])
-
-                controlButton(
-                    systemName: "checklist.checked",
-                    label: "Field",
-                    help: "Open Visual Field Setup",
-                    isActive: showCalibrationWizard || manualFiducialMode
-                ) {
-                    startCalibrationWizard()
+                    toggleCameraVisibility(faceCamera, source: "top_bar")
                 }
 
                 controlButton(
                     systemName: "person.crop.rectangle",
-                    label: "Portrait",
-                    help: "Show face contour monitor and portrait controls",
-                    isActive: portraitPanelVisible
+                    label: "Face Vid",
+                    help: "Open or close face video and portrait controls",
+                    isActive: portraitContourMonitorEnabled || bridge.faceContourPreviewOverlay != nil
                 ) {
-                    portraitPanelVisible.toggle()
-                    if portraitPanelVisible {
-                        cameraLayout = .face
-                        if !faceCamera.isRunning {
-                            faceCamera.start()
-                        }
-                        portraitContourMonitorEnabled = true
-                    }
+                    toggleOperatorWindow(
+                        id: OperatorWindowID.faceVideoPanel,
+                        title: "Face Video",
+                        source: "top_bar"
+                    )
                 }
-
-                VisualControlsMenu(
-                    plotterCamera: plotterCamera,
-                    faceCamera: faceCamera,
-                    plotterOverlay: $plotterOverlay,
-                    plotterViewport: $plotterViewport,
-                    showImageProcessingPanel: $showImageProcessingPanel,
-                    sampleCapColor: startCapColorPick,
-                    resetCapColor: resetCapMarkerColor,
-                    reset: resetVisualControls
-                )
-
-                DrawVerifyMenu(
-                    bridge: bridge,
-                    workflowStatusText: $calibrationStatusText,
-                    visualMotionActive: visualCenterDotIsActive
-                )
 
                 controlButton(
-                    systemName: "slider.horizontal.3",
-                    label: "Machine",
-                    help: "Open machine controls window",
-                    isActive: bridge.isOnline
+                    systemName: "checklist.checked",
+                    label: "Setup",
+                    help: "Open or close setup",
+                    isActive: workspace.setupWindowActive || manualFiducialMode
                 ) {
-                    openWindow(id: "machine-controls")
+                    toggleOperatorWindow(
+                        id: OperatorWindowID.setupPanel,
+                        title: "Setup",
+                        source: "top_bar",
+                        beforeOpen: startCalibrationWizard
+                    )
                 }
-
-                topStatusLights
             }
         }
         .padding(.horizontal, 12)
@@ -2910,10 +3013,9 @@ struct ContentView: View {
     }
 
     private func startCalibrationWizard() {
-        showCalibrationWizard = true
-        cameraLayout = .plotter
-        showLiveVideo = true
-        startVisibleCameras()
+        workspace.setupWindowActive = true
+        showPlotterCameraForSetup(source: "setup")
+        refreshSetupSnapshot()
 
         if bridge.hasPaperLock {
             manualFiducialMode = false
@@ -2936,10 +3038,9 @@ struct ContentView: View {
     }
 
     private func confirmWizardSetupFromExistingRegistration() {
-        showCalibrationWizard = true
-        cameraLayout = .plotter
-        showLiveVideo = true
-        startVisibleCameras()
+        workspace.setupWindowActive = true
+        showPlotterCameraForSetup(source: "setup_confirm")
+        refreshSetupSnapshot()
 
         guard bridge.hasPaperLock else {
             calibrationStatusText = "FIELD no stored visual field; click FID-BL"
@@ -2964,11 +3065,13 @@ struct ContentView: View {
     }
 
     private func hideCalibrationWizard() {
-        showCalibrationWizard = false
+        workspace.setupWindowActive = false
+        _ = OperatorWindowSupport.closeWindow(title: "Setup", identifier: OperatorWindowID.setupPanel)
         manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false
         calibrationStatusText = "FIELD hidden"
+        publishOperatorUIState(reason: "operator_ui_setup_hidden")
     }
 
     private func solvePaperHomographyFromWizard() {
@@ -3008,7 +3111,7 @@ struct ContentView: View {
     }
 
     private func clearWizardLocalState(resetFiducials: Bool) {
-        showCalibrationWizard = true
+        workspace.setupWindowActive = true
         manualFiducialMode = true
         manualPenMode = false
         manualCapColorMode = false
@@ -3176,7 +3279,7 @@ struct ContentView: View {
             normalizedCamera.x,
             normalizedCamera.y
         )
-        if showCalibrationWizard {
+        if workspace.setupWindowActive {
             if manualFiducials.count >= 4 {
                 calibrationStatusText = "FIELD fiducials captured"
                 solvePaperHomographyFromWizard()
@@ -3281,7 +3384,7 @@ struct ContentView: View {
             )
         }
 
-        if showCalibrationWizard, paperMm != nil {
+        if workspace.setupWindowActive, paperMm != nil {
             manualPenMode = false
         }
     }
@@ -3305,18 +3408,6 @@ struct ContentView: View {
             manualCapColorMode = false
         } else {
             calibrationStatusText = "CAL cap color sample failed; click a saturated cap pixel"
-        }
-    }
-
-    private func startVisibleCameras() {
-        switch cameraLayout {
-        case .both:
-            if !plotterCamera.isRunning { plotterCamera.start() }
-            if !faceCamera.isRunning { faceCamera.start() }
-        case .plotter:
-            if !plotterCamera.isRunning { plotterCamera.start() }
-        case .face:
-            if !faceCamera.isRunning { faceCamera.start() }
         }
     }
 
