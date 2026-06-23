@@ -45,6 +45,9 @@ class PolygonDrawRequest(BaseModel):
     max_segment_mm: float = 25.0
     max_polyline_count: int = 1600
     request_id: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
 
 
 class ShapeExecutionRequest(BaseModel):
@@ -58,6 +61,9 @@ class ShapeExecutionRequest(BaseModel):
     travel_feed_mm_min: float = 500.0
     park_offset_mm: float = 25.0
     request_id: str | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
 
 
 class PlannedCommand(BaseModel):

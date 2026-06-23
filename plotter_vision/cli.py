@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import typer
 
@@ -41,6 +48,59 @@ from plotter_vision.motion.gcode import (
 )
 
 app = typer.Typer(help="Safe controller interrogation tools for the pen plotter.")
+
+
+def _utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _read_json_url(base_url: str, path: str) -> dict[str, object]:
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    try:
+        with urlopen(url, timeout=2.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"error": str(exc), "url": url}
+
+
+def _read_text_file(path: Path, *, max_bytes: int = 256 * 1024) -> str | None:
+    if not path.exists():
+        return None
+    data = path.read_bytes()
+    if len(data) > max_bytes:
+        data = data[-max_bytes:]
+    return data.decode("utf-8", errors="replace")
+
+
+def _copy_if_exists(source: Path, destination: Path) -> str | None:
+    if not source.exists():
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(source, destination)
+    else:
+        shutil.copy2(source, destination)
+    return str(destination)
+
+
+def _git_metadata() -> dict[str, object]:
+    def run(*args: str) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", *args],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            return ""
+
+    return {
+        "sha": run("rev-parse", "HEAD"),
+        "branch": run("branch", "--show-current"),
+        "dirty": bool(run("status", "--short")),
+    }
 
 
 @app.command("bridge-server")
@@ -128,6 +188,92 @@ def bridge_server(
             workspace_y_max=workspace_y_max,
         )
     )
+
+
+@app.command()
+def doctor(
+    base_url: Annotated[
+        str,
+        typer.Option("--base-url", help="Local bridge URL to inspect"),
+    ] = "http://127.0.0.1:8765",
+    artifacts_dir: Annotated[
+        Path,
+        typer.Option(help="Artifact directory containing app/bridge diagnostics"),
+    ] = Path("artifacts"),
+    out_dir: Annotated[
+        Path | None,
+        typer.Option(help="Debug bundle output directory"),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the bundle manifest as JSON"),
+    ] = False,
+) -> None:
+    """Capture a read-only agent debug bundle from bridge endpoints and artifacts."""
+    bundle_dir = out_dir or artifacts_dir / "debug_snapshots" / _utc_stamp()
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    endpoints = {
+        "health": "health",
+        "codex_snapshot": "codex/snapshot",
+        "codex_events": "codex/events",
+        "paper_status": "paper/status",
+        "binding_status": "calibration/binding/status",
+    }
+    endpoint_results: dict[str, object] = {}
+    for name, path in endpoints.items():
+        payload = _read_json_url(base_url, path)
+        endpoint_results[name] = payload
+        (bundle_dir / f"{name}.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    copied: dict[str, str | None] = {
+        "app_state": _copy_if_exists(artifacts_dir / "app_state.json", bundle_dir / "app_state.json"),
+        "app_events": _copy_if_exists(artifacts_dir / "app_events.jsonl", bundle_dir / "app_events.jsonl"),
+        "bridge_events": _copy_if_exists(
+            artifacts_dir / "bridge_events.jsonl",
+            bundle_dir / "bridge_events.jsonl",
+        ),
+        "bridge_transcripts": _copy_if_exists(
+            artifacts_dir / "bridge_transcripts",
+            bundle_dir / "bridge_transcripts",
+        ),
+    }
+    manifest: dict[str, object] = {
+        "schema": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "read_only": True,
+        "bundle_dir": str(bundle_dir),
+        "base_url": base_url,
+        "artifacts_dir": str(artifacts_dir),
+        "command": "plotterctl doctor --json",
+        "process": {
+            "pid": os.getpid(),
+            "cwd": str(Path.cwd()),
+        },
+        "git": _git_metadata(),
+        "endpoints": {
+            name: str(bundle_dir / f"{name}.json")
+            for name in endpoints
+        },
+        "copied_artifacts": copied,
+        "bridge": endpoint_results.get("health"),
+        "snapshot_summary": (
+            endpoint_results.get("codex_snapshot", {}).get("state_summary")
+            if isinstance(endpoint_results.get("codex_snapshot"), dict)
+            else None
+        ),
+    }
+    (bundle_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if json_output:
+        typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Wrote debug bundle: {bundle_dir}")
 
 
 def _make_controller(

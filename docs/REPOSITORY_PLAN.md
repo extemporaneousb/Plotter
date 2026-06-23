@@ -191,12 +191,13 @@ Status: implemented as a local HTTP bridge plus native macOS camera/control prev
 - Keep the local HTTP server thin until core services are stable enough to justify a heavier API
   framework.
 - Route all UI/API calls through core safety validators and controller abstractions.
-- Preserve the existing observability spine: `/health`, `/machine/status`, `/paper/status`,
-  `/events`, `artifacts/bridge_events.jsonl`, and `artifacts/bridge_transcripts/*.jsonl`.
+- Preserve the existing observability spine behind the canonical agent surfaces: `/health`,
+  `/machine/status`, `/paper/status`, `/codex/events`, `/codex/snapshot`,
+  `artifacts/bridge_events.jsonl`, and `artifacts/bridge_transcripts/*.jsonl`.
 
 ### Phase 4.5 — Agent-Readable Observability
 
-Status: implemented as bridge diagnostics routes plus native app JSON/OSLog diagnostics.
+Status: implemented as a v2 bridge/app diagnostics contract plus native app JSON/OSLog diagnostics.
 
 - Keep `artifacts/app_state.json` as the latest app-observed state. It includes app build identity,
   bridge lifecycle, machine summary, paper registration state, preview state, visible errors, and
@@ -204,9 +205,15 @@ Status: implemented as bridge diagnostics routes plus native app JSON/OSLog diag
 - Keep `artifacts/app_events.jsonl` as bounded append-only app evidence for app lifecycle, bridge
   polling, lifecycle mismatches, UI commands, preview/draw requests, visual-probe paths, visible
   errors, and camera-derived state changes. Do not store raw frames.
-- Keep `GET /codex/snapshot` read-only. It merges `/health`, cached machine status, `/paper/status`,
-  recent `/events`, and latest app diagnostics when present. `POST /codex/app/state` and
+- Keep `GET /codex/events` as the canonical normalized event stream. It merges app, bridge, and
+  controller-adjacent diagnostics using the shared event envelope with source, sequence, timestamp,
+  monotonic time, session id, trace id, span ids, command/request ids, status, reason, blockers, and
+  payload.
+- Keep `GET /codex/snapshot` read-only and first-class. It merges `/health`, cached machine status,
+  `/paper/status`, latest app diagnostics, normalized events, computed blockers, active workflow,
+  latest visible error, recent traces, and debug-bundle hints. `POST /codex/app/state` and
   `POST /codex/app/events` are append-only diagnostics ingestion routes, not command routes.
+- Keep `plotterctl doctor --json` and `make debug-snapshot` as the canonical debug-bundle interface.
 - Do not route machine commands through `/codex/snapshot` or app artifacts. Any action remains an
   explicit typed bridge route with existing safety gates.
 - Keep preview and diagnostic reads non-moving. `/codex/snapshot` must not create controller
@@ -220,13 +227,14 @@ make bridge-preview-bg
 curl -fsS http://127.0.0.1:8765/health | jq '{status, lifecycle_label, dry_run, bridge_build_id, event_log}'
 curl -fsS http://127.0.0.1:8765/machine/status | jq '{status, state, is_alarm, is_busy, dry_run}'
 curl -fsS http://127.0.0.1:8765/paper/status | jq '{status, dry_run, has_registration: (.registration != null)}'
-curl -fsS http://127.0.0.1:8765/events | jq '.events | length'
+curl -fsS http://127.0.0.1:8765/codex/events | jq '.events | length'
 test -s artifacts/bridge_events.jsonl
 test -s artifacts/app_state.json
 jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
 test -s artifacts/app_events.jsonl
 curl -fsS http://127.0.0.1:8765/codex/snapshot \
-  | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+  | jq '{summary: .state_summary, blockers: .exact_blockers, traces: .recent_traces}'
+make debug-snapshot
 make bridge-stop
 ```
 

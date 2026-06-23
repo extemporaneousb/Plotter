@@ -12,6 +12,10 @@ final class AppDiagnostics {
     private let eventsURL: URL
     private let maxEventLogBytes = 256 * 1024
     private let maxStringLength = 180
+    private let sessionID = "app-\(UUID().uuidString.lowercased())"
+    private var eventSequence = 0
+    private var lastEventSignature = ""
+    private var repeatCount = 0
 
     private init() {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -31,12 +35,56 @@ final class AppDiagnostics {
 
         queue.async { [weak self] in
             guard let self else { return }
-            var event = cleanPayload
-            event["schema_version"] = 1
-            event["artifact_type"] = "plotter_app_event"
-            event["timestamp"] = Self.timestamp()
-            event["event"] = cleanName
-            event["status"] = cleanPayload["status"] as? String ?? "reported"
+            let signature = "\(cleanName)|\(summary)"
+            if signature == self.lastEventSignature {
+                self.repeatCount += 1
+                return
+            }
+            self.eventSequence += 1
+            self.lastEventSignature = signature
+            self.repeatCount = 1
+
+            let timestamp = Self.timestamp()
+            let traceId = cleanPayload["trace_id"] as? String
+                ?? cleanPayload["traceId"] as? String
+                ?? cleanPayload["request_id"] as? String
+                ?? cleanPayload["requestId"] as? String
+                ?? cleanPayload["command_id"] as? String
+                ?? cleanPayload["commandId"] as? String
+                ?? cleanName
+            let spanId = cleanPayload["span_id"] as? String
+                ?? cleanPayload["spanId"] as? String
+                ?? "\(cleanName)-\(self.eventSequence)"
+            let parentSpanId = cleanPayload["parent_span_id"] as? String
+                ?? cleanPayload["parentSpanId"] as? String
+            var event: [String: Any] = [
+                "schema": 1,
+                "source": "macos_app",
+                "sequence": self.eventSequence,
+                "timestamp": timestamp,
+                "t_monotonic": ProcessInfo.processInfo.systemUptime,
+                "session_id": self.sessionID,
+                "trace_id": traceId,
+                "span_id": spanId,
+                "event_type": cleanName,
+                "status": cleanPayload["status"] as? String ?? "reported",
+                "payload": cleanPayload
+            ]
+            if let parentSpanId {
+                event["parent_span_id"] = parentSpanId
+            }
+            if let commandId = cleanPayload["command_id"] as? String ?? cleanPayload["commandId"] as? String {
+                event["command_id"] = commandId
+            }
+            if let requestId = cleanPayload["request_id"] as? String ?? cleanPayload["requestId"] as? String {
+                event["request_id"] = requestId
+            }
+            if let reason = cleanPayload["reason"] as? String ?? cleanPayload["error"] as? String {
+                event["reason"] = reason
+            }
+            if let blockers = cleanPayload["blockers"] as? [String] {
+                event["blockers"] = blockers
+            }
             self.appendEvent(event)
         }
     }
@@ -49,6 +97,8 @@ final class AppDiagnostics {
             snapshot["schema_version"] = 1
             snapshot["artifact_type"] = "plotter_app_state"
             snapshot["updated_at"] = Self.timestamp()
+            snapshot["source"] = "macos_app"
+            snapshot["session_id"] = self.sessionID
             do {
                 try FileManager.default.createDirectory(at: self.directoryURL, withIntermediateDirectories: true)
                 let data = try self.encoder.encode(JSONObject(snapshot))

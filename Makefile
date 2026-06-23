@@ -47,7 +47,7 @@ RUFF := $(BIN)/ruff
 INSTALL_STAMP := $(VENV)/.install-stamp
 SCALE_SNAPSHOT := $(shell if [ -f "$(ARTIFACTS)/controller_snapshot_after_settings.json" ]; then echo "$(ARTIFACTS)/controller_snapshot_after_settings.json"; else echo "$(ARTIFACTS)/controller_snapshot.json"; fi)
 
-.PHONY: help venv install test lint check launch install-shortcuts app preview-app standby-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-standby bridge-standby-bg bridge-standby-restart bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
+.PHONY: help venv install test lint check launch install-shortcuts app preview-app standby-app live-app ports status watch-status unlock soft-reset home-preview home-xy bridge-standby bridge-standby-bg bridge-standby-restart bridge-preview bridge-preview-bg bridge-preview-restart bridge-live-bg bridge-live-restart bridge-stop debug-snapshot bridge-server mock-probe mock-snapshot probe snapshot jog-preview jog measure-jog-preview measure-jog line-preview draw-line pen-preview pen-trial pen-cycle-preview pen-cycle save-pen-config pen-up pen-down configured-line-preview draw-config-line measure-pattern-preview draw-measure-pattern scale-report settings-plan apply-settings xy-homing-plan apply-xy-homing-settings homing-tune-plan apply-homing-tune workspace-travel-plan apply-workspace-travel hard-limits-off hard-limits-on clean require-port require-motion-arm require-pen-arm require-settings-arm require-unlock-arm require-reset-arm require-home-arm require-pen-command require-pen-cycle require-measured
 
 help:
 	@echo "Plotter Vision targets:"
@@ -75,6 +75,7 @@ help:
 	@echo "  make bridge-live-bg PORT=/dev/cu... ARM_HOME=1 ARM_MOTION=1 ARM_PEN=1 ARM_UNLOCK=1 NO_DRY_RUN=1"
 	@echo "  make bridge-live-restart PORT=/dev/cu... ARM_HOME=1 ARM_MOTION=1 ARM_PEN=1 ARM_UNLOCK=1 NO_DRY_RUN=1"
 	@echo "  make bridge-stop                     Stop background bridge"
+	@echo "  make debug-snapshot                  Capture canonical Codex snapshot/events debug bundle"
 	@echo "  make bridge-server PORT=/dev/cu... ARM_HOME=1 ARM_MOTION=1 ARM_PEN=1 ARM_UNLOCK=1 NO_DRY_RUN=1"
 	@echo "  make mock-probe                      Run safe mock controller probe"
 	@echo "  make mock-snapshot                   Save safe mock snapshot JSON"
@@ -446,6 +447,12 @@ bridge-stop:
 		echo "No bridge pid file found."; \
 	fi
 	@screen -S "$(BRIDGE_SCREEN)" -X quit >/dev/null 2>&1 || true
+
+debug-snapshot: install
+	mkdir -p $(ARTIFACTS)
+	$(PLOTTERCTL) doctor --json \
+		--base-url http://127.0.0.1:$(HTTP_PORT) \
+		--artifacts-dir $(ARTIFACTS)
 
 bridge-server: install require-port require-home-arm require-motion-arm require-pen-arm require-unlock-arm save-pen-config
 	mkdir -p $(ARTIFACTS)

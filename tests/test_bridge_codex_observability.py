@@ -8,12 +8,16 @@ from typing import Any, Iterator
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from typer.testing import CliRunner
+
 from plotter_vision.bridge.server import (
     BridgeRuntimeConfig,
+    EventLog,
     LocalThreadingHTTPServer,
     PlotterBridge,
     _make_handler,
 )
+from plotter_vision.cli import app
 from plotter_vision.config import MachineConfig
 
 
@@ -27,6 +31,7 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
                 "source": "PlotterVision",
                 "app_build_id": "app/test",
                 "bridge_url": "http://127.0.0.1:8765",
+                "trace_id": "trace-panel",
                 "status": "ready",
                 "payload": {
                     "selected_panel": "machine",
@@ -44,6 +49,8 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
             {
                 "source": "PlotterVision",
                 "event_type": "ui.selection_changed",
+                "trace_id": "trace-panel",
+                "parent_span_id": state_response["record"]["span_id"],
                 "status": "observed",
                 "payload": {"selected_panel": "diagnostics"},
             },
@@ -55,8 +62,10 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
         app_event_count = _jsonl_count(tmp_path / "app_events.jsonl")
 
         status_code, snapshot = client.get("/codex/snapshot")
+        events_status, events = client.get("/codex/events")
 
     assert status_code == 200
+    assert events_status == 200
     assert snapshot["schema"] == 1
     assert snapshot["read_only"] is True
     assert snapshot["health"]["status"] == "ready"
@@ -64,10 +73,18 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
     assert snapshot["machine"]["controller"] == "mock"
     assert snapshot["machine"]["status"] == "dry_run"
     assert snapshot["paper"]["status"] == "missing"
-    assert [event["type"] for event in snapshot["recent_events"]] == [
-        "app.diagnostics_ingested",
-        "app.diagnostics_ingested",
-    ]
+    assert [
+        event["event_type"]
+        for event in snapshot["recent_events"]
+        if event["source"] == "bridge"
+    ] == ["app.diagnostics_ingested", "app.diagnostics_ingested"]
+    assert snapshot["state_summary"]["bridge_build_id"] == snapshot["health"]["bridge_build_id"]
+    assert "paper_registration_missing" in snapshot["exact_blockers"]
+    assert "binding_untrusted" in snapshot["exact_blockers"]
+    assert any(trace["trace_id"] == "trace-panel" for trace in snapshot["recent_traces"])
+    assert events["canonical"] is True
+    assert any(event["trace_id"] == "trace-panel" for event in events["events"])
+    assert all("event_type" in event for event in events["events"])
 
     app_diagnostics = snapshot["app_diagnostics"]
     assert app_diagnostics["latest_state"]["payload"]["paper_locked"] is True
@@ -77,7 +94,7 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
     assert _jsonl_count(tmp_path / "app_events.jsonl") == app_event_count
 
 
-def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> None:
+def test_canonical_codex_events_reads_are_read_only_and_posts_append(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=False)
 
     with _running_bridge(bridge) as client:
@@ -87,6 +104,7 @@ def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> 
             "/codex/app/events",
             {
                 "event_type": "bridge.poll_completed",
+                "trace_id": "trace-poll",
                 "payload": {"health_status": "ready"},
             },
         )
@@ -98,6 +116,7 @@ def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> 
             "/codex/app/state",
             {
                 "status": "ready",
+                "trace_id": "trace-poll",
                 "payload": {"bridge_label": "Hardware Standby"},
             },
         )
@@ -105,14 +124,16 @@ def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> 
         assert state["record"]["sequence"] == 2
         assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
 
-        status_code, diagnostics = client.get("/codex/app/events")
+        status_code, events = client.get("/codex/events")
         assert status_code == 200
-        assert diagnostics["latest_state"]["payload"]["bridge_label"] == "Hardware Standby"
+        assert events["canonical"] is True
+        assert any(event["trace_id"] == "trace-poll" for event in events["events"])
         assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
 
-        status_code, diagnostics = client.get("/codex/app/state")
+        status_code, snapshot = client.get("/codex/snapshot")
         assert status_code == 200
-        assert diagnostics["latest_event"]["event_type"] == "bridge.poll_completed"
+        assert snapshot["app_diagnostics"]["latest_event"]["event_type"] == "bridge.poll_completed"
+        assert snapshot["app_diagnostics"]["latest_state"]["payload"]["bridge_label"] == "Hardware Standby"
         assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
 
         status_code, response = client.post("/codex/snapshot", {"payload": {"action": "move"}})
@@ -120,6 +141,52 @@ def test_app_diagnostics_gets_are_read_only_and_posts_append(tmp_path: Path) -> 
     assert status_code == 404
     assert response == {"error": "not found"}
     assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
+
+
+def test_bridge_event_log_aggregates_repeated_identical_events(tmp_path: Path) -> None:
+    event_log = EventLog(tmp_path / "bridge_events.jsonl")
+
+    first = event_log.emit(
+        "machine.status_failed",
+        status="failed",
+        payload={"error": "offline"},
+    )
+    second = event_log.emit(
+        "machine.status_failed",
+        status="failed",
+        payload={"error": "offline"},
+    )
+
+    assert first.sequence == second.sequence
+    assert second.payload["repeat_count"] == 2
+    assert _jsonl_count(tmp_path / "bridge_events.jsonl") == 1
+
+
+def test_doctor_json_writes_debug_bundle(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=True)
+    runner = CliRunner()
+
+    with _running_bridge(bridge) as client:
+        result = runner.invoke(
+            app,
+            [
+                "doctor",
+                "--json",
+                "--base-url",
+                client.base_url,
+                "--artifacts-dir",
+                str(tmp_path),
+            ],
+    )
+
+    assert result.exit_code == 0, result.output
+    manifest = json.loads(result.output[result.output.find("{"):])
+    bundle_dir = Path(manifest["bundle_dir"])
+    assert manifest["read_only"] is True
+    assert (bundle_dir / "manifest.json").exists()
+    assert (bundle_dir / "codex_snapshot.json").exists()
+    assert (bundle_dir / "codex_events.json").exists()
+    assert manifest["endpoints"]["codex_events"].endswith("codex_events.json")
 
 
 class _BridgeClient:

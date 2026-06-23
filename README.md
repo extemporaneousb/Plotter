@@ -252,17 +252,24 @@ Codex observability is a read-only diagnostics contract. Codex may inspect expor
 state, event logs, and controller transcripts, but it must not become an in-app command path. Machine
 actions still flow through typed bridge routes and the Python safety gates.
 
-The bridge surfaces that exist today are:
+The canonical bridge surfaces for agents are:
 
 - `GET /health`: bridge lifecycle, build id, source root, dry-run/live state, arming flags, event log
   path, and workspace dimensions.
 - `GET /machine/status`: controller connection, alarm/busy state, pins, mode, arming state, and
   latest known machine position.
 - `GET /paper/status`: paper registration and homography state.
-- `GET /events`: recent in-memory bridge events.
+- `GET /codex/events`: recent normalized app, bridge, and controller-adjacent events using the shared
+  agent event envelope.
+- `GET /codex/snapshot`: the first read for debugging current state. It includes app/bridge build
+  identity, bridge online state, machine alarm/busy state, paper registration, binding trust,
+  active workflow, latest visible error, exact blockers, recent trace summaries, and debug-bundle
+  hints.
 - `artifacts/bridge_events.jsonl`: append-only bridge event history.
 - `artifacts/bridge_transcripts/*.jsonl`: controller command transcripts for status and action
   requests.
+- `plotterctl doctor --json` or `make debug-snapshot`: write a timestamped debug bundle under
+  `artifacts/debug_snapshots/`.
 
 The app-side diagnostics surfaces are:
 
@@ -272,9 +279,7 @@ The app-side diagnostics surfaces are:
   preview/draw, visual-probe, and visible error events.
 - `POST /codex/app/state` and `POST /codex/app/events`: append-only bridge ingestion routes for app
   diagnostics. They are not command routes.
-- `GET /codex/app/state`, `GET /codex/app/events`, and `GET /codex/snapshot`: read-only diagnostics
-  routes. The merged snapshot combines `/health`, cached machine status, `/paper/status`, recent
-  `/events`, and latest app diagnostics when present.
+- `GET /codex/snapshot` and `GET /codex/events`: the read-only diagnostics routes agents should use.
 
 Use the live endpoints to understand state before acting:
 
@@ -287,17 +292,18 @@ curl -fsS http://127.0.0.1:8765/paper/status \
   | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
 curl -fsS http://127.0.0.1:8765/calibration/binding/status \
   | jq '{status, binding_file, validation: .binding.validation_status, blockers: .binding.blockers}'
-curl -fsS http://127.0.0.1:8765/events | jq '.events[-10:]'
+curl -fsS http://127.0.0.1:8765/codex/events | jq '.events[-10:]'
 tail -n 20 artifacts/bridge_events.jsonl | jq -c .
 ```
 
-Include the app artifacts and merged snapshot in the same check:
+Include the merged snapshot and debug bundle in the same check:
 
 ```bash
 jq '{reason, app, bridge, machine, paper, previews, gates, updated_at}' artifacts/app_state.json
 tail -n 20 artifacts/app_events.jsonl | jq -c .
 curl -fsS http://127.0.0.1:8765/codex/snapshot \
-  | jq '{health, machine, paper, app: .app_diagnostics.latest_state.payload, recent_events}'
+  | jq '{summary: .state_summary, blockers: .exact_blockers, traces: .recent_traces}'
+make debug-snapshot
 ```
 
 Interpretation rules:
@@ -307,7 +313,8 @@ Interpretation rules:
   and preview simulation before any live operation.
 - A stale or mismatched app/bridge build id means relaunch the dry-run bridge/app from the current
   checkout before debugging UI behavior.
-- `/events` is recent memory; `bridge_events.jsonl` and transcript files are the durable evidence.
+- `/codex/events` is the canonical recent event stream; JSONL event logs and transcript files are
+  the durable evidence.
 - Preview routes and diagnostics must remain transcript-free and non-moving. If a diagnostic action
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.

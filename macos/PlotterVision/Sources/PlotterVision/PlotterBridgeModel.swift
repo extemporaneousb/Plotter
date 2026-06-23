@@ -530,6 +530,9 @@ final class PlotterBridgeModel: ObservableObject {
     private func diagnosticsState(reason: String) -> [String: Any] {
         [
             "reason": reason,
+            "active_workflow": activeAction.isEmpty ? reason : activeAction,
+            "latest_visible_error": latestVisibleDiagnosticsError(),
+            "exact_blockers": exactDiagnosticsBlockers(),
             "app": [
                 "build_id": appBuildId ?? "",
                 "required_bridge_api_version": requiredBridgeApiVersion
@@ -613,6 +616,50 @@ final class PlotterBridgeModel: ObservableObject {
                 "can_run_visual_relative_motion": canRunLiveRelativeMotionCommand && !bindingMarkPreviewPoints.isEmpty
             ]
         ]
+    }
+
+    private func exactDiagnosticsBlockers() -> [String] {
+        var blockers: [String] = []
+        func add(_ value: String) {
+            let normalized = Self.blockerId(value)
+            guard !normalized.isEmpty, !blockers.contains(normalized) else { return }
+            blockers.append(normalized)
+        }
+        if !isOnline { add("bridge_offline") }
+        if hasBridgeApiMismatch { add("bridge_api_mismatch") }
+        if hasLifecycleBuildMismatch { add("app_bridge_build_mismatch") }
+        if isDryRun { add("bridge_dry_run") }
+        if !hasPaperLock { add("paper_registration_missing") }
+        if !visualBindingValid { add("binding_untrusted") }
+        if isMachineAlarm { add("machine_alarm") }
+        if isMachineBusy || isRunning { add("machine_busy") }
+        add(motionGateMessage)
+        add(drawPreflightMessage)
+        if !visualBindingDetail.isEmpty { add(visualBindingDetail) }
+        if paperTransformStatus.contains("ERR") { add(paperTransformStatus) }
+        return blockers
+    }
+
+    private func latestVisibleDiagnosticsError() -> String {
+        for value in [statusText, machineStatus, drawVerifyDetail, visualBindingDetail] {
+            let lower = value.lowercased()
+            if lower.contains("error") || lower.contains("failed") || lower.contains("blocked") || lower.contains("offline") {
+                return value
+            }
+        }
+        return ""
+    }
+
+    private static func blockerId(_ value: String) -> String {
+        let allowed = value.lowercased().map { character -> Character in
+            if character.isLetter || character.isNumber { return character }
+            return "_"
+        }
+        var normalized = String(allowed)
+        while normalized.contains("__") {
+            normalized = normalized.replacingOccurrences(of: "__", with: "_")
+        }
+        return normalized.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
     }
 
     private var sanitizedControllerKind: String {

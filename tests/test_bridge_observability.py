@@ -71,6 +71,8 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
     assert snapshot["app_diagnostics"]["latest_event"]["event_type"] == (
         "bridge.health.completed"
     )
+    assert snapshot["app_diagnostics"]["latest_event"]["trace_id"] == "bridge.health.completed"
+    assert snapshot["state_summary"]["app_build_id"] == "app-build-123"
     assert not list((tmp_path / "transcripts").glob("status-*.jsonl"))
 
 
@@ -91,6 +93,7 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
                 "observed_at": "2026-06-20T17:01:00Z",
                 "app_build_id": "app-build-456",
                 "bridge_url": "http://127.0.0.1:8765",
+                "trace_id": "trace-stop",
                 "status": "reported",
                 "payload": {
                     "lifecycle_label": "Preview Bridge",
@@ -106,12 +109,14 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
                 "event_type": "machine.stop.blocked",
                 "observed_at": "2026-06-20T17:01:01Z",
                 "app_build_id": "app-build-456",
+                "trace_id": "trace-stop",
                 "status": "blocked",
+                "reason": "Motion blocked: dry-run bridge",
                 "payload": {"reason": "Motion blocked: dry-run bridge"},
             },
         )
         snapshot_status, snapshot = client.get("/codex/snapshot")
-        events_status, events = client.get("/events")
+        events_status, events = client.get("/codex/events")
 
     assert state_status == 200
     assert state_response["command_control"] is False
@@ -124,13 +129,14 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
         "Preview Bridge"
     )
     assert snapshot["app_diagnostics"]["latest_event"]["event_type"] == "machine.stop.blocked"
+    assert snapshot["app_diagnostics"]["latest_event"]["trace_id"] == "trace-stop"
+    assert "motion_blocked_dry_run_bridge" in snapshot["exact_blockers"]
     assert app_state_path.exists()
     assert app_event_log_path.exists()
     assert events_status == 200
-    assert any(
-        event["type"] == "app.diagnostics_ingested"
-        for event in events["events"]
-    )
+    assert events["canonical"] is True
+    assert any(event["event_type"] == "app.diagnostics_ingested" for event in events["events"])
+    assert any(event["trace_id"] == "trace-stop" for event in events["events"])
 
 
 class _BridgeClient:

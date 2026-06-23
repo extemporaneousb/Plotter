@@ -213,6 +213,9 @@ struct BridgeShapeExecutionRequest: Encodable {
     let centerYMm: Double
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeShapeExecutionResponse: Decodable {
@@ -312,6 +315,9 @@ struct BridgeDrawProgramRequest: Encodable {
     let maxSegmentMm: Double
     let maxPolylineCount: Int
     let requestId: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeLuminanceRasterRequest: Encodable {
@@ -360,6 +366,9 @@ struct BridgeFaceRasterDrawRequest: Encodable {
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeImageShapePreviewRequest: Encodable {
@@ -369,6 +378,9 @@ struct BridgeImageShapePreviewRequest: Encodable {
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgePortraitContourPreviewRequest: Encodable {
@@ -378,6 +390,9 @@ struct BridgePortraitContourPreviewRequest: Encodable {
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeDrawProgramSummary: Decodable {
@@ -515,6 +530,9 @@ struct BridgeCapabilityTestRequest: Encodable {
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
     let expectedPlanHash: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeCapabilityTestResponse: Decodable {
@@ -546,6 +564,10 @@ struct PaperRegistrationRequest: Encodable {
     let paperWidthMm: Double
     let paperHeightMm: Double
     let corners: [PaperRegistrationCornerRequest]
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct PaperRegistrationResponse: Decodable {
@@ -582,6 +604,10 @@ struct BindingMarkPreviewRequest: Encodable {
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BindingMarkPreviewResponse: Decodable {
@@ -649,6 +675,10 @@ struct MachineJogRequest: Encodable {
     let axis: String
     let distanceMm: Double
     let feedMmMin: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineRelativeMoveRequest: Encodable {
@@ -656,39 +686,79 @@ struct MachineRelativeMoveRequest: Encodable {
     let yMm: Double
     let feedMmMin: Double
     let ensurePenUp: Bool
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineRelativeMarkRequest: Encodable {
     let markSizeMm: Double
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineReconnectRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineHomeRequest: Encodable {
     let centerAfter: Bool
     let centerFeedMmMin: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineCenterRequest: Encodable {
     let feedMmMin: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachinePenRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineDotMarkRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineStopRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineResumeRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineUnlockRequest: Encodable {
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct MachineArmRequest: Encodable {
@@ -698,6 +768,10 @@ struct MachineArmRequest: Encodable {
     let armPen: Bool
     let armHoming: Bool
     let armUnlock: Bool
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct AxisModelTrustSampleRequest: Codable {
@@ -716,6 +790,10 @@ struct AxisModelTrustRequest: Encodable {
     let minObservedDistanceMm: Double
     let commandDistanceMm: Double
     let samples: [AxisModelTrustSampleRequest]
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeVisualCapObservationRequest: Encodable {
@@ -728,6 +806,10 @@ struct BridgeVisualCapObservationRequest: Encodable {
     let cameraName: String?
     let safeZoneInsetXMm: Double
     let safeZoneInsetYMm: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeVisualProbeCapSnapshotRequest: Encodable {
@@ -760,6 +842,9 @@ struct BridgeVisualProbeSampleRequest: Encodable {
     let blockers: [String]
     let rejectionReason: String?
     let controllerTranscript: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeVisualReadinessResponse: Decodable {
@@ -780,10 +865,17 @@ struct BridgeVisualBindingObservationRequest: Encodable {
     let cameraId: String?
     let cameraName: String?
     let confidence: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeVisualBindingSolveRequest: Encodable {
     let requestId: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
 }
 
 struct BridgeVisualPositionBindingResponse: Decodable {

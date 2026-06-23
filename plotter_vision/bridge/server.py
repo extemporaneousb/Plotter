@@ -153,6 +153,58 @@ def _coerce_positive_int(value: Any) -> int | None:
     return parsed if parsed >= 0 else None
 
 
+def _clean_event_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _blocker_id(value: str) -> str:
+    normalized = "".join(
+        character.lower() if character.isalnum() else "_"
+        for character in value.strip()
+    )
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return normalized.strip("_") or "unknown_blocker"
+
+
+def _first_payload_string(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _event_blockers_from_payload(payload: dict[str, Any]) -> list[str]:
+    blockers = payload.get("blockers")
+    if isinstance(blockers, list):
+        return [str(blocker) for blocker in blockers if str(blocker).strip()]
+    reason = _first_payload_string(payload, "blocker", "blocker_id")
+    return [reason] if reason else []
+
+
+def _event_sort_key(event: AgentEvent) -> tuple[str, float, int, str]:
+    return (
+        event.trace_id or "",
+        float(event.t_monotonic or 0.0),
+        int(event.sequence or 0),
+        event.timestamp,
+    )
+
+
+def _trace_id_from_parts(source: str, *parts: str | None) -> str:
+    for part in parts:
+        text = _clean_optional_string(part)
+        if text:
+            return text
+    return f"{source}-{uuid.uuid4().hex[:12]}"
+
+
 class BridgeRuntimeConfig(BaseModel):
     host: str = "127.0.0.1"
     http_port: int = 8765
@@ -174,14 +226,32 @@ class BridgeRuntimeConfig(BaseModel):
     workspace_y_max: float | None = None
 
 
-class BridgeEvent(BaseModel):
-    type: str
+class TraceContextFields(BaseModel):
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+
+
+class AgentEvent(BaseModel):
     schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    source: str = "bridge"
     sequence: int
+    timestamp: str = Field(default_factory=_utc_now_iso)
     t_monotonic: float = Field(default_factory=time.monotonic)
+    session_id: str | None = None
+    trace_id: str
+    span_id: str
+    parent_span_id: str | None = None
     command_id: str | None = None
+    request_id: str | None = None
+    event_type: str
     status: str
+    reason: str | None = None
+    blockers: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+BridgeEvent = AgentEvent
 
 
 class BridgeHealthResponse(BaseModel):
@@ -208,36 +278,56 @@ class BridgeHealthResponse(BaseModel):
     max_jog_mm: float | None = None
 
 
-class AppDiagnosticStateRequest(BaseModel):
+class AppDiagnosticStateRequest(TraceContextFields):
     source: str = "macos_app"
     observed_at: str | None = None
     app_build_id: str | None = None
     bridge_url: str | None = None
+    session_id: str | None = None
+    command_id: str | None = None
+    request_id: str | None = None
+    reason: str | None = None
+    blockers: list[str] = Field(default_factory=list)
     status: str = "reported"
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class AppDiagnosticEventRequest(BaseModel):
+class AppDiagnosticEventRequest(TraceContextFields):
     source: str = "macos_app"
     event_type: str
     observed_at: str | None = None
     app_build_id: str | None = None
     bridge_url: str | None = None
+    session_id: str | None = None
+    command_id: str | None = None
+    request_id: str | None = None
+    reason: str | None = None
+    blockers: list[str] = Field(default_factory=list)
     status: str = "reported"
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class AppDiagnosticRecord(BaseModel):
+class AppDiagnosticRecord(TraceContextFields):
     schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    source: str = "macos_app"
     sequence: int
     kind: Literal["state", "event"]
+    timestamp: str
+    t_monotonic: float = Field(default_factory=time.monotonic)
+    session_id: str | None = None
+    trace_id: str
+    span_id: str
+    parent_span_id: str | None = None
+    command_id: str | None = None
+    request_id: str | None = None
     event_type: str
-    source: str
     received_at: str
     observed_at: str | None = None
     app_build_id: str | None = None
     bridge_url: str | None = None
     status: str
+    reason: str | None = None
+    blockers: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -257,6 +347,49 @@ class AppDiagnosticsSnapshot(BaseModel):
     latest_state: AppDiagnosticRecord | None = None
     latest_event: AppDiagnosticRecord | None = None
     recent_events: list[AppDiagnosticRecord] = Field(default_factory=list)
+
+
+class CodexEventsResponse(BaseModel):
+    schema_version: int = Field(default=1, serialization_alias="schema", validation_alias="schema")
+    generated_at: str
+    read_only: bool = True
+    canonical: bool = True
+    events: list[AgentEvent] = Field(default_factory=list)
+    event_log: str
+    app_event_log: str
+
+
+class CodexTraceSummary(BaseModel):
+    trace_id: str
+    sources: list[str] = Field(default_factory=list)
+    event_count: int = 0
+    latest_event_type: str = ""
+    latest_status: str = ""
+    command_ids: list[str] = Field(default_factory=list)
+    transcript_paths: list[str] = Field(default_factory=list)
+
+
+class CodexDebugBundleHint(BaseModel):
+    command: str
+    default_directory: str
+    includes: list[str] = Field(default_factory=list)
+
+
+class CodexStateSummary(BaseModel):
+    app_build_id: str = ""
+    bridge_build_id: str = ""
+    bridge_online: bool = True
+    bridge_lifecycle: str = ""
+    machine_state: str = ""
+    machine_alarm: bool = False
+    machine_busy: bool = False
+    paper_registered: bool = False
+    paper_registration_id: str = ""
+    binding_trusted: bool = False
+    binding_status: str = "missing"
+    active_workflow: str = ""
+    latest_visible_error: str | None = None
+    exact_blockers: list[str] = Field(default_factory=list)
 
 
 class ShapeExecutionResponse(BaseModel):
@@ -282,10 +415,11 @@ class PaperRegistrationCornerRequest(BaseModel):
     camera_name: str | None = None
 
 
-class PaperRegistrationRequest(BaseModel):
+class PaperRegistrationRequest(TraceContextFields):
     paper_width_mm: float | None = None
     paper_height_mm: float | None = None
     corners: list[PaperRegistrationCornerRequest] = Field(default_factory=list)
+    request_id: str | None = None
 
 
 class PaperRegistrationResponse(BaseModel):
@@ -296,7 +430,7 @@ class PaperRegistrationResponse(BaseModel):
     error: str | None = None
 
 
-class VisualCapObservationRequest(BaseModel):
+class VisualCapObservationRequest(TraceContextFields):
     observed_norm: CameraPointNorm
     observed_paper_norm: PaperPointNorm | None = None
     observed_logical_mm: LogicalPointMM | None = None
@@ -308,6 +442,7 @@ class VisualCapObservationRequest(BaseModel):
     camera_name: str | None = None
     safe_zone_inset_x_mm: float = 10.0
     safe_zone_inset_y_mm: float = 10.0
+    request_id: str | None = None
 
 
 class VisualReadinessResponse(BaseModel):
@@ -318,7 +453,7 @@ class VisualReadinessResponse(BaseModel):
     error: str | None = None
 
 
-class VisualBindingObservationRequest(BaseModel):
+class VisualBindingObservationRequest(TraceContextFields):
     command_id: str
     point_id: str | None = None
     kind: Literal["ink", "pen_tip"] = "ink"
@@ -330,7 +465,7 @@ class VisualBindingObservationRequest(BaseModel):
     confidence: float = 1.0
 
 
-class VisualBindingSolveRequest(BaseModel):
+class VisualBindingSolveRequest(TraceContextFields):
     request_id: str | None = None
 
 
@@ -343,7 +478,7 @@ class VisualPositionBindingResponse(BaseModel):
     error: str | None = None
 
 
-class VisualProbeSampleObservationRequest(BaseModel):
+class VisualProbeSampleObservationRequest(TraceContextFields):
     run_id: str | None = None
     sample_id: str | None = None
     observed_at: str | None = None
@@ -381,7 +516,7 @@ class VisualProbeSampleObservationResponse(BaseModel):
     error: str | None = None
 
 
-class BindingMarkPreviewRequest(BaseModel):
+class BindingMarkPreviewRequest(TraceContextFields):
     point_set: BindingMarkPointSet = "five"
     margin_mm: float = 40.0
     mark_size_mm: float = 6.0
@@ -467,8 +602,14 @@ class CodexSnapshotResponse(BaseModel):
     health: BridgeHealthResponse
     machine: MachineStatusResponse
     paper: PaperRegistrationResponse
-    recent_events: list[BridgeEvent] = Field(default_factory=list)
+    recent_events: list[AgentEvent] = Field(default_factory=list)
     app_diagnostics: AppDiagnosticsSnapshot
+    state_summary: CodexStateSummary
+    active_workflow: str = ""
+    latest_visible_error: str | None = None
+    exact_blockers: list[str] = Field(default_factory=list)
+    recent_traces: list[CodexTraceSummary] = Field(default_factory=list)
+    debug_bundle: CodexDebugBundleHint
 
 
 class PolygonDrawResponse(BaseModel):
@@ -485,7 +626,7 @@ class PolygonDrawResponse(BaseModel):
     error: str | None = None
 
 
-class FaceRasterDrawRequest(BaseModel):
+class FaceRasterDrawRequest(TraceContextFields):
     raster: LuminanceRaster
     frame: DrawingFrameMM | None = None
     options: RasterPolygonOptions = Field(default_factory=RasterPolygonOptions)
@@ -500,7 +641,7 @@ class FaceRasterDrawResponse(PolygonDrawResponse):
     raster_summary: RasterPolygonSummary | None = None
 
 
-class ImageShapePreviewRequest(BaseModel):
+class ImageShapePreviewRequest(TraceContextFields):
     raster: LuminanceRaster
     frame: DrawingFrameMM | None = None
     options: RasterContourOptions = Field(default_factory=RasterContourOptions)
@@ -526,7 +667,7 @@ class ImageShapePreviewResponse(BaseModel):
     error: str | None = None
 
 
-class PortraitContourPreviewRequest(BaseModel):
+class PortraitContourPreviewRequest(TraceContextFields):
     raster: LuminanceRaster
     frame: DrawingFrameMM | None = None
     options: PortraitContourOptions = Field(default_factory=PortraitContourOptions)
@@ -565,7 +706,7 @@ class PortraitContourPreviewResponse(BaseModel):
     error: str | None = None
 
 
-class CapabilityTestRequest(BaseModel):
+class CapabilityTestRequest(TraceContextFields):
     kind: CapabilityTestKind = "center_crosshair"
     frame: DrawingFrameMM | None = None
     include_homing: bool = False
@@ -584,7 +725,7 @@ class CapabilityTestResponse(PolygonDrawResponse):
     plan_hash: str = ""
 
 
-class MachineActionRequest(BaseModel):
+class MachineActionRequest(TraceContextFields):
     request_id: str | None = None
 
 
@@ -685,30 +826,95 @@ class EventLog:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._sequence = 0
+        self.session_id = f"bridge-{uuid.uuid4().hex[:12]}"
         self._lock = Lock()
         self._recent: deque[BridgeEvent] = deque(maxlen=200)
+        self._last_signature: str | None = None
+        self._last_event: BridgeEvent | None = None
+        self._repeat_count = 0
 
     def emit(
         self,
         event_type: str,
         *,
         status: str,
+        source: str = "bridge",
         command_id: str | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        parent_span_id: str | None = None,
+        reason: str | None = None,
+        blockers: list[str] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> BridgeEvent:
         with self._lock:
+            clean_payload = _clean_event_payload(payload)
+            request_id = request_id or _clean_optional_string(clean_payload.get("request_id"))
+            command_id = command_id or _clean_optional_string(clean_payload.get("command_id"))
+            trace_id = (
+                trace_id
+                or _clean_optional_string(clean_payload.get("trace_id"))
+                or request_id
+                or command_id
+                or f"{source}-{event_type}"
+            )
+            span_id = span_id or _clean_optional_string(clean_payload.get("span_id"))
+            span_id = span_id or f"{event_type}-{self._sequence + 1}"
+            parent_span_id = parent_span_id or _clean_optional_string(
+                clean_payload.get("parent_span_id")
+            )
+            reason = reason or _first_payload_string(clean_payload, "reason", "error")
+            blockers = blockers or _event_blockers_from_payload(clean_payload)
+            signature_payload = {
+                key: value
+                for key, value in clean_payload.items()
+                if key not in {"timestamp", "observed_at", "received_at", "repeat_count"}
+            }
+            signature = json.dumps(
+                {
+                    "source": source,
+                    "event_type": event_type,
+                    "status": status,
+                    "command_id": command_id,
+                    "request_id": request_id,
+                    "trace_id": trace_id,
+                    "reason": reason,
+                    "blockers": blockers,
+                    "payload": signature_payload,
+                },
+                sort_keys=True,
+                default=str,
+            )
+            if signature == self._last_signature and self._last_event is not None:
+                self._repeat_count += 1
+                self._last_event.payload["repeat_count"] = self._repeat_count
+                self._last_event.payload["repeat_last_seen_at"] = _utc_now_iso()
+                return self._last_event
+
             self._sequence += 1
             event = BridgeEvent(
-                type=event_type,
+                source=source,
                 sequence=self._sequence,
+                session_id=self.session_id,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
                 command_id=command_id,
+                request_id=request_id,
+                event_type=event_type,
                 status=status,
-                payload=payload or {},
+                reason=reason,
+                blockers=blockers,
+                payload=clean_payload,
             )
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as file:
                 file.write(event.model_dump_json(by_alias=True) + "\n")
             self._recent.append(event)
+            self._last_signature = signature
+            self._last_event = event
+            self._repeat_count = 1
             return event
 
     def recent(self) -> list[BridgeEvent]:
@@ -768,12 +974,25 @@ class PlotterBridge:
             observed_at=request.observed_at,
             app_build_id=request.app_build_id,
             bridge_url=request.bridge_url,
+            session_id=request.session_id,
+            trace_id=request.trace_id,
+            span_id=request.span_id,
+            parent_span_id=request.parent_span_id,
+            command_id=request.command_id,
+            request_id=request.request_id,
+            reason=request.reason,
+            blockers=request.blockers,
             status=request.status,
             payload=request.payload,
         )
         self.event_log.emit(
             "app.diagnostics_ingested",
             status="accepted",
+            source="bridge",
+            trace_id=record.trace_id,
+            parent_span_id=record.span_id,
+            request_id=record.request_id,
+            command_id=record.command_id,
             payload={
                 "kind": record.kind,
                 "event_type": record.event_type,
@@ -797,12 +1016,25 @@ class PlotterBridge:
             observed_at=request.observed_at,
             app_build_id=request.app_build_id,
             bridge_url=request.bridge_url,
+            session_id=request.session_id,
+            trace_id=request.trace_id,
+            span_id=request.span_id,
+            parent_span_id=request.parent_span_id,
+            command_id=request.command_id,
+            request_id=request.request_id,
+            reason=request.reason,
+            blockers=request.blockers,
             status=request.status,
             payload=request.payload,
         )
         self.event_log.emit(
             "app.diagnostics_ingested",
             status="accepted",
+            source="bridge",
+            trace_id=record.trace_id,
+            parent_span_id=record.span_id,
+            request_id=record.request_id,
+            command_id=record.command_id,
             payload={
                 "kind": record.kind,
                 "event_type": record.event_type,
@@ -839,13 +1071,60 @@ class PlotterBridge:
         )
 
     def codex_snapshot(self) -> CodexSnapshotResponse:
+        health = self.health()
+        machine = self._machine_status_snapshot()
+        paper = self.paper_registration_status()
+        app_diagnostics = self.app_diagnostics_snapshot()
+        events = self.codex_events().events
+        state_summary = self._codex_state_summary(
+            health=health,
+            machine=machine,
+            paper=paper,
+            app_diagnostics=app_diagnostics,
+        )
         return CodexSnapshotResponse(
             generated_at=_utc_now_iso(),
-            health=self.health(),
-            machine=self._machine_status_snapshot(),
-            paper=self.paper_registration_status(),
-            recent_events=self.recent_events(),
-            app_diagnostics=self.app_diagnostics_snapshot(),
+            health=health,
+            machine=machine,
+            paper=paper,
+            recent_events=events[-100:],
+            app_diagnostics=app_diagnostics,
+            state_summary=state_summary,
+            active_workflow=state_summary.active_workflow,
+            latest_visible_error=state_summary.latest_visible_error,
+            exact_blockers=state_summary.exact_blockers,
+            recent_traces=self._recent_trace_summaries(events),
+            debug_bundle=CodexDebugBundleHint(
+                command="plotterctl doctor --json",
+                default_directory="artifacts/debug_snapshots",
+                includes=[
+                    "codex_snapshot",
+                    "codex_events",
+                    "app_state",
+                    "app_events",
+                    "bridge_events",
+                    "bridge_transcripts",
+                    "paper_status",
+                    "binding_status",
+                    "git",
+                    "process",
+                ],
+            ),
+        )
+
+    def codex_events(self) -> CodexEventsResponse:
+        app_snapshot = self.app_diagnostics_snapshot()
+        bridge_events = self.recent_events()
+        app_events = [
+            self._agent_event_from_app_record(record)
+            for record in app_snapshot.recent_events
+        ]
+        merged = sorted([*bridge_events, *app_events], key=_event_sort_key)
+        return CodexEventsResponse(
+            generated_at=_utc_now_iso(),
+            events=merged[-200:],
+            event_log=str(self.config.event_log_path),
+            app_event_log=str(self.config.app_event_log_path),
         )
 
     def machine_status(self) -> MachineStatusResponse:
@@ -897,7 +1176,7 @@ class PlotterBridge:
             self._machine_lock.release()
 
     def reconnect_machine(self, request: MachineReconnectRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"reconnect-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"reconnect-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         action = "reconnect"
         planned_commands = ["<reconnect>"]
@@ -983,7 +1262,7 @@ class PlotterBridge:
             self._machine_lock.release()
 
     def arm_machine(self, request: MachineArmRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"arm-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"arm-{uuid.uuid4().hex[:12]}"
         action = "arm" if request.live else "disarm"
         planned_commands = ["<runtime-arm>" if request.live else "<runtime-disarm>"]
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
@@ -1104,7 +1383,7 @@ class PlotterBridge:
             self._machine_lock.release()
 
     def draw_shape(self, request: ShapeExecutionRequest) -> ShapeExecutionResponse:
-        command_id = request.request_id or f"cmd-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"cmd-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
 
         try:
@@ -1199,7 +1478,7 @@ class PlotterBridge:
             )
 
     def preview_shape(self, request: ShapeExecutionRequest) -> ShapeExecutionResponse:
-        command_id = request.request_id or f"preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"preview-{uuid.uuid4().hex[:12]}"
 
         try:
             machine = self._load_machine_config()
@@ -1256,7 +1535,7 @@ class PlotterBridge:
             )
 
     def preview_draw_program(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
-        command_id = request.request_id or f"draw-preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"draw-preview-{uuid.uuid4().hex[:12]}"
 
         try:
             machine = self._load_machine_config()
@@ -1315,7 +1594,7 @@ class PlotterBridge:
             )
 
     def preview_image_contours(self, request: ImageShapePreviewRequest) -> ImageShapePreviewResponse:
-        command_id = request.request_id or f"image-preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"image-preview-{uuid.uuid4().hex[:12]}"
         try:
             program, raster_summary = build_paper_contour_program_from_luminance_raster(
                 raster=request.raster,
@@ -1393,7 +1672,7 @@ class PlotterBridge:
             )
 
     def draw_program(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
-        command_id = request.request_id or f"draw-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"draw-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
 
         try:
@@ -1477,7 +1756,7 @@ class PlotterBridge:
         self,
         request: PortraitContourPreviewRequest,
     ) -> PortraitContourPreviewResponse:
-        command_id = request.request_id or f"portrait-preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"portrait-preview-{uuid.uuid4().hex[:12]}"
         try:
             program, portrait_summary = build_portrait_contour_program_from_luminance_raster(
                 raster=request.raster,
@@ -1569,7 +1848,7 @@ class PlotterBridge:
             )
 
     def draw_face_raster(self, request: FaceRasterDrawRequest) -> FaceRasterDrawResponse:
-        command_id = request.request_id or f"face-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"face-{uuid.uuid4().hex[:12]}"
         try:
             program, raster_summary = build_paper_program_from_luminance_raster(
                 raster=request.raster,
@@ -1656,7 +1935,7 @@ class PlotterBridge:
         self,
         request: CapabilityTestRequest,
     ) -> CapabilityTestResponse:
-        command_id = request.request_id or f"cap-preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"cap-preview-{uuid.uuid4().hex[:12]}"
         try:
             definition = build_capability_test_definition(request.kind)
             machine = self._load_machine_config()
@@ -1730,7 +2009,7 @@ class PlotterBridge:
             )
 
     def run_capability_test(self, request: CapabilityTestRequest) -> CapabilityTestResponse:
-        command_id = request.request_id or f"cap-run-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"cap-run-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             definition = build_capability_test_definition(request.kind)
@@ -1922,7 +2201,7 @@ class PlotterBridge:
                 raise ValueError(
                     "Probe sample paper_registration_id does not match the current paper registration."
                 )
-            run_id = request.run_id or f"probe-run-{uuid.uuid4().hex[:12]}"
+            run_id = request.run_id or request.trace_id or f"probe-run-{uuid.uuid4().hex[:12]}"
             sample_kwargs: dict[str, Any] = {}
             if request.sample_id is not None:
                 sample_kwargs["sample_id"] = request.sample_id
@@ -2187,7 +2466,7 @@ class PlotterBridge:
         self,
         request: VisualBindingSolveRequest,
     ) -> VisualPositionBindingResponse:
-        command_id = request.request_id or f"binding-solve-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"binding-solve-{uuid.uuid4().hex[:12]}"
         try:
             registration = self._load_latest_paper_registration()
             binding = self._load_latest_visual_position_binding()
@@ -2228,7 +2507,7 @@ class PlotterBridge:
         self,
         request: BindingMarkPreviewRequest,
     ) -> BindingMarkPreviewResponse:
-        command_id = request.request_id or f"binding-preview-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"binding-preview-{uuid.uuid4().hex[:12]}"
         try:
             mark_plan = self._build_binding_mark_preview(
                 request=request,
@@ -2356,7 +2635,7 @@ class PlotterBridge:
         )
 
     def jog_machine(self, request: MachineJogRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"jog-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"jog-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2392,7 +2671,7 @@ class PlotterBridge:
             )
 
     def relative_move_machine(self, request: MachineRelativeMoveRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"rel-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"rel-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2447,7 +2726,7 @@ class PlotterBridge:
             )
 
     def relative_mark_machine(self, request: MachineRelativeMarkRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"rel-mark-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"rel-mark-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2476,7 +2755,7 @@ class PlotterBridge:
             )
 
     def trust_axis_model(self, request: AxisModelTrustRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"axis-trust-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"axis-trust-{uuid.uuid4().hex[:12]}"
         try:
             machine = self._load_machine_config()
             self._validate_axis_model_trust_request(request=request, machine=machine)
@@ -2530,7 +2809,7 @@ class PlotterBridge:
             )
 
     def home_machine(self, request: MachineHomeRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"home-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"home-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2570,7 +2849,7 @@ class PlotterBridge:
             )
 
     def center_machine(self, request: MachineCenterRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"center-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"center-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2601,7 +2880,7 @@ class PlotterBridge:
         return self._pen_machine(position="down", request=request)
 
     def dot_mark_machine(self, request: MachineDotMarkRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"dot-mark-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"dot-mark-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -2650,7 +2929,7 @@ class PlotterBridge:
             )
 
     def stop_machine(self, request: MachineStopRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"stop-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"stop-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         action = "stop"
         planned_commands = ["!"]
@@ -2785,7 +3064,7 @@ class PlotterBridge:
             )
 
     def resume_machine(self, request: MachineResumeRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"resume-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"resume-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         action = "resume"
         planned_commands = ["~"]
@@ -2881,7 +3160,7 @@ class PlotterBridge:
             )
 
     def unlock_machine(self, request: MachineUnlockRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"unlock-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"unlock-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         action = "unlock"
         planned_commands = ["$X"]
@@ -3039,14 +3318,48 @@ class PlotterBridge:
         observed_at: str | None,
         app_build_id: str | None,
         bridge_url: str | None,
+        session_id: str | None,
+        trace_id: str | None,
+        span_id: str | None,
+        parent_span_id: str | None,
+        command_id: str | None,
+        request_id: str | None,
+        reason: str | None,
+        blockers: list[str],
         status: str,
         payload: dict[str, Any],
     ) -> AppDiagnosticRecord:
         with self._app_diagnostics_lock:
             self._app_event_sequence += 1
+            clean_payload = _clean_event_payload(payload)
+            timestamp = observed_at or _utc_now_iso()
+            request_id = request_id or _clean_optional_string(clean_payload.get("request_id"))
+            command_id = command_id or _clean_optional_string(clean_payload.get("command_id"))
+            trace_id = _trace_id_from_parts(
+                source,
+                trace_id,
+                _clean_optional_string(clean_payload.get("trace_id")),
+                request_id,
+                command_id,
+            )
+            span_id = span_id or _clean_optional_string(clean_payload.get("span_id"))
+            span_id = span_id or f"{event_type}-{self._app_event_sequence}"
+            parent_span_id = parent_span_id or _clean_optional_string(
+                clean_payload.get("parent_span_id")
+            )
+            reason = reason or _first_payload_string(clean_payload, "reason", "error")
+            blockers = blockers or _event_blockers_from_payload(clean_payload)
             record = AppDiagnosticRecord(
                 sequence=self._app_event_sequence,
                 kind=kind,
+                timestamp=timestamp,
+                t_monotonic=time.monotonic(),
+                session_id=session_id,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                command_id=command_id,
+                request_id=request_id,
                 event_type=event_type,
                 source=source,
                 received_at=_utc_now_iso(),
@@ -3054,7 +3367,9 @@ class PlotterBridge:
                 app_build_id=app_build_id,
                 bridge_url=bridge_url,
                 status=status,
-                payload=payload,
+                reason=reason,
+                blockers=blockers,
+                payload=clean_payload,
             )
             self.config.app_event_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self.config.app_event_log_path.open("a", encoding="utf-8") as file:
@@ -3190,14 +3505,41 @@ class PlotterBridge:
         )
         bridge_url = _clean_optional_string(payload.get("bridge_url") or payload.get("bridgeUrl"))
         sequence = _coerce_positive_int(payload.get("sequence")) or fallback_sequence
+        session_id = _clean_optional_string(payload.get("session_id") or payload.get("sessionId"))
+        request_id = _clean_optional_string(payload.get("request_id") or payload.get("requestId"))
+        command_id = _clean_optional_string(payload.get("command_id") or payload.get("commandId"))
+        trace_id = _trace_id_from_parts(
+            source,
+            _clean_optional_string(payload.get("trace_id") or payload.get("traceId")),
+            request_id,
+            command_id,
+            event_type,
+        )
+        span_id = _clean_optional_string(payload.get("span_id") or payload.get("spanId"))
+        span_id = span_id or f"{event_type}-{sequence}"
+        parent_span_id = _clean_optional_string(
+            payload.get("parent_span_id") or payload.get("parentSpanId")
+        )
+        reason = _clean_optional_string(payload.get("reason"))
 
         record_payload = payload.get("payload")
         if not isinstance(record_payload, dict):
             record_payload = payload
+        blockers = payload.get("blockers")
+        if not isinstance(blockers, list):
+            blockers = _event_blockers_from_payload(record_payload)
 
         return AppDiagnosticRecord(
             sequence=sequence,
             kind=kind,
+            timestamp=observed_at or received_at,
+            t_monotonic=float(payload.get("t_monotonic") or payload.get("tMonotonic") or 0.0),
+            session_id=session_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            command_id=command_id,
+            request_id=request_id,
             event_type=event_type,
             source=source,
             received_at=received_at,
@@ -3205,6 +3547,8 @@ class PlotterBridge:
             app_build_id=app_build_id,
             bridge_url=bridge_url,
             status=status,
+            reason=reason,
+            blockers=[str(blocker) for blocker in blockers],
             payload=record_payload,
         )
 
@@ -3222,6 +3566,176 @@ class PlotterBridge:
             seen.add(key)
             merged.append(record)
         return merged[-100:]
+
+    def _agent_event_from_app_record(self, record: AppDiagnosticRecord) -> AgentEvent:
+        return AgentEvent(
+            source=record.source,
+            sequence=record.sequence,
+            timestamp=record.timestamp,
+            t_monotonic=record.t_monotonic,
+            session_id=record.session_id,
+            trace_id=record.trace_id,
+            span_id=record.span_id,
+            parent_span_id=record.parent_span_id,
+            command_id=record.command_id,
+            request_id=record.request_id,
+            event_type=record.event_type,
+            status=record.status,
+            reason=record.reason,
+            blockers=record.blockers,
+            payload={
+                **record.payload,
+                "kind": record.kind,
+                "app_build_id": record.app_build_id,
+                "bridge_url": record.bridge_url,
+                "observed_at": record.observed_at,
+                "received_at": record.received_at,
+            },
+        )
+
+    def _codex_state_summary(
+        self,
+        *,
+        health: BridgeHealthResponse,
+        machine: MachineStatusResponse,
+        paper: PaperRegistrationResponse,
+        app_diagnostics: AppDiagnosticsSnapshot,
+    ) -> CodexStateSummary:
+        app_payload = (
+            app_diagnostics.latest_state.payload
+            if app_diagnostics.latest_state is not None
+            else {}
+        )
+        bridge_payload = app_payload.get("bridge") if isinstance(app_payload.get("bridge"), dict) else {}
+        machine_payload = (
+            app_payload.get("machine") if isinstance(app_payload.get("machine"), dict) else {}
+        )
+        gates_payload = app_payload.get("gates") if isinstance(app_payload.get("gates"), dict) else {}
+        preview_payload = (
+            app_payload.get("previews") if isinstance(app_payload.get("previews"), dict) else {}
+        )
+        app_section = app_payload.get("app") if isinstance(app_payload.get("app"), dict) else {}
+        binding_status = "missing"
+        binding_trusted = False
+        binding_blockers: list[str] = []
+        try:
+            binding = self._load_latest_visual_position_binding()
+            binding_status = binding.validation_status
+            binding_trusted = binding.validation_status == "validated"
+            binding_blockers = list(binding.blockers)
+        except Exception:
+            binding_blockers = ["binding_missing"]
+
+        paper_registered = paper.registration is not None and paper.status != "missing"
+        paper_registration_id = ""
+        if isinstance(paper.registration, dict):
+            paper_registration_id = str(paper.registration.get("registration_id") or "")
+
+        blockers: list[str] = []
+        if not health.status:
+            blockers.append("bridge_unhealthy")
+        if machine.is_alarm:
+            blockers.append("machine_alarm")
+        if machine.is_busy:
+            blockers.append("machine_busy")
+        if not paper_registered:
+            blockers.append("paper_registration_missing")
+        if not binding_trusted:
+            blockers.append("binding_untrusted")
+        for blocker in machine.visual_readiness_blockers:
+            blockers.append(_blocker_id(blocker))
+        for blocker in binding_blockers:
+            blockers.append(_blocker_id(blocker))
+        for value in [
+            gates_payload.get("motion_gate"),
+            gates_payload.get("draw_preflight"),
+            gates_payload.get("connection_help"),
+        ]:
+            text = _clean_optional_string(value)
+            if text and "armed" not in text.lower():
+                blockers.append(_blocker_id(text))
+        latest_error = self._latest_visible_error(app_diagnostics)
+        if latest_error:
+            blockers.append(_blocker_id(latest_error))
+        exact_blockers = list(dict.fromkeys(blockers))
+
+        active_workflow = (
+            _clean_optional_string(machine.active_action)
+            or _clean_optional_string(machine_payload.get("active_action"))
+            or _clean_optional_string(app_payload.get("reason"))
+            or _clean_optional_string(preview_payload.get("path_animation"))
+            or ""
+        )
+
+        return CodexStateSummary(
+            app_build_id=str(app_section.get("build_id") or app_diagnostics.latest_state.app_build_id or "")
+            if app_diagnostics.latest_state is not None
+            else "",
+            bridge_build_id=health.bridge_build_id,
+            bridge_online=bool(bridge_payload.get("online", True)),
+            bridge_lifecycle=health.lifecycle_label,
+            machine_state=machine.state,
+            machine_alarm=machine.is_alarm,
+            machine_busy=machine.is_busy,
+            paper_registered=paper_registered,
+            paper_registration_id=paper_registration_id,
+            binding_trusted=binding_trusted,
+            binding_status=binding_status,
+            active_workflow=active_workflow,
+            latest_visible_error=latest_error,
+            exact_blockers=exact_blockers,
+        )
+
+    def _latest_visible_error(self, app_diagnostics: AppDiagnosticsSnapshot) -> str | None:
+        for record in reversed(app_diagnostics.recent_events):
+            error = (
+                record.reason
+                or _first_payload_string(record.payload, "error", "visible_error", "status_text", "reason")
+            )
+            if error and (
+                record.status in {"blocked", "failed"}
+                or "error" in record.event_type
+                or "failed" in record.event_type
+            ):
+                return error
+        if app_diagnostics.latest_state is not None:
+            payload = app_diagnostics.latest_state.payload
+            machine = payload.get("machine") if isinstance(payload.get("machine"), dict) else {}
+            return _first_payload_string(machine, "status", "error")
+        return None
+
+    def _recent_trace_summaries(self, events: list[AgentEvent]) -> list[CodexTraceSummary]:
+        by_trace: dict[str, list[AgentEvent]] = {}
+        for event in events:
+            by_trace.setdefault(event.trace_id, []).append(event)
+        summaries: list[CodexTraceSummary] = []
+        for trace_id, trace_events in by_trace.items():
+            latest = sorted(trace_events, key=_event_sort_key)[-1]
+            command_ids = [
+                value
+                for value in dict.fromkeys(event.command_id for event in trace_events)
+                if value is not None
+            ]
+            transcript_paths = [
+                str(value)
+                for value in dict.fromkeys(
+                    event.payload.get("transcript") or event.payload.get("controller_transcript")
+                    for event in trace_events
+                )
+                if value
+            ]
+            summaries.append(
+                CodexTraceSummary(
+                    trace_id=trace_id,
+                    sources=list(dict.fromkeys(event.source for event in trace_events)),
+                    event_count=len(trace_events),
+                    latest_event_type=latest.event_type,
+                    latest_status=latest.status,
+                    command_ids=command_ids,
+                    transcript_paths=transcript_paths,
+                )
+            )
+        return sorted(summaries, key=lambda summary: summary.trace_id)[-20:]
 
     def _preview_overlay_for_simulation(
         self,
@@ -3574,7 +4088,7 @@ class PlotterBridge:
         return commands
 
     def _pen_machine(self, *, position: str, request: MachinePenRequest) -> MachineCommandResponse:
-        command_id = request.request_id or f"pen-{position}-{uuid.uuid4().hex[:12]}"
+        command_id = request.request_id or request.trace_id or f"pen-{position}-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
@@ -5049,6 +5563,8 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 self._write_json(
                     HTTPStatus.OK,
                     {
+                        "canonical": False,
+                        "superseded_by": "/codex/events",
                         "events": [
                             event.model_dump(mode="json", by_alias=True)
                             for event in bridge.recent_events()
@@ -5056,14 +5572,37 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                     },
                 )
                 return
+            if parsed_url.path == "/codex/events":
+                self._write_model(HTTPStatus.OK, bridge.codex_events())
+                return
             if parsed_url.path == "/codex/snapshot":
                 self._write_model(HTTPStatus.OK, bridge.codex_snapshot())
                 return
             if parsed_url.path == "/codex/app/state":
-                self._write_model(HTTPStatus.OK, bridge.app_diagnostics_snapshot())
+                self._write_json(
+                    HTTPStatus.OK,
+                    {
+                        "canonical": False,
+                        "superseded_by": "/codex/snapshot",
+                        "diagnostics": bridge.app_diagnostics_snapshot().model_dump(
+                            mode="json",
+                            by_alias=True,
+                        ),
+                    },
+                )
                 return
             if parsed_url.path == "/codex/app/events":
-                self._write_model(HTTPStatus.OK, bridge.app_diagnostics_snapshot())
+                self._write_json(
+                    HTTPStatus.OK,
+                    {
+                        "canonical": False,
+                        "superseded_by": "/codex/events",
+                        "diagnostics": bridge.app_diagnostics_snapshot().model_dump(
+                            mode="json",
+                            by_alias=True,
+                        ),
+                    },
+                )
                 return
             if parsed_url.path == "/machine/status":
                 self._write_model(HTTPStatus.OK, bridge.machine_status())
