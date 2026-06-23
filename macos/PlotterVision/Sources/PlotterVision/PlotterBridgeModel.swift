@@ -38,6 +38,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var imagePreviewContourCount = 0
     @Published var imagePreviewEligibleForBridgePreview = false
     @Published var faceContourPreviewOverlay: FaceContourPreviewOverlay?
+    @Published var portraitContourSettings = PortraitContourSettings()
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
@@ -1487,8 +1488,10 @@ final class PlotterBridgeModel: ObservableObject {
 
     func previewPortraitContours(
         _ raster: FaceRasterSample,
-        frame: BridgeDrawingFrameRequest
+        frame: BridgeDrawingFrameRequest,
+        settings: PortraitContourSettings? = nil
     ) async -> Bool {
+        let settings = settings ?? portraitContourSettings
         guard !isRunning && !isMachineBusy else { return false }
         guard isOnline else {
             imagePreviewStatus = "IMG OFF"
@@ -1527,18 +1530,18 @@ final class PlotterBridgeModel: ObservableObject {
                     raster: BridgeLuminanceRasterRequest(samples: raster.samples),
                     frame: frame,
                     options: BridgePortraitContourOptionsRequest(
-                        contourLevels: 8,
-                        lowQuantile: 0.18,
-                        highQuantile: 0.92,
-                        autoContrast: true,
-                        illuminationRadius: 5,
-                        illuminationStrength: 0.72,
-                        smoothingRadius: 1,
-                        simplificationEpsilonNorm: 0.004,
-                        minContourLengthNorm: 0.035,
-                        minPointsPerContour: 4,
-                        maxContours: 700,
-                        maxPoints: 8000
+                        contourLevels: settings.contourLevels,
+                        lowQuantile: settings.lowQuantile,
+                        highQuantile: settings.highQuantile,
+                        autoContrast: settings.autoContrast,
+                        illuminationRadius: settings.illuminationRadius,
+                        illuminationStrength: settings.illuminationStrength,
+                        smoothingRadius: settings.smoothingRadius,
+                        simplificationEpsilonNorm: settings.simplificationEpsilonNorm,
+                        minContourLengthNorm: settings.minContourLengthNorm,
+                        minPointsPerContour: settings.minPointsPerContour,
+                        maxContours: settings.maxContours,
+                        maxPoints: settings.maxPoints
                     ),
                     drawFeedMmMin: shapeDrawFeedMmMin,
                     travelFeedMmMin: fastTravelFeedMmMin,
@@ -1555,7 +1558,11 @@ final class PlotterBridgeModel: ObservableObject {
                 from: response.portraitOverlay,
                 sample: raster,
                 commandId: response.commandId
-            ) ?? makeFallbackFaceContourPreviewOverlay(from: raster, commandId: response.commandId)
+            ) ?? makeFallbackFaceContourPreviewOverlay(
+                from: raster,
+                commandId: response.commandId,
+                settings: settings
+            )
             imagePreviewStatus = String(format: "IMG %dC %dS", contours, segments)
             imagePreviewDetail = response.previewOnly ? "PREVIEW ONLY" : "EXECUTION"
             previewStatus = "SIM IMAGE \(response.status.uppercased())"
@@ -1592,6 +1599,49 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func updateLivePortraitContourPreview(
+        from sample: FaceRasterSample,
+        settings: PortraitContourSettings? = nil
+    ) -> Bool {
+        let settings = settings ?? portraitContourSettings
+        guard let overlay = makeFallbackFaceContourPreviewOverlay(
+            from: sample,
+            commandId: "portrait-live-\(sample.frameNumber)",
+            settings: settings
+        ) else {
+            faceContourPreviewOverlay = nil
+            imagePreviewStatus = "IMG LIVE --"
+            imagePreviewDetail = "NO CONTOUR"
+            imagePreviewContourCount = 0
+            return false
+        }
+        faceContourPreviewOverlay = overlay
+        imagePreviewStatus = String(format: "IMG LIVE %dC", overlay.contours.count)
+        imagePreviewDetail = "LIVE CONTOUR"
+        imagePreviewContourCount = overlay.contours.count
+        imagePreviewEligibleForBridgePreview = false
+        return true
+    }
+
+    func restorePortraitCapture(_ item: PortraitCaptureItem) {
+        faceContourPreviewOverlay = item.overlay
+        expectedPathSegments = item.expectedPathSegments
+        imagePreviewStatus = item.status
+        imagePreviewDetail = item.detail
+        imagePreviewContourCount = item.contourCount
+        imagePreviewEligibleForBridgePreview = !item.expectedPathSegments.isEmpty
+        revealExpectedPathImmediately(status: "FULL PREVIEW")
+        diagnosticsEvent(
+            "portrait_capture_restored",
+            [
+                "capture_id": item.id.uuidString,
+                "contours": item.contourCount,
+                "preview_segments": item.expectedPathSegments.count
+            ],
+            snapshot: true
+        )
+    }
+
     private func makeFaceContourPreviewOverlay(
         from overlay: BridgePortraitContourOverlay?,
         sample: FaceRasterSample,
@@ -1619,22 +1669,23 @@ final class PlotterBridgeModel: ObservableObject {
 
     private func makeFallbackFaceContourPreviewOverlay(
         from sample: FaceRasterSample,
-        commandId: String
+        commandId: String,
+        settings: PortraitContourSettings
     ) -> FaceContourPreviewOverlay? {
-        guard let values = normalizedFallbackRasterValues(sample.samples),
+        guard let values = normalizedFallbackRasterValues(sample.samples, settings: settings),
               values.count >= 2,
               values[0].count >= 2 else {
             return nil
         }
 
-        let maxContours = 700
-        let minLengthNorm = 0.035
+        let maxContours = settings.maxContours
+        let minLengthNorm = CGFloat(settings.minContourLengthNorm)
         var contours: [FaceContourPreviewPolyline] = []
 
-        for levelIndex in 0..<8 {
-            let level = Double(levelIndex + 1) / 9.0
+        for levelIndex in 0..<settings.contourLevels {
+            let level = Double(levelIndex + 1) / Double(settings.contourLevels + 1)
             for contour in fallbackContours(values: values, level: level) {
-                guard contour.points.count >= 4,
+                guard contour.points.count >= settings.minPointsPerContour,
                       fallbackPolylineLength(contour.points, closed: contour.closed) >= minLengthNorm else {
                     continue
                 }
@@ -1665,16 +1716,39 @@ final class PlotterBridgeModel: ObservableObject {
         return FaceContourPreviewOverlay(commandId: commandId, faceBounds: sample.faceBounds, contours: contours)
     }
 
-    private func normalizedFallbackRasterValues(_ samples: [[Double]]) -> [[Double]]? {
+    private func normalizedFallbackRasterValues(
+        _ samples: [[Double]],
+        settings: PortraitContourSettings
+    ) -> [[Double]]? {
         let flat = samples.flatMap { row in row.filter(\.isFinite) }
         guard flat.count >= 4 else { return nil }
         let sorted = flat.sorted()
-        let low = percentile(sorted, quantile: 0.18)
-        let high = percentile(sorted, quantile: 0.92)
+        let low = percentile(sorted, quantile: settings.lowQuantile)
+        let high = percentile(sorted, quantile: settings.highQuantile)
         guard high - low > 0.0001 else { return nil }
-        return samples.map { row in
+        let normalized = samples.map { row in
             row.map { value in
                 clampDouble((value - low) / (high - low), min: 0.0, max: 1.0)
+            }
+        }
+        return smoothFallbackRasterValues(normalized, radius: settings.smoothingRadius)
+    }
+
+    private func smoothFallbackRasterValues(_ values: [[Double]], radius: Int) -> [[Double]] {
+        guard radius > 0, !values.isEmpty, !values[0].isEmpty else { return values }
+        let height = values.count
+        let width = values[0].count
+        return values.indices.map { rowIndex in
+            values[rowIndex].indices.map { columnIndex in
+                var total = 0.0
+                var count = 0.0
+                for sourceRow in max(0, rowIndex - radius)...min(height - 1, rowIndex + radius) {
+                    for sourceColumn in max(0, columnIndex - radius)...min(width - 1, columnIndex + radius) {
+                        total += values[sourceRow][sourceColumn]
+                        count += 1.0
+                    }
+                }
+                return total / max(count, 1.0)
             }
         }
     }

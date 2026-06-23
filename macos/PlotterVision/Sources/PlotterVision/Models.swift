@@ -207,6 +207,31 @@ struct FaceContourPreviewOverlay: Equatable {
     let contours: [FaceContourPreviewPolyline]
 }
 
+struct PortraitContourSettings: Equatable {
+    var contourLevels = 8
+    var lowQuantile = 0.18
+    var highQuantile = 0.92
+    var autoContrast = true
+    var illuminationRadius = 5
+    var illuminationStrength = 0.72
+    var smoothingRadius = 1
+    var simplificationEpsilonNorm = 0.004
+    var minContourLengthNorm = 0.035
+    var minPointsPerContour = 4
+    var maxContours = 700
+    var maxPoints = 8000
+}
+
+struct PortraitCaptureItem: Identifiable, Equatable {
+    let id: UUID
+    let createdAt: Date
+    let status: String
+    let detail: String
+    let contourCount: Int
+    let expectedPathSegments: [ExpectedPathSegment]
+    let overlay: FaceContourPreviewOverlay?
+}
+
 struct NormPoint: Codable, Equatable {
     let x: Double
     let y: Double

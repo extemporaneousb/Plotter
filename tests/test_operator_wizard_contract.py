@@ -95,23 +95,37 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     models = _read(SWIFT_DIR / "Models.swift")
     overlays = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    portrait_panel = _read(SWIFT_DIR / "PortraitPanel.swift")
 
-    assert "Preview Portrait Contours" in draw_verify
+    assert "Preview Portrait Contours" not in draw_verify
+    assert "Create Contour Drawing" in portrait_panel
+    assert "PortraitPanel(" in content
+    assert "portraitContourMonitorEnabled" in content
+    assert "runPortraitContourMonitor" in content
+    assert "captureFaceRaster(" in content
+    assert "columns: 28" in content
+    assert "updatesStatus: false" in content
+    assert "PortraitCaptureThumbnail" in portrait_panel
     assert "captureFaceRasterBurst(columns: 28, rows: 36)" in content
     assert "func captureFaceRasterBurst" in camera_model
     assert "targetFrames: Int = 24" in camera_model
-    assert "previewPortraitContours(raster, frame: frame)" in content
+    assert "previewPortraitContours(" in content
+    assert "settings: bridge.portraitContourSettings" in content
     assert "func previewPortraitContours" in model
     assert "BridgePortraitContourPreviewRequest" in client
     assert "BridgePortraitContourOverlay" in client
     assert "portraitOverlay" in client
     assert 'post(path: "draw/portrait/preview"' in client
     assert "BridgePortraitContourOptionsRequest" in model
+    assert "struct PortraitContourSettings" in models
+    assert "portraitContourSettings" in model
     assert "struct FaceContourPreviewOverlay" in models
     assert "faceContourPreviewOverlay" in model
     assert "makeFaceContourPreviewOverlay(" in model
     assert "response.portraitOverlay" in model
-    assert "makeFallbackFaceContourPreviewOverlay(from: raster" in model
+    assert "makeFallbackFaceContourPreviewOverlay(" in model
+    assert "settings: settings" in model
+    assert "updateLivePortraitContourPreview" in model
     assert "fallbackContours(values: values" in model
     assert "PortraitContourPreviewOverlay(" in content
     assert "struct PortraitContourPreviewOverlay" in overlays

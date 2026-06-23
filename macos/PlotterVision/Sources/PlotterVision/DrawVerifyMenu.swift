@@ -4,7 +4,6 @@ struct DrawVerifyMenu: View {
     @ObservedObject var bridge: PlotterBridgeModel
     @Binding var workflowStatusText: String
     let visualMotionActive: Bool
-    let previewImageContours: () -> Void
 
     var body: some View {
         Menu {
@@ -46,7 +45,7 @@ struct DrawVerifyMenu: View {
                 Text("Plan \(DrawVerifyCoordinator.shortPlanHash(bridge.drawVerifyPlanHash))")
             }
 
-            Section("Shape And Image Preview") {
+            Section("Shape Preview") {
                 Button("Preview Triangle Shape") {
                     workflowStatusText = "VERIFY triangle preview"
                     Task {
@@ -64,12 +63,6 @@ struct DrawVerifyMenu: View {
                     }
                 }
                 .disabled(!bridge.isOnline || !bridge.hasPaperLock || bridge.isCalibrating || bridge.isRunning)
-
-                Button("Preview Portrait Contours") {
-                    workflowStatusText = "VERIFY portrait contour preview"
-                    previewImageContours()
-                }
-                .disabled(!bridge.isOnline || bridge.isCalibrating || bridge.isRunning || bridge.isMachineBusy)
             }
 
             Section("Overlay") {
@@ -82,18 +75,12 @@ struct DrawVerifyMenu: View {
                 Button("Clear Draw/Verify Overlays") {
                     bridge.clearDrawVerifyOverlay()
                     bridge.clearBindingMarkPreviewOverlay()
-                    bridge.imagePreviewStatus = "IMG --"
-                    bridge.imagePreviewDetail = "VISUAL ONLY"
-                    bridge.imagePreviewContourCount = 0
-                    bridge.imagePreviewEligibleForBridgePreview = false
                     workflowStatusText = "DRAW overlays cleared"
                 }
                 .disabled(
                     bridge.expectedPathSegments.isEmpty
                         && bridge.bindingMarkPreviewPoints.isEmpty
                         && bridge.bindingMarkPreviewSegments.isEmpty
-                        && bridge.imagePreviewContourCount == 0
-                        && bridge.faceContourPreviewOverlay == nil
                         && bridge.drawVerifyPlanHash.isEmpty
                 )
             }
@@ -104,8 +91,6 @@ struct DrawVerifyMenu: View {
                 isActive: !bridge.expectedPathSegments.isEmpty
                     || !bridge.bindingMarkPreviewPoints.isEmpty
                     || visualMotionActive
-                    || bridge.imagePreviewContourCount > 0
-                    || bridge.faceContourPreviewOverlay != nil
                     || !bridge.drawVerifyPlanHash.isEmpty
             )
         }

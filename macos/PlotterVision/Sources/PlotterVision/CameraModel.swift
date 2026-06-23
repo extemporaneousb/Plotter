@@ -279,7 +279,11 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         return result
     }
 
-    func captureFaceRaster(columns: Int = 14, rows: Int = 18) async throws -> FaceRasterSample {
+    func captureFaceRaster(
+        columns: Int = 14,
+        rows: Int = 18,
+        updatesStatus: Bool = true
+    ) async throws -> FaceRasterSample {
         guard let buffer = snapshotLastBuffer() else {
             throw CameraError.noFrame
         }
@@ -290,13 +294,15 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
             columns: columns,
             rows: rows
         )
-        statusText = String(
-            format: "%@ face raster %dx%d %.0f%%",
-            role.statusPrefix,
-            columns,
-            rows,
-            sample.confidence * 100
-        )
+        if updatesStatus {
+            statusText = String(
+                format: "%@ face raster %dx%d %.0f%%",
+                role.statusPrefix,
+                columns,
+                rows,
+                sample.confidence * 100
+            )
+        }
         return sample
     }
 
