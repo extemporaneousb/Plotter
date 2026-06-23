@@ -195,6 +195,18 @@ struct FaceRasterSample: Equatable {
     let luminanceStdDev: Double
 }
 
+struct FaceContourPreviewPolyline: Identifiable, Equatable {
+    let id: Int
+    let points: [CGPoint]
+    let closed: Bool
+}
+
+struct FaceContourPreviewOverlay: Equatable {
+    let commandId: String
+    let faceBounds: CGRect
+    let contours: [FaceContourPreviewPolyline]
+}
+
 struct NormPoint: Codable, Equatable {
     let x: Double
     let y: Double

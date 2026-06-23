@@ -399,6 +399,50 @@ struct FaceContourOverlay: View {
     }
 }
 
+struct PortraitContourPreviewOverlay: View {
+    let overlay: FaceContourPreviewOverlay?
+    let videoSize: CGSize
+    let previewMode: CameraPreviewMode
+
+    var body: some View {
+        Canvas { context, size in
+            guard let overlay, !overlay.contours.isEmpty else { return }
+
+            let displayRect = videoDisplayRect(
+                viewSize: size,
+                videoSize: videoSize,
+                previewMode: previewMode
+            )
+            let cropRect = faceOverlayRect(overlay.faceBounds, displayRect: displayRect)
+            context.stroke(
+                Path(roundedRect: cropRect, cornerRadius: 3),
+                with: .color(.mint.opacity(0.50)),
+                lineWidth: 1.1
+            )
+
+            for (index, contour) in overlay.contours.prefix(900).enumerated() {
+                guard contour.points.count > 1 else { continue }
+                var path = Path()
+                path.move(to: faceOverlayPoint(contour.points[0], displayRect: displayRect))
+                for point in contour.points.dropFirst() {
+                    path.addLine(to: faceOverlayPoint(point, displayRect: displayRect))
+                }
+                if contour.closed {
+                    path.closeSubpath()
+                }
+
+                context.stroke(path, with: .color(.black.opacity(0.82)), lineWidth: 3.2)
+                context.stroke(
+                    path,
+                    with: .color(portraitContourPreviewColor(for: index).opacity(0.96)),
+                    lineWidth: 1.25
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 struct ImageProcessingPanel: View {
     @ObservedObject var bridge: PlotterBridgeModel
     let visualContourCount: Int
@@ -629,6 +673,17 @@ func faceContourColor(for kind: SegmentKind, index: Int) -> Color {
         return .yellow
     case .contour:
         return index.isMultiple(of: 2) ? .orange : .pink
+    }
+}
+
+func portraitContourPreviewColor(for index: Int) -> Color {
+    switch index % 3 {
+    case 0:
+        return .mint
+    case 1:
+        return .cyan
+    default:
+        return .white
     }
 }
 

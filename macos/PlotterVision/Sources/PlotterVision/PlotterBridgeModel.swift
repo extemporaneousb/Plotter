@@ -37,6 +37,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var imagePreviewDetail = "VISUAL ONLY"
     @Published var imagePreviewContourCount = 0
     @Published var imagePreviewEligibleForBridgePreview = false
+    @Published var faceContourPreviewOverlay: FaceContourPreviewOverlay?
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
@@ -1082,6 +1083,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     func clearDrawVerifyOverlay() {
         expectedPathSegments = []
+        faceContourPreviewOverlay = nil
         drawVerifyStatus = "DRAW --"
         drawVerifyDetail = "Preview a capability check before running"
         drawVerifyKind = ""
@@ -1461,6 +1463,7 @@ final class PlotterBridgeModel: ObservableObject {
         activeAction = "portrait-preview"
         imagePreviewStatus = "IMG PREVIEW"
         imagePreviewDetail = "BURST PREVIEW"
+        faceContourPreviewOverlay = nil
         statusText = "Previewing portrait contours"
         diagnosticsEvent(
             "portrait_preview_started",
@@ -1509,6 +1512,11 @@ final class PlotterBridgeModel: ObservableObject {
             let segments = response.summary?.drawSegmentCount ?? 0
             imagePreviewContourCount = contours
             imagePreviewEligibleForBridgePreview = response.eligibleForBridgePreview
+            faceContourPreviewOverlay = makeFaceContourPreviewOverlay(
+                from: response.portraitOverlay,
+                sample: raster,
+                commandId: response.commandId
+            )
             imagePreviewStatus = String(format: "IMG %dC %dS", contours, segments)
             imagePreviewDetail = response.previewOnly ? "PREVIEW ONLY" : "EXECUTION"
             previewStatus = "SIM IMAGE \(response.status.uppercased())"
@@ -1533,6 +1541,7 @@ final class PlotterBridgeModel: ObservableObject {
             return response.status == "ready"
         } catch {
             expectedPathSegments = []
+            faceContourPreviewOverlay = nil
             imagePreviewContourCount = 0
             imagePreviewEligibleForBridgePreview = false
             imagePreviewStatus = "IMG ERR"
@@ -1542,6 +1551,31 @@ final class PlotterBridgeModel: ObservableObject {
             diagnosticsEvent("portrait_preview_failed", errorPayload(error), snapshot: true)
             return false
         }
+    }
+
+    private func makeFaceContourPreviewOverlay(
+        from overlay: BridgePortraitContourOverlay?,
+        sample: FaceRasterSample,
+        commandId: String
+    ) -> FaceContourPreviewOverlay? {
+        guard let overlay,
+              overlay.coordinateSpace == "portrait_crop_norm",
+              !overlay.contours.isEmpty else {
+            return nil
+        }
+        let bounds = sample.faceBounds
+        let contours = overlay.contours.enumerated().compactMap { index, contour -> FaceContourPreviewPolyline? in
+            let points = contour.points.map { point in
+                CGPoint(
+                    x: bounds.minX + CGFloat(point.x) * bounds.width,
+                    y: bounds.minY + CGFloat(point.y) * bounds.height
+                )
+            }
+            guard points.count >= 2 else { return nil }
+            return FaceContourPreviewPolyline(id: index, points: points, closed: contour.closed)
+        }
+        guard !contours.isEmpty else { return nil }
+        return FaceContourPreviewOverlay(commandId: commandId, faceBounds: bounds, contours: contours)
     }
 
     func replayExpectedPath() {

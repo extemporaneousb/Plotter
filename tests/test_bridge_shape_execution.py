@@ -317,6 +317,10 @@ def test_bridge_portrait_contour_preview_is_preview_only_and_projected(tmp_path:
     assert response.controller_transcript is None
     assert response.portrait_summary is not None
     assert response.portrait_summary.contour_count > 0
+    assert response.portrait_overlay is not None
+    assert response.portrait_overlay.coordinate_space == "portrait_crop_norm"
+    assert len(response.portrait_overlay.contours) == response.portrait_summary.contour_count
+    assert all(contour.points for contour in response.portrait_overlay.contours)
     assert response.summary is not None
     assert response.summary.contour_polyline_count == response.portrait_summary.contour_count
     assert response.summary.hatch_polyline_count == 0

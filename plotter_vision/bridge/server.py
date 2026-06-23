@@ -536,6 +536,18 @@ class PortraitContourPreviewRequest(BaseModel):
     request_id: str | None = None
 
 
+class PortraitContourPolyline(BaseModel):
+    points: list[PaperPointNorm]
+    closed: bool = False
+
+
+class PortraitContourOverlay(BaseModel):
+    coordinate_space: Literal["portrait_crop_norm"] = "portrait_crop_norm"
+    raster_width: int
+    raster_height: int
+    contours: list[PortraitContourPolyline] = Field(default_factory=list)
+
+
 class PortraitContourPreviewResponse(BaseModel):
     command_id: str
     status: str
@@ -546,6 +558,7 @@ class PortraitContourPreviewResponse(BaseModel):
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
     portrait_summary: PortraitContourSummary | None = None
+    portrait_overlay: PortraitContourOverlay | None = None
     preview_overlay: PreviewOverlay | None = None
     event_log: str
     controller_transcript: str | None = None
@@ -1473,6 +1486,17 @@ class PlotterBridge:
             if not program.polylines:
                 raise MotionSafetyError("Portrait normalization produced no preview contours.")
 
+            portrait_overlay = PortraitContourOverlay(
+                raster_width=request.raster.width,
+                raster_height=request.raster.height,
+                contours=[
+                    PortraitContourPolyline(
+                        points=[PaperPointNorm(x=point.x, y=point.y) for point in polyline.points],
+                        closed=polyline.closed,
+                    )
+                    for polyline in program.polylines
+                ],
+            )
             machine = self._load_machine_config()
             plan = build_polygon_draw_plan(
                 request=PolygonDrawRequest(
@@ -1515,6 +1539,7 @@ class PlotterBridge:
                 simulation=plan.simulation,
                 summary=plan.summary,
                 portrait_summary=portrait_summary,
+                portrait_overlay=portrait_overlay,
                 preview_overlay=preview_overlay,
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,
@@ -1536,6 +1561,7 @@ class PlotterBridge:
                 simulation=locals().get("plan").simulation if "plan" in locals() else None,
                 summary=locals().get("plan").summary if "plan" in locals() else None,
                 portrait_summary=locals().get("portrait_summary"),
+                portrait_overlay=locals().get("portrait_overlay"),
                 preview_overlay=locals().get("preview_overlay"),
                 event_log=str(self.config.event_log_path),
                 controller_transcript=None,

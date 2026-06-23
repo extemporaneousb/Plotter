@@ -93,6 +93,7 @@ struct DrawVerifyMenu: View {
                         && bridge.bindingMarkPreviewPoints.isEmpty
                         && bridge.bindingMarkPreviewSegments.isEmpty
                         && bridge.imagePreviewContourCount == 0
+                        && bridge.faceContourPreviewOverlay == nil
                         && bridge.drawVerifyPlanHash.isEmpty
                 )
             }
@@ -104,6 +105,7 @@ struct DrawVerifyMenu: View {
                     || !bridge.bindingMarkPreviewPoints.isEmpty
                     || visualMotionActive
                     || bridge.imagePreviewContourCount > 0
+                    || bridge.faceContourPreviewOverlay != nil
                     || !bridge.drawVerifyPlanHash.isEmpty
             )
         }

@@ -432,6 +432,18 @@ struct BridgePortraitContourSummary: Decodable {
     let simplificationEpsilonNorm: Double
 }
 
+struct BridgePortraitContourPolyline: Decodable {
+    let points: [NormPoint]
+    let closed: Bool
+}
+
+struct BridgePortraitContourOverlay: Decodable {
+    let coordinateSpace: String
+    let rasterWidth: Int
+    let rasterHeight: Int
+    let contours: [BridgePortraitContourPolyline]
+}
+
 struct BridgeFaceRasterDrawResponse: Decodable {
     let commandId: String
     let status: String
@@ -487,6 +499,7 @@ struct BridgePortraitContourPreviewResponse: Decodable {
     let simulation: BridgeShapeSimulation?
     let summary: BridgeDrawProgramSummary?
     let portraitSummary: BridgePortraitContourSummary?
+    let portraitOverlay: BridgePortraitContourOverlay?
     let previewOverlay: BridgePreviewOverlay?
     let eventLog: String
     let controllerTranscript: String?

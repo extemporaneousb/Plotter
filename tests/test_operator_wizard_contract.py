@@ -93,6 +93,8 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     draw_verify = _read(SWIFT_DIR / "DrawVerifyMenu.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+    overlays = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
     assert "Preview Portrait Contours" in draw_verify
     assert "captureFaceRasterBurst(columns: 28, rows: 36)" in content
@@ -101,8 +103,16 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "previewPortraitContours(raster, frame: frame)" in content
     assert "func previewPortraitContours" in model
     assert "BridgePortraitContourPreviewRequest" in client
+    assert "BridgePortraitContourOverlay" in client
+    assert "portraitOverlay" in client
     assert 'post(path: "draw/portrait/preview"' in client
     assert "BridgePortraitContourOptionsRequest" in model
+    assert "struct FaceContourPreviewOverlay" in models
+    assert "faceContourPreviewOverlay" in model
+    assert "makeFaceContourPreviewOverlay(" in model
+    assert "response.portraitOverlay" in model
+    assert "PortraitContourPreviewOverlay(" in content
+    assert "struct PortraitContourPreviewOverlay" in overlays
     portrait_preview_block = model.split("func previewPortraitContours", 1)[1].split(
         "func replayExpectedPath", 1
     )[0]

@@ -236,6 +236,12 @@ struct ContentView: View {
                 )
             }
 
+            PortraitContourPreviewOverlay(
+                overlay: bridge.faceContourPreviewOverlay,
+                videoSize: faceCamera.videoSize,
+                previewMode: .fill
+            )
+
             if showImageProcessingPanel {
                 ImageProcessingPanel(
                     bridge: bridge,
