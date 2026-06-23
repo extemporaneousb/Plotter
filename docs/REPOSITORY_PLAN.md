@@ -72,18 +72,21 @@ The fixed-camera workflow is:
 
 1. Start the app.
 2. Open Visual Field Setup.
-3. Click or confirm paper fiducials, then confirm or localize the cap marker. If the bridge already
-   has a locked visual field after restart and the visible grid still aligns, use Confirm Setup to
-   reuse that registration without re-clicking fiducials.
-4. If the cap is not visible, use the live-gated "move X into camera field" recovery before probing.
+3. Click or confirm paper fiducials, then confirm the visual field. If the bridge already has a
+   locked visual field after restart and the visible grid still aligns, use Confirm Setup to reuse
+   that registration without re-clicking fiducials.
+4. Confirm or click the cap marker, then click the pen tip so the bridge can persist the cap-to-tip
+   offset and compute the safe drawable region.
+5. If the cap is not visible, use the live-gated "move X into camera field" recovery before probing.
    The app chooses a bounded X direction from current machine clearance; this is non-homing and does
    not create axis trust.
-5. Run or rerun Visual-Machine Calibration from the current cap location. Calibration samples bounded
+6. Run or rerun Visual-Machine Calibration from the current cap location. Calibration samples bounded
    X/Y cap motion using current machine clearance rather than a fixed positive-X bootstrap.
-6. Preview expected binding marks, draw the watched visual-relative marks, collect ink observations,
-   post them through `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
-7. Use the validated `VisualPositionBinding` as the drawing unlock.
-8. Open Draw/Verify and draw either capability checks or portrait/image-derived programs after
+7. Preview expected binding marks inside the safe drawable region, draw the watched visual-relative
+   marks, collect ink observations, post them through `/calibration/binding/observe`, solve
+   `/calibration/binding/solve`, and draw the ready frame around the same region.
+8. Use the validated `VisualPositionBinding` as the drawing unlock.
+9. Open Draw/Verify and draw either capability checks or portrait/image-derived programs after
    bridge preview.
 
 Both post-calibration drawing lanes use the same pipeline:
@@ -128,8 +131,8 @@ side effect of operator zoom.
 Cap-marker evidence is session evidence. Visual-Machine Calibration measures relative carriage
 motion in the registered paper plane; cap-only motion is not enough to set durable
 `axis_model_trusted` or unlock absolute drawing. Drawing unlocks should use a persisted visual
-position binding backed by paper homography, cap localization, ink or pen-tip observations,
-residuals, camera identity, and freshness.
+position binding backed by field registration, cap localization, cap-to-tip offset, ink or pen-tip
+observations, residuals, camera identity, and freshness.
 
 Motion-probe evidence must not remain only in Swift state. The canonical persistence path is
 `/calibration/probe/observe`, which stores each commanded move, before/after cap observation,
@@ -175,9 +178,9 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: implemented around Visual Field Setup plus Visual-Machine Calibration. Paper homography,
-cap/probe evidence, binding observations, and binding solving are owned by the bridge; the Swift app
-is the operator surface.
+Status: implemented around Visual Field Setup plus Visual-Machine Calibration. Field registration,
+tool offset, cap/probe evidence, binding observations, and binding solving are owned by the bridge;
+the Swift app is the operator surface.
 
 - Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
   artifact JSON.

@@ -28,7 +28,8 @@ struct CalibrationWizardView: View {
     let confirmSetup: () -> Void
     let reset: () -> Void
     let clickCap: () -> Void
-    let pickRegion: () -> Void
+    let clickPenTip: () -> Void
+    let stepAction: (Int) -> Void
     let moveXIntoCameraField: () -> Void
     let hide: () -> Void
 
@@ -85,11 +86,11 @@ struct CalibrationWizardView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus)
-            CalibrationWizardStepRow(index: 2, title: "Visual Field", detail: paperDetail, status: paperStatus)
-            CalibrationWizardStepRow(index: 3, title: "Cap Marker", detail: greenCapDetail, status: greenCapStatus)
-            CalibrationWizardStepRow(index: 4, title: "Visual-Machine", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-            CalibrationWizardStepRow(index: 5, title: "Draw/Verify", detail: bindingDetail, status: bindingStatus)
+            CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus, onSelect: { stepAction(1) })
+            CalibrationWizardStepRow(index: 2, title: "Visual Field", detail: paperDetail, status: paperStatus, onSelect: { stepAction(2) })
+            CalibrationWizardStepRow(index: 3, title: "Tool", detail: capPositionDetail, status: capPositionStatus, onSelect: { stepAction(3) })
+            CalibrationWizardStepRow(index: 4, title: "Visual-Machine", detail: visualCalibrationDetail, status: visualCalibrationStatus, onSelect: { stepAction(4) })
+            CalibrationWizardStepRow(index: 5, title: "Draw/Verify", detail: bindingDetail, status: bindingStatus, onSelect: { stepAction(5) })
         }
     }
 
@@ -121,8 +122,9 @@ struct CalibrationWizardView: View {
                     .buttonStyle(.bordered)
                     .disabled(!hasPaperLock)
 
-                Button("Pick Region", action: pickRegion)
+                Button("Click Pen Tip", action: clickPenTip)
                     .buttonStyle(.bordered)
+                    .disabled(!hasPaperLock)
 
                 Button("Move Field", action: moveXIntoCameraField)
                     .buttonStyle(.bordered)

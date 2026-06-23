@@ -107,6 +107,111 @@ def test_visual_probe_observe_persists_samples_and_updates_readiness(
         assert readiness["visual_ready_to_plot"] is True
 
 
+def test_setup_reset_clears_latest_authority_but_preserves_history(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        status_code, registration = client.post("/paper/register", _paper_registration_payload())
+        assert status_code == 200
+        registration_id = registration["registration"]["registration_id"]
+        status_code, _ = client.post(
+            "/calibration/pen/observe",
+            _cap_observation_payload(paper_x=0.5, paper_y=0.5),
+        )
+        assert status_code == 200
+        status_code, _ = client.post(
+            "/calibration/probe/observe",
+            _probe_sample_payload(
+                run_id="probe-run-reset",
+                sample_id="probe-reset",
+                source="motion_probe",
+                axis="X",
+                command_x=25.0,
+                command_y=0.0,
+                before=(250.0, 100.0),
+                after=(275.0, 100.0),
+            ),
+        )
+        assert status_code == 200
+        status_code, preview = client.post(
+            "/calibration/binding/preview",
+            {"point_set": "five"},
+        )
+        assert status_code == 200
+        status_code, binding_status = client.get("/calibration/binding/status")
+        assert status_code == 200
+        binding_id = binding_status["binding"]["binding_id"]
+
+        historical_paper = tmp_path / "calibration" / "paper" / f"{registration_id}.json"
+        historical_probe = tmp_path / "calibration" / "visual_probe_runs" / "probe-run-reset.json"
+        historical_binding = tmp_path / "calibration" / "visual_position_bindings" / f"{binding_id}.json"
+        assert historical_paper.exists()
+        assert historical_probe.exists()
+        assert historical_binding.exists()
+        assert preview["safe_zone"]["extra_padding_mm"] == pytest.approx(40.0)
+
+        status_code, reset = client.post("/calibration/setup/reset", {})
+        assert status_code == 200
+        assert reset["status"] == "reset"
+
+        assert not (tmp_path / "calibration" / "latest_paper_registration.json").exists()
+        assert not (tmp_path / "calibration" / "latest_visual_readiness.json").exists()
+        assert not (tmp_path / "calibration" / "latest_visual_probe_run.json").exists()
+        assert not (tmp_path / "calibration" / "latest_visual_position_binding.json").exists()
+        assert historical_paper.exists()
+        assert historical_probe.exists()
+        assert historical_binding.exists()
+
+        status_code, paper_status = client.get("/paper/status")
+        assert status_code == 200
+        assert paper_status["status"] == "missing"
+        status_code, binding_after_reset = client.get("/calibration/binding/status")
+        assert status_code == 200
+        assert binding_after_reset["status"] == "missing"
+
+
+def test_tool_estimate_persists_cap_to_tip_offset_and_safe_region(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        status_code, _ = client.post("/paper/register", _paper_registration_payload())
+        assert status_code == 200
+
+        status_code, response = client.post(
+            "/calibration/tool/estimate",
+            {
+                "cap": {
+                    "paper_mm": {"x": 100.0, "y": 80.0},
+                    "observed_norm": {"x": 0.45, "y": 0.45},
+                },
+                "tip": {
+                    "paper_mm": {"x": 110.0, "y": 76.0},
+                    "observed_norm": {"x": 0.47, "y": 0.43},
+                },
+            },
+        )
+
+        assert status_code == 200
+        assert response["status"] == "ready"
+        model = response["cap_to_tip_model"]
+        assert model["source"] == "operator_measurement"
+        assert model["offset_x_mm"] == pytest.approx(10.0)
+        assert model["offset_y_mm"] == pytest.approx(-4.0)
+        safe_zone = response["safe_zone"]
+        assert safe_zone["extra_padding_mm"] == pytest.approx(40.0)
+        assert safe_zone["mark_clearance_mm"] == pytest.approx(7.0)
+        assert safe_zone["park_clearance_mm"] == pytest.approx(44.0)
+        assert safe_zone["observation_clearance_mm"] == pytest.approx(4.0)
+        assert safe_zone["cap_to_tip_offset_x_mm"] == pytest.approx(10.0)
+        assert safe_zone["cap_to_tip_offset_y_mm"] == pytest.approx(-4.0)
+        assert safe_zone["margins_mm"]["left"] == pytest.approx(105.0)
+        assert safe_zone["margins_mm"]["right"] == pytest.approx(95.0)
+        assert safe_zone["margins_mm"]["bottom"] == pytest.approx(51.0)
+        assert safe_zone["margins_mm"]["top"] == pytest.approx(55.0)
+        assert response["binding"]["cap_to_tip_model"] == model
+        assert Path(response["binding_file"]).exists()
+
+
 def test_persisted_visual_probe_samples_survive_bridge_reload(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)

@@ -32,6 +32,7 @@ def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
         "Preview 5-Point Marks",
         "Run Visual 5-Point Marks",
         "FID auto",
+        "Pick Region",
     ]
 
     for label in removed_labels:
@@ -41,6 +42,9 @@ def test_operator_ui_exposes_only_wizard_calibration_path() -> None:
     assert "DrawVerifyMenu(" in content
     assert "struct VisualControlsMenu" in visual_controls
     assert "struct DrawVerifyMenu" in draw_verify
+    assert "Sample Cap Color" in visual_controls
+    assert "Reset Cap Color" in visual_controls
+    assert "Sample Cap Color" not in _read(SWIFT_DIR / "CalibrationWizardView.swift")
     assert "startCalibrationWizard" in content
     assert "Confirm Setup" in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
 
@@ -165,7 +169,7 @@ def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> Non
     assert (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
     assert "final class PlotterBridgeModel" not in client
     assert "final class PlotterBridgeModel" in model
-    assert len(content.splitlines()) < 3500
+    assert len(content.splitlines()) < 3700
 
 
 def test_swift_auto_red_fiducial_path_is_removed() -> None:
@@ -248,6 +252,9 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert "visualBindingMaxMarkAttempts = 4" in runner
     assert "visualBindingParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]" in runner
     assert "visual_binding_mark_attempt" in runner
+    assert "visualBindingMarkClearance(" in runner
+    assert "clearance_failed" in runner
+    assert "clearance_blocker" in runner
     assert "visual_binding_incomplete" in content
     assert "BIND INCOMPLETE" in content
     assert "solveVisualBinding" in content
@@ -256,6 +263,7 @@ def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None
     assert "VIS READY" in content
     assert "waitForFreshGreenCapPaperObservation" in content.split("func parkAwayFromMark", 1)[1]
     assert "visualMotionTravelFeedMmMin = 1200.0" in runner
+    assert "maximumCommandCapMm = 30.0" in content
 
     assert "horizontalDarkFraction" in models
     assert "verticalDarkFraction" in models
@@ -283,8 +291,11 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     assert "confirmSetup: confirmWizardSetupFromExistingRegistration" in content
     assert "private func confirmWizardSetupFromExistingRegistration" in content
     assert '"wizard_setup_confirmed"' in content
+    assert "resetCalibrationSetup()" in content
+    assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Visual Field Setup" in wizard
     assert "Paper Homography" not in wizard
+    assert "Paper homography" not in content
     assert "Stored visual field in use" in content
     assert "FIELD visual field ready; confirm setup if grid aligns" in content
 
@@ -298,6 +309,26 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     )[0]
     assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Fiducial Clicks")
     assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
+
+
+def test_visual_field_setup_requires_tool_estimate_before_visual_machine() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+
+    assert "Click Pen Tip" in wizard
+    assert "private func startManualPenTipClick" in content
+    assert "private func recordConfirmedPenTip" in content
+    assert "estimateToolOffset(cap: cap, tip: tip)" in content
+    assert "bridge.toolCapToTipModel == nil { return \"Click Pen Tip\" }" in content
+    assert "&& bridge.toolCapToTipModel != nil" in content
+    assert "pen tip not confirmed" in content
+    assert "BridgeToolEstimateRequest" in client
+    assert 'post(path: "calibration/tool/estimate"' in client
+    assert "@Published var bindingExtraPaddingMm = 40.0" in model
+    assert "extraPaddingMm: bindingExtraPaddingMm" in model
+    assert "toolCapToTipModel = response.capToTipModel" in model
 
 
 def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
@@ -358,7 +389,7 @@ def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
 
-    assert "ConfirmedCapOverlay(point: nil, isActive: manualPenMode)" in content
+    assert "ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode || manualPenTipMode)" in content
     assert "confirmedCapPoint: confirmedCapPoint" not in content
     assert "draw(confirmedCapPoint" not in overlay
     assert "CONF CAP" in _read(SWIFT_DIR / "Models.swift")

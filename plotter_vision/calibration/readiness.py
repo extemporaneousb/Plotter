@@ -80,6 +80,12 @@ class DrawingSafeZone(BaseModel):
     artifact_type: Literal["drawing_safe_zone"] = "drawing_safe_zone"
     drawing_frame: DrawingFrameMM
     margins_mm: SafeZoneMarginsMM
+    extra_padding_mm: float = 0.0
+    mark_clearance_mm: float = 0.0
+    park_clearance_mm: float = 0.0
+    observation_clearance_mm: float = 0.0
+    cap_to_tip_offset_x_mm: float = 0.0
+    cap_to_tip_offset_y_mm: float = 0.0
     logical_min_x_mm: float
     logical_max_x_mm: float
     logical_min_y_mm: float
@@ -95,6 +101,12 @@ class DrawingSafeZone(BaseModel):
         *,
         drawing_frame: DrawingFrameMM,
         margins_mm: SafeZoneMarginsMM,
+        extra_padding_mm: float = 0.0,
+        mark_clearance_mm: float = 0.0,
+        park_clearance_mm: float = 0.0,
+        observation_clearance_mm: float = 0.0,
+        cap_to_tip_offset_x_mm: float = 0.0,
+        cap_to_tip_offset_y_mm: float = 0.0,
     ) -> DrawingSafeZone:
         if margins_mm.left + margins_mm.right >= drawing_frame.width_mm:
             raise ValueError("safe-zone left/right margins collapse the drawing frame.")
@@ -104,6 +116,12 @@ class DrawingSafeZone(BaseModel):
         return cls(
             drawing_frame=drawing_frame,
             margins_mm=margins_mm,
+            extra_padding_mm=extra_padding_mm,
+            mark_clearance_mm=mark_clearance_mm,
+            park_clearance_mm=park_clearance_mm,
+            observation_clearance_mm=observation_clearance_mm,
+            cap_to_tip_offset_x_mm=cap_to_tip_offset_x_mm,
+            cap_to_tip_offset_y_mm=cap_to_tip_offset_y_mm,
             logical_min_x_mm=drawing_frame.origin_x_mm + margins_mm.left,
             logical_max_x_mm=(
                 drawing_frame.origin_x_mm + drawing_frame.width_mm - margins_mm.right
@@ -117,6 +135,18 @@ class DrawingSafeZone(BaseModel):
             paper_min_y_norm=margins_mm.bottom / drawing_frame.height_mm,
             paper_max_y_norm=1.0 - margins_mm.top / drawing_frame.height_mm,
         )
+
+    @field_validator(
+        "extra_padding_mm",
+        "mark_clearance_mm",
+        "park_clearance_mm",
+        "observation_clearance_mm",
+        "cap_to_tip_offset_x_mm",
+        "cap_to_tip_offset_y_mm",
+    )
+    @classmethod
+    def _validate_policy_value(cls, value: float) -> float:
+        return _finite(value, label="safe-zone policy value")
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> DrawingSafeZone:
@@ -170,6 +200,7 @@ class SafeZoneEvaluation(BaseModel):
     target: Literal["green_cap_carriage_marker"] = GREEN_CAP_TARGET
     inside: bool
     logical_mm: LogicalPointMM
+    safe_zone: DrawingSafeZone | None = None
     abort_reasons: list[SafeZoneAbortReason] = Field(default_factory=list)
 
 
@@ -328,6 +359,7 @@ def evaluate_cap_inside_safe_zone(
         cap_observation_id=observation.observation_id,
         inside=not reasons,
         logical_mm=logical,
+        safe_zone=safe_zone,
         abort_reasons=reasons,
     )
 
@@ -429,6 +461,7 @@ def build_visual_readiness_state(
         cap_localized=cap_localized,
         cap_inside_safe_zone=cap_inside_safe_zone,
         latest_cap_observation=cap_observation,
+        safe_zone=safe_zone_evaluation.safe_zone if safe_zone_evaluation else None,
         safe_zone_evaluation=safe_zone_evaluation,
         latest_visual_probe_run_id=latest_visual_probe_run_id,
         latest_visual_probe_sample_id=latest_visual_probe_sample_id,

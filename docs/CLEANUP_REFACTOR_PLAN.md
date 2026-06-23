@@ -74,9 +74,9 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 ## Acceptance Criteria For The Next Architecture Pass
 
-- The main operator path is app launch, calibration wizard, paper fiducials/paper homography or
-  Confirm Setup against an already locked paper homography, cap localization, draw/measure/adjust
-  calibration, persisted binding, then drawing.
+- The main operator path is app launch, Visual Field Setup, paper fiducials or Confirm Setup against
+  an already locked visual field, cap and pen-tip confirmation, Visual-Machine Calibration,
+  persisted binding, then drawing.
 - Plotter-camera FOV zoom remains persisted Swift display state. Current segmentation and motion
   detection continue to run app-side on the full camera frame unless a separate ROI feature is added.
 - Python remains the only authority that can promote a persisted binding or trust flag. Swift may

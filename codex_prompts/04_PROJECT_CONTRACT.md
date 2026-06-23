@@ -42,15 +42,18 @@ The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
-3. Click or confirm paper fiducials and confirm or localize the cap marker. The bridge still owns the
-   internal paper homography artifact, but operator-facing setup treats it as a locked visual field.
-4. Run Visual-Machine Calibration to measure relative cap motion with bounded moves chosen from
+3. Click or confirm paper fiducials and confirm the visual field. The bridge owns the internal field
+   registration artifact, but operator-facing setup treats it as a locked visual field.
+4. Confirm or click the cap marker, then click the pen tip so the bridge can persist the cap-to-tip
+   offset and compute the safe drawable region.
+5. Run Visual-Machine Calibration to measure relative cap motion with bounded moves chosen from
    current machine clearance; do not assume or reintroduce a fixed +X bootstrap or bridge-planned
    adaptive-probe motion route.
-5. Preview binding marks, run watched binding marks, post observations to
-   `/calibration/binding/observe`, and solve `/calibration/binding/solve`.
-6. Treat the validated `VisualPositionBinding` as the current drawing unlock.
-7. Use Draw/Verify to preview capability checks, shape programs, or portrait/image-derived programs
+6. Preview binding marks from the safe drawable region, run watched binding marks, post observations
+   to `/calibration/binding/observe`, solve `/calibration/binding/solve`, and draw the ready frame
+   around that same region.
+7. Treat the validated `VisualPositionBinding` as the current drawing unlock.
+8. Use Draw/Verify to preview capability checks, shape programs, or portrait/image-derived programs
    through:
 
 ```text
@@ -59,9 +62,9 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 ```
 
 Cap-only motion is relative session evidence. Absolute drawing in the paper plane requires a visual
-position binding backed by paper homography, cap localization, ink or pen-tip observations,
-residuals, camera identity, and freshness. Swift observations are evidence; Python decides whether a
-binding or trust flag is valid.
+position binding backed by field registration, cap localization, cap-to-tip offset, ink or pen-tip
+observations, residuals, camera identity, and freshness. Swift observations are evidence; Python
+decides whether a binding or trust flag is valid.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned

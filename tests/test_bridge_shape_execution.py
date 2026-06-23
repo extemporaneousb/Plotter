@@ -479,9 +479,7 @@ def test_bridge_binding_mark_preview_projects_marks_to_camera(tmp_path: Path) ->
         )
     )
 
-    response = bridge.preview_binding_marks(
-        BindingMarkPreviewRequest(mark_size_mm=4.0, margin_mm=25.0)
-    )
+    response = bridge.preview_binding_marks(BindingMarkPreviewRequest(mark_size_mm=4.0))
 
     assert response.status == "ready"
     assert response.preview_only is True
@@ -493,13 +491,58 @@ def test_bridge_binding_mark_preview_projects_marks_to_camera(tmp_path: Path) ->
     assert len(response.camera_segments) == 10
     assert response.planned_commands
     assert response.plan_hash
+    assert response.safe_zone is not None
+    assert response.safe_zone.extra_padding_mm == pytest.approx(40.0)
+    assert response.safe_zone.mark_clearance_mm == pytest.approx(7.0)
+    assert response.safe_zone.park_clearance_mm == pytest.approx(44.0)
+    assert response.safe_zone.margins_mm.left == pytest.approx(95.0)
+    assert response.safe_zone.margins_mm.right == pytest.approx(95.0)
+    assert response.safe_zone.margins_mm.bottom == pytest.approx(51.0)
+    assert response.safe_zone.margins_mm.top == pytest.approx(51.0)
 
     expected_center = _project_paper_to_camera(0.5, 0.5)
     assert response.points[0].point_id == "P01"
     assert response.points[0].camera_norm.x == pytest.approx(expected_center[0], abs=1e-9)
     assert response.points[0].camera_norm.y == pytest.approx(expected_center[1], abs=1e-9)
+    expected_bottom_left = _project_paper_to_camera(95.0 / 533.4, 51.0 / 215.9)
+    assert response.points[1].point_id == "P02"
+    assert response.points[1].paper_mm.x == pytest.approx(95.0)
+    assert response.points[1].paper_mm.y == pytest.approx(51.0)
+    assert response.points[1].camera_norm.x == pytest.approx(expected_bottom_left[0], abs=1e-9)
+    assert response.points[1].camera_norm.y == pytest.approx(expected_bottom_left[1], abs=1e-9)
     assert response.camera_segments[0].point_id == "P01"
     assert response.camera_segments[0].start_norm.x < response.camera_segments[0].end_norm.x
+
+
+def test_bridge_binding_mark_preview_rejects_collapsed_safe_region(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+    bridge.register_paper(
+        PaperRegistrationRequest(
+            paper_width_mm=533.4,
+            paper_height_mm=215.9,
+            corners=[
+                PaperRegistrationCornerRequest(
+                    corner=corner,  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
+                )
+                for corner, observed in [
+                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
+                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
+                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
+                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
+                ]
+            ],
+        )
+    )
+
+    response = bridge.preview_binding_marks(
+        BindingMarkPreviewRequest(mark_size_mm=4.0, extra_padding_mm=200.0)
+    )
+
+    assert response.status == "failed"
+    assert response.error is not None
+    assert "collapse" in response.error
 
 
 def test_bridge_machine_status_reports_dry_run_without_controller(tmp_path: Path) -> None:

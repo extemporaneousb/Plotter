@@ -51,36 +51,43 @@ struct CalibrationWizardStepRow: View {
     let title: String
     let detail: String
     let status: CalibrationWizardStepStatus
+    let onSelect: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("\(index)")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(.black.opacity(0.82))
-                .frame(width: 18, height: 18)
-                .background(status.color, in: Circle())
-            Image(systemName: status.symbolName)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(status.color)
-                .frame(width: 15)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.88))
-                    Text(status.label)
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(status.color)
+        Button {
+            onSelect?()
+        } label: {
+            HStack(spacing: 8) {
+                Text("\(index)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.black.opacity(0.82))
+                    .frame(width: 18, height: 18)
+                    .background(status.color, in: Circle())
+                Image(systemName: status.symbolName)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(status.color)
+                    .frame(width: 15)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.88))
+                        Text(status.label)
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(status.color)
+                    }
+                    Text(detail)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.56))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 }
-                Text(detail)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.56))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .frame(minHeight: 32)
         }
-        .frame(minHeight: 32)
+        .buttonStyle(.plain)
+        .disabled(onSelect == nil)
     }
 }
 

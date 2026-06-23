@@ -47,6 +47,8 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var visualBindingDetail = "No binding observations"
     @Published var visualBindingObservationCount = 0
     @Published var visualBindingValid = false
+    @Published var toolCapToTipModel: BridgeCapToTipModel?
+    @Published var drawableSafeZone: BridgeDrawingSafeZone?
     @Published var visualProbeEvidenceRunId = "swift-probe-\(UUID().uuidString.lowercased())"
     @Published var bindingMarkPreviewPoints: [BindingMarkPreviewPoint] = []
     @Published var bindingMarkPreviewSegments: [BindingMarkPreviewSegment] = []
@@ -64,6 +66,10 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var machineMaxFeedMmMin = 1200.0
     @Published var machineMaxJogMm = 50.0
     @Published var shapeSideMm = 35.0
+    @Published var bindingExtraPaddingMm = 40.0
+    @Published var bindingMaxMarkSizeMm = 14.0
+    @Published var bindingParkClearanceMm = 44.0
+    @Published var bindingObservationClearanceMm = 4.0
     @Published var shapeCenterXNorm = 0.5
     @Published var shapeCenterYNorm = 0.5
     @Published var shapeDrawFeedMmMin = 240.0
@@ -188,6 +194,95 @@ final class PlotterBridgeModel: ObservableObject {
             snapshot: true
         )
         return runId
+    }
+
+    func resetCalibrationSetup() async -> Bool {
+        guard isOnline else {
+            statusText = "Bridge offline"
+            return false
+        }
+        do {
+            let response = try await client.resetCalibrationSetup(BridgeSetupResetRequest())
+            paperRegistrationSnapshot = nil
+            paperTransformStatus = "PAPER --"
+            toolCapToTipModel = nil
+            drawableSafeZone = nil
+            _ = resetVisualCalibrationSession(prefix: "swift-reset")
+            drawVerifyStatus = "DRAW --"
+            drawVerifyDetail = "Preview a capability check before running"
+            expectedPathSegments = []
+            statusText = "Visual setup reset"
+            diagnosticsEvent(
+                "visual_setup_reset",
+                [
+                    "status": response.status,
+                    "cleared_files": response.clearedFiles,
+                    "missing_files": response.missingFiles
+                ],
+                snapshot: true
+            )
+            return response.status == "reset"
+        } catch {
+            statusText = error.localizedDescription
+            diagnosticsEvent("visual_setup_reset_failed", errorPayload(error), snapshot: true)
+            return false
+        }
+    }
+
+    func estimateToolOffset(cap: ConfirmedCapPoint, tip: ConfirmedCapPoint) async -> Bool {
+        guard let capPaper = cap.paperMm, let tipPaper = tip.paperMm else {
+            statusText = "Tool estimate requires cap and pen-tip field points"
+            return false
+        }
+        do {
+            let response = try await client.estimateToolOffset(
+                BridgeToolEstimateRequest(
+                    cap: BridgeToolEstimatePointRequest(
+                        observedNorm: NormPoint(cap.cameraPoint),
+                        paperMm: capPaper
+                    ),
+                    tip: BridgeToolEstimatePointRequest(
+                        observedNorm: NormPoint(tip.cameraPoint),
+                        paperMm: tipPaper
+                    ),
+                    extraPaddingMm: bindingExtraPaddingMm
+                )
+            )
+            toolCapToTipModel = response.capToTipModel
+            drawableSafeZone = response.safeZone
+            if let binding = response.binding {
+                applyVisualBindingStatus(
+                    BridgeVisualPositionBindingResponse(
+                        status: response.status,
+                        dryRun: response.dryRun,
+                        binding: binding,
+                        bindingFile: response.bindingFile,
+                        observationId: nil,
+                        error: response.error
+                    )
+                )
+            }
+            statusText = String(
+                format: "Tool offset %.1f, %.1f mm",
+                response.capToTipModel?.offsetXMm ?? 0.0,
+                response.capToTipModel?.offsetYMm ?? 0.0
+            )
+            diagnosticsEvent(
+                "tool_offset_estimated",
+                [
+                    "status": response.status,
+                    "offset_x_mm": response.capToTipModel?.offsetXMm ?? 0.0,
+                    "offset_y_mm": response.capToTipModel?.offsetYMm ?? 0.0,
+                    "extra_padding_mm": bindingExtraPaddingMm
+                ],
+                snapshot: true
+            )
+            return response.status == "ready"
+        } catch {
+            statusText = error.localizedDescription
+            diagnosticsEvent("tool_offset_estimate_failed", errorPayload(error), snapshot: true)
+            return false
+        }
     }
 
     var isMockBridge: Bool {
@@ -452,7 +547,7 @@ final class PlotterBridgeModel: ObservableObject {
         if hasBridgeApiMismatch { return "Bridge API mismatch" }
         if hasLifecycleBuildMismatch { return "App/bridge build mismatch" }
         if isDryRun { return "Bridge-run dry-run only" }
-        if !hasPaperLock { return "Paper homography missing" }
+        if !hasPaperLock { return "Visual field missing" }
         if !hasDrawingAuthority { return drawingAuthorityDetail }
         if isMachineAlarm { return "Machine alarm" }
         if isMachineBusy || isRunning { return "Machine busy" }
@@ -750,6 +845,8 @@ final class PlotterBridgeModel: ObservableObject {
 
     private func applyVisualBindingStatus(_ response: BridgeVisualPositionBindingResponse) {
         if let binding = response.binding {
+            toolCapToTipModel = binding.capToTipModel.source == "unsolved" ? nil : binding.capToTipModel
+            drawableSafeZone = binding.safeZone
             let observationCount = binding.residuals.observationCount
             visualBindingObservationCount = observationCount
             visualBindingValid = binding.validationStatus == "validated" && binding.blockers.isEmpty
@@ -770,6 +867,8 @@ final class PlotterBridgeModel: ObservableObject {
 
         visualBindingObservationCount = 0
         visualBindingValid = false
+        toolCapToTipModel = nil
+        drawableSafeZone = nil
         visualBindingStatus = response.status == "missing" ? "BIND --" : "BIND ERR"
         visualBindingDetail = response.error ?? "No binding observations"
     }
@@ -1037,9 +1136,9 @@ final class PlotterBridgeModel: ObservableObject {
         }
         guard hasPaperLock else {
             drawVerifyStatus = "DRAW BLOCK"
-            drawVerifyDetail = "Paper homography required"
-            statusText = "Paper homography required"
-            diagnosticsEvent("draw_verify_preview_blocked", ["kind": kind, "reason": "paper_homography_required"], snapshot: true)
+            drawVerifyDetail = "Visual field required"
+            statusText = "Visual field required"
+            diagnosticsEvent("draw_verify_preview_blocked", ["kind": kind, "reason": "visual_field_required"], snapshot: true)
             return false
         }
 
@@ -2766,8 +2865,8 @@ final class PlotterBridgeModel: ObservableObject {
             await refreshPaperStatus()
             if !hasPaperLock {
                 bindingMarkPreviewStatus = "BIND NEED PAPER"
-                statusText = "Paper homography required"
-                diagnosticsEvent("binding_mark_preview_blocked", ["point_set": pointSet, "reason": "paper_homography_required"], snapshot: true)
+                statusText = "Visual field required"
+                diagnosticsEvent("binding_mark_preview_blocked", ["point_set": pointSet, "reason": "visual_field_required"], snapshot: true)
                 return nil
             }
         }
@@ -2786,8 +2885,12 @@ final class PlotterBridgeModel: ObservableObject {
             let response = try await client.previewBindingMarks(
                 BindingMarkPreviewRequest(
                     pointSet: pointSet,
-                    marginMm: 40.0,
+                    marginMm: nil,
                     markSizeMm: 6.0,
+                    maxMarkSizeMm: bindingMaxMarkSizeMm,
+                    extraPaddingMm: bindingExtraPaddingMm,
+                    parkClearanceMm: bindingParkClearanceMm,
+                    observationClearanceMm: bindingObservationClearanceMm,
                     drawFeedMmMin: shapeDrawFeedMmMin,
                     travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 25.0
@@ -2798,6 +2901,7 @@ final class PlotterBridgeModel: ObservableObject {
             bindingMarkPreviewCommandId = response.commandId
             bindingMarkPreviewPlanHash = response.planHash
             bindingMarkPreviewPointSet = response.pointSet
+            drawableSafeZone = response.safeZone
             expectedPathSegments = []
             bindingMarkPreviewStatus = String(
                 format: "BIND %@ %dP %dS %@",

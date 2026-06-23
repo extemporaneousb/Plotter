@@ -27,7 +27,7 @@ Implemented vertical slices now include:
 
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
-- visual field setup from operator-clicked manual fiducials, backed internally by paper homography;
+- visual field setup from operator-clicked manual fiducials, with bridge-owned registration artifacts;
 - preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible.
 
@@ -37,22 +37,25 @@ The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
-3. Confirm or click the paper fiducials, then confirm or click the visible cap marker. If the bridge
-   already reports a locked visual field after restart and the rendered grid still aligns with the
-   physical setup, use Confirm Setup to reuse that registration without re-clicking fiducials.
-4. If the cap is outside the camera field, use the live-gated X-field recovery action. The app
+3. Confirm or click the paper fiducials. If the bridge already reports a locked visual field after
+   restart and the rendered grid still aligns with the physical setup, use Confirm Setup to reuse
+   that registration without re-clicking fiducials.
+4. Confirm or click the visible cap marker, then click the pen tip to save the cap-to-tip offset.
+   Setup reset clears the latest field/tool/probe/binding authority while preserving historical
+   evidence files.
+5. If the cap is outside the camera field, use the live-gated X-field recovery action. The app
    chooses a bounded X direction from current machine clearance; this is not homing and does not
    promote axis trust.
-5. Run or rerun Visual-Machine Calibration from the current cap location. The app samples bounded
+6. Run or rerun Visual-Machine Calibration from the current cap location. The app samples bounded
    X/Y carriage motion using live machine clearance instead of assuming a fixed +X bootstrap.
-6. Preview the expected binding marks on the video stream, draw the watched visual-relative marks,
-   collect ink observations, post them to `/calibration/binding/observe`, and solve
-   `/calibration/binding/solve`.
-7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
+7. Preview the expected binding marks from the computed safe drawable region, draw the watched
+   visual-relative marks, collect ink observations, post them to `/calibration/binding/observe`,
+   solve `/calibration/binding/solve`, and draw the ready frame around that same region.
+8. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
    drawing programs still require bridge preview before execution.
-8. Persist the learned parameters as future initialization values for the coordinate system and
+9. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
-9. Open Draw/Verify and draw through one of two lanes:
+10. Open Draw/Verify and draw through one of two lanes:
    - capability checks: simple-to-more-complex shape programs that can include coordinate markup;
    - portrait drawing: camera capture, contour or polygon extraction, and translation into the
      drawing program.
@@ -321,14 +324,15 @@ Interpretation rules:
   gates.
 
 In the app, use Visual Field Setup as the only setup path: manually clicked paper fiducials establish
-the field, the cap marker provides live carriage observations, and Visual-Machine Calibration learns
-bounded X/Y motion from current machine clearance. Binding ink marks validate the durable
-`VisualPositionBinding`. Bridge previews simulate the exact command stream and project the expected
-path into the camera view before any real drawing action is enabled. If simulated or observed geometry
-fails its gate, the bridge returns a failed response and does not send the command stream. After
-binding validation, use Draw/Verify for capability-check preview/run and shape or portrait drawing.
-Draw/Verify displays the latest bridge preview identity and only offers matching execution paths while
-Python safety, dry-run/live, paper, and binding gates allow them.
+the field, the cap marker plus clicked pen tip establishes the cap-to-tip offset, and Visual-Machine
+Calibration learns bounded X/Y motion from current machine clearance. Binding ink marks are placed
+inside the bridge-computed safe drawable region and validate the durable `VisualPositionBinding`.
+Bridge previews simulate the exact command stream and project the expected path into the camera view
+before any real drawing action is enabled. If simulated or observed geometry fails its gate, the
+bridge returns a failed response and does not send the command stream. After binding validation, use
+Draw/Verify for capability-check preview/run and shape or portrait drawing. Draw/Verify displays the
+latest bridge preview identity and only offers matching execution paths while Python safety,
+dry-run/live, paper, and binding gates allow them.
 Stop the background preview bridge with:
 
 ```bash

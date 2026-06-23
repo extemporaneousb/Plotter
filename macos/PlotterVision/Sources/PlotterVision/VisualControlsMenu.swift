@@ -6,6 +6,8 @@ struct VisualControlsMenu: View {
     @Binding var plotterOverlay: PlotterOverlaySettings
     @Binding var plotterViewport: PlotterViewportSettings
     @Binding var showImageProcessingPanel: Bool
+    let sampleCapColor: () -> Void
+    let resetCapColor: () -> Void
     let reset: () -> Void
 
     var body: some View {
@@ -39,6 +41,11 @@ struct VisualControlsMenu: View {
                     Label("Original Video", systemImage: "viewfinder")
                 }
                 Text("Viewport \(plotterViewport.focusLabel) \(plotterViewport.zoomLabel)")
+            }
+
+            Section("Cap Marker") {
+                Button("Sample Cap Color", action: sampleCapColor)
+                Button("Reset Cap Color", action: resetCapColor)
             }
 
             Section("Image Baseline") {

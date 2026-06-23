@@ -579,6 +579,85 @@ struct PaperRegistrationResponse: Decodable {
     let error: String?
 }
 
+struct BridgeSetupResetRequest: Encodable {
+    let requestId: String? = nil
+    let preserveHistory: Bool = true
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
+struct BridgeSetupResetResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let preserveHistory: Bool
+    let clearedFiles: [String]
+    let missingFiles: [String]
+    let eventLog: String
+    let error: String?
+}
+
+struct BridgeToolEstimatePointRequest: Encodable {
+    let observedNorm: NormPoint?
+    let paperMm: PaperPointMmSnapshot?
+}
+
+struct BridgeToolEstimateRequest: Encodable {
+    let cap: BridgeToolEstimatePointRequest
+    let tip: BridgeToolEstimatePointRequest
+    let source: String = "operator_measurement"
+    let extraPaddingMm: Double
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
+struct BridgeToolEstimateResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let capToTipModel: BridgeCapToTipModel?
+    let safeZone: BridgeDrawingSafeZone?
+    let binding: BridgeVisualPositionBinding?
+    let bindingFile: String
+    let eventLog: String
+    let error: String?
+}
+
+struct BridgeCapToTipModel: Decodable, Equatable {
+    let modelType: String
+    let offsetXMm: Double
+    let offsetYMm: Double
+    let source: String
+}
+
+struct BridgeSafeZoneMargins: Decodable, Equatable {
+    let left: Double
+    let right: Double
+    let bottom: Double
+    let top: Double
+}
+
+struct BridgeDrawingSafeZone: Decodable, Equatable {
+    let schemaVersion: Int
+    let artifactType: String
+    let marginsMm: BridgeSafeZoneMargins
+    let extraPaddingMm: Double
+    let markClearanceMm: Double
+    let parkClearanceMm: Double
+    let observationClearanceMm: Double
+    let capToTipOffsetXMm: Double
+    let capToTipOffsetYMm: Double
+    let logicalMinXMm: Double
+    let logicalMaxXMm: Double
+    let logicalMinYMm: Double
+    let logicalMaxYMm: Double
+    let paperMinXNorm: Double
+    let paperMaxXNorm: Double
+    let paperMinYNorm: Double
+    let paperMaxYNorm: Double
+}
+
 struct PaperRegistrationSnapshot: Decodable {
     let registrationId: String
     let status: String
@@ -600,8 +679,12 @@ struct HomographySnapshot: Decodable {
 
 struct BindingMarkPreviewRequest: Encodable {
     let pointSet: String
-    let marginMm: Double
+    let marginMm: Double?
     let markSizeMm: Double
+    let maxMarkSizeMm: Double
+    let extraPaddingMm: Double
+    let parkClearanceMm: Double
+    let observationClearanceMm: Double
     let drawFeedMmMin: Double
     let travelFeedMmMin: Double
     let maxSegmentMm: Double
@@ -620,6 +703,7 @@ struct BindingMarkPreviewResponse: Decodable {
     let pointSet: String
     let pointCount: Int
     let markSizeMm: Double
+    let safeZone: BridgeDrawingSafeZone?
     let planHash: String
     let plannedCommands: [String]
     let simulation: BridgeShapeSimulation?
@@ -892,6 +976,8 @@ struct BridgeVisualPositionBinding: Decodable {
     let bindingId: String
     let paperRegistrationId: String
     let camera: BridgeBindingCameraIdentity
+    let safeZone: BridgeDrawingSafeZone?
+    let capToTipModel: BridgeCapToTipModel
     let commandIds: [String]
     let expectedSimulatedGeometry: [BridgeExpectedGeometrySample]
     let observedGeometry: [BridgeObservedGeometrySample]
@@ -1076,6 +1162,14 @@ final class PlotterBridgeClient {
         }
         try validate(response: response, data: data)
         return try decoder.decode(PaperRegistrationResponse.self, from: data)
+    }
+
+    func resetCalibrationSetup(_ request: BridgeSetupResetRequest) async throws -> BridgeSetupResetResponse {
+        try await post(path: "calibration/setup/reset", request: request)
+    }
+
+    func estimateToolOffset(_ request: BridgeToolEstimateRequest) async throws -> BridgeToolEstimateResponse {
+        try await post(path: "calibration/tool/estimate", request: request)
     }
 
     func previewBindingMarks(_ request: BindingMarkPreviewRequest) async throws -> BindingMarkPreviewResponse {

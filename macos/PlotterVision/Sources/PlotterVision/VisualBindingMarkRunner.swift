@@ -10,6 +10,33 @@ let visualBindingMinimumMarkDrawFeedMmMin = 160.0
 let visualMotionTravelFeedMmMin = 1200.0
 let visualBindingParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]
 
+struct VisualBindingMarkClearance {
+    let canDrawAndPark: Bool
+    let blocker: String?
+    let xMm: Double?
+    let yMm: Double?
+    let leftMm: Double?
+    let rightMm: Double?
+    let bottomMm: Double?
+    let topMm: Double?
+    let parkTargetXMm: Double?
+
+    var eventPayload: [String: Any] {
+        var payload: [String: Any] = [
+            "clearance_ok": canDrawAndPark,
+            "clearance_blocker": blocker ?? ""
+        ]
+        if let xMm { payload["machine_x_mm"] = xMm }
+        if let yMm { payload["machine_y_mm"] = yMm }
+        if let leftMm { payload["clearance_left_mm"] = leftMm }
+        if let rightMm { payload["clearance_right_mm"] = rightMm }
+        if let bottomMm { payload["clearance_bottom_mm"] = bottomMm }
+        if let topMm { payload["clearance_top_mm"] = topMm }
+        if let parkTargetXMm { payload["park_target_x_mm"] = parkTargetXMm }
+        return payload
+    }
+}
+
 extension ContentView {
     @MainActor
     func runVisualBindingPoint(
@@ -84,6 +111,30 @@ extension ContentView {
                 continue
             }
 
+            await bridge.refreshMachineStatus()
+            let clearance = visualBindingMarkClearance(
+                markSizeMm: markSizeMm,
+                parkDxMm: parkDxMm
+            )
+            guard clearance.canDrawAndPark else {
+                recordVisualBindingMarkAttempt(
+                    pattern: pattern,
+                    point: point,
+                    attempt: attempt,
+                    accepted: false,
+                    reason: "clearance_failed",
+                    markSizeMm: markSizeMm,
+                    drawFeedMmMin: drawFeedMmMin,
+                    parkDxMm: parkDxMm,
+                    inkResult: nil,
+                    finalDistanceMm: finalDistance,
+                    clearance: clearance
+                )
+                bridge.visualCenterDotStatus = "VIS CLEARANCE"
+                calibrationStatusText = "CAL visual \(pattern) \(point.pointId) clearance blocked: \(clearance.blocker ?? "unknown")"
+                return false
+            }
+
             guard await bridge.relativeMarkCurrentPosition(
                 markSizeMm: markSizeMm,
                 drawFeedMmMin: drawFeedMmMin
@@ -98,7 +149,8 @@ extension ContentView {
                     drawFeedMmMin: drawFeedMmMin,
                     parkDxMm: parkDxMm,
                     inkResult: nil,
-                    finalDistanceMm: finalDistance
+                    finalDistanceMm: finalDistance,
+                    clearance: clearance
                 )
                 calibrationStatusText = "CAL visual \(pattern) \(point.pointId) mark failed; retrying"
                 continue
@@ -119,7 +171,8 @@ extension ContentView {
                     drawFeedMmMin: drawFeedMmMin,
                     parkDxMm: parkDxMm,
                     inkResult: nil,
-                    finalDistanceMm: finalDistance
+                    finalDistanceMm: finalDistance,
+                    clearance: clearance
                 )
                 continue
             }
@@ -136,7 +189,8 @@ extension ContentView {
                 drawFeedMmMin: drawFeedMmMin,
                 parkDxMm: parkDxMm,
                 inkResult: inkResult,
-                finalDistanceMm: finalDistance
+                finalDistanceMm: finalDistance,
+                clearance: clearance
             )
             if accepted {
                 guard await recordVisualBindingInkObservation(
@@ -197,6 +251,49 @@ extension ContentView {
         return positiveRoom >= negativeRoom ? min(requested.magnitude, positiveRoom) : -min(requested.magnitude, negativeRoom)
     }
 
+    func visualBindingMarkClearance(markSizeMm: Double, parkDxMm: Double) -> VisualBindingMarkClearance {
+        guard bridge.machineMPosMm.count >= 2 else {
+            return VisualBindingMarkClearance(
+                canDrawAndPark: false,
+                blocker: "machine position unavailable",
+                xMm: nil,
+                yMm: nil,
+                leftMm: nil,
+                rightMm: nil,
+                bottomMm: nil,
+                topMm: nil,
+                parkTargetXMm: nil
+            )
+        }
+        let xMm = bridge.machineMPosMm[0]
+        let yMm = bridge.machineMPosMm[1]
+        let half = max(0.0, markSizeMm / 2.0)
+        let left = xMm - half
+        let right = bridge.workspaceXMm - xMm - half
+        let bottom = yMm - half
+        let top = bridge.workspaceYMm - yMm - half
+        let parkTargetX = xMm + parkDxMm
+        var blockers: [String] = []
+        if left < 0 { blockers.append(String(format: "mark exceeds X- by %.1fmm", -left)) }
+        if right < 0 { blockers.append(String(format: "mark exceeds X+ by %.1fmm", -right)) }
+        if bottom < 0 { blockers.append(String(format: "mark exceeds Y- by %.1fmm", -bottom)) }
+        if top < 0 { blockers.append(String(format: "mark exceeds Y+ by %.1fmm", -top)) }
+        if parkTargetX < 2.0 || parkTargetX > bridge.workspaceXMm - 2.0 {
+            blockers.append(String(format: "park target X %.1f outside clearance", parkTargetX))
+        }
+        return VisualBindingMarkClearance(
+            canDrawAndPark: blockers.isEmpty,
+            blocker: blockers.isEmpty ? nil : blockers.joined(separator: "; "),
+            xMm: xMm,
+            yMm: yMm,
+            leftMm: left,
+            rightMm: right,
+            bottomMm: bottom,
+            topMm: top,
+            parkTargetXMm: parkTargetX
+        )
+    }
+
     @MainActor
     func recordVisualBindingMarkAttempt(
         pattern: String,
@@ -208,7 +305,8 @@ extension ContentView {
         drawFeedMmMin: Double,
         parkDxMm: Double,
         inkResult: InkInspectionResult?,
-        finalDistanceMm: Double? = nil
+        finalDistanceMm: Double? = nil,
+        clearance: VisualBindingMarkClearance? = nil
     ) {
         var details: [String: Any] = [
             "pattern": pattern,
@@ -224,6 +322,9 @@ extension ContentView {
         ]
         if let finalDistanceMm {
             details["final_distance_mm"] = finalDistanceMm
+        }
+        if let clearance {
+            details.merge(clearance.eventPayload) { current, _ in current }
         }
         if let inkResult {
             details["ink_visible"] = inkResult.isVisible

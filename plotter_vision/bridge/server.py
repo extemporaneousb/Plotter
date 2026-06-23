@@ -29,6 +29,7 @@ from plotter_vision.calibration.paper import (
     build_paper_frame_registration,
 )
 from plotter_vision.calibration.binding import (
+    CapToTipModel,
     ExpectedGeometrySample,
     ObservedGeometrySample,
     VisualPositionBinding,
@@ -117,6 +118,10 @@ from plotter_vision.motion.simulator import (
 BindingMarkPointSet = Literal["five"]
 BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
 BRIDGE_API_VERSION = 3
+DEFAULT_DRAWABLE_EXTRA_PADDING_MM = 40.0
+DEFAULT_BINDING_MARK_MAX_SIZE_MM = 14.0
+DEFAULT_BINDING_MARK_OBSERVATION_CLEARANCE_MM = 4.0
+DEFAULT_BINDING_PARK_CLEARANCE_MM = 44.0
 BRIDGE_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -440,8 +445,8 @@ class VisualCapObservationRequest(TraceContextFields):
     confidence: float = 1.0
     camera_id: str | None = None
     camera_name: str | None = None
-    safe_zone_inset_x_mm: float = 10.0
-    safe_zone_inset_y_mm: float = 10.0
+    safe_zone_inset_x_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM
+    safe_zone_inset_y_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM
     request_id: str | None = None
 
 
@@ -516,10 +521,53 @@ class VisualProbeSampleObservationResponse(BaseModel):
     error: str | None = None
 
 
+class CalibrationSetupResetRequest(TraceContextFields):
+    request_id: str | None = None
+    preserve_history: bool = True
+
+
+class CalibrationSetupResetResponse(BaseModel):
+    status: str
+    dry_run: bool
+    preserve_history: bool = True
+    cleared_files: list[str] = Field(default_factory=list)
+    missing_files: list[str] = Field(default_factory=list)
+    event_log: str
+    error: str | None = None
+
+
+class ToolEstimatePointRequest(BaseModel):
+    observed_norm: CameraPointNorm | None = None
+    paper_mm: PaperPointMM | None = None
+
+
+class ToolEstimateRequest(TraceContextFields):
+    cap: ToolEstimatePointRequest
+    tip: ToolEstimatePointRequest
+    source: Literal["operator_measurement"] = "operator_measurement"
+    extra_padding_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM
+    request_id: str | None = None
+
+
+class ToolEstimateResponse(BaseModel):
+    status: str
+    dry_run: bool
+    cap_to_tip_model: CapToTipModel | None = None
+    safe_zone: DrawingSafeZone | None = None
+    binding: VisualPositionBinding | None = None
+    binding_file: str = ""
+    event_log: str
+    error: str | None = None
+
+
 class BindingMarkPreviewRequest(TraceContextFields):
     point_set: BindingMarkPointSet = "five"
-    margin_mm: float = 40.0
+    margin_mm: float | None = None
     mark_size_mm: float = 6.0
+    max_mark_size_mm: float = DEFAULT_BINDING_MARK_MAX_SIZE_MM
+    extra_padding_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM
+    park_clearance_mm: float = DEFAULT_BINDING_PARK_CLEARANCE_MM
+    observation_clearance_mm: float = DEFAULT_BINDING_MARK_OBSERVATION_CLEARANCE_MM
     draw_feed_mm_min: float = 240.0
     travel_feed_mm_min: float = 1200.0
     max_segment_mm: float = 25.0
@@ -550,6 +598,7 @@ class BindingMarkPreviewResponse(BaseModel):
     point_set: BindingMarkPointSet = "five"
     point_count: int = 0
     mark_size_mm: float = 0.0
+    safe_zone: DrawingSafeZone | None = None
     plan_hash: str = ""
     planned_commands: list[str] = Field(default_factory=list)
     simulation: SimulatedPath | None = None
@@ -563,6 +612,7 @@ class BindingMarkPreviewResponse(BaseModel):
 class BindingMarkPreviewBundle:
     machine: MachineConfig
     registration: PaperFrameRegistration
+    safe_zone: DrawingSafeZone
     plan: PolygonDrawPlan
     points: list[tuple[str, PaperPointMM]]
     camera_points: list[BindingMarkPreviewPoint]
@@ -2159,6 +2209,133 @@ class PlotterBridge:
                 error=str(exc),
             )
 
+    def reset_calibration_setup(
+        self,
+        request: CalibrationSetupResetRequest,
+    ) -> CalibrationSetupResetResponse:
+        command_id = request.request_id or request.trace_id or f"setup-reset-{uuid.uuid4().hex[:12]}"
+        pointer_paths = [
+            self._latest_paper_registration_path(),
+            self._latest_visual_readiness_path(),
+            self._latest_visual_probe_run_path(),
+            self._latest_visual_position_binding_path(),
+        ]
+        cleared: list[str] = []
+        missing: list[str] = []
+        try:
+            for path in pointer_paths:
+                if path.exists():
+                    path.unlink()
+                    cleared.append(str(path))
+                else:
+                    missing.append(str(path))
+            self.event_log.emit(
+                "calibration.setup_reset",
+                command_id=command_id,
+                status="reset",
+                payload={
+                    "preserve_history": request.preserve_history,
+                    "cleared_files": cleared,
+                    "missing_files": missing,
+                },
+            )
+            return CalibrationSetupResetResponse(
+                status="reset",
+                dry_run=self.config.dry_run,
+                preserve_history=request.preserve_history,
+                cleared_files=cleared,
+                missing_files=missing,
+                event_log=str(self.config.event_log_path),
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.setup_reset_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "cleared_files": cleared},
+            )
+            return CalibrationSetupResetResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                preserve_history=request.preserve_history,
+                cleared_files=cleared,
+                missing_files=missing,
+                event_log=str(self.config.event_log_path),
+                error=str(exc),
+            )
+
+    def estimate_tool_offset(self, request: ToolEstimateRequest) -> ToolEstimateResponse:
+        command_id = request.request_id or request.trace_id or f"tool-estimate-{uuid.uuid4().hex[:12]}"
+        try:
+            machine = self._load_machine_config()
+            registration = self._load_latest_paper_registration()
+            cap = self._tool_estimate_point_paper_mm(request.cap, registration=registration)
+            tip = self._tool_estimate_point_paper_mm(request.tip, registration=registration)
+            model = CapToTipModel(
+                offset_x_mm=tip.x - cap.x,
+                offset_y_mm=tip.y - cap.y,
+                source=request.source,
+            )
+            safe_zone = self._drawing_safe_zone(
+                machine=machine,
+                cap_to_tip_model=model,
+                extra_padding_mm=request.extra_padding_mm,
+            )
+            binding = self._load_or_create_visual_position_binding(registration=registration)
+            binding.cap_to_tip_model = model
+            binding.safe_zone = safe_zone
+            binding.updated_at = _utc_now_iso()
+            self._save_visual_position_binding(binding)
+
+            readiness = self._load_latest_visual_readiness_or_none()
+            if readiness is not None and readiness.latest_cap_observation is not None:
+                evaluation = evaluate_cap_inside_safe_zone(
+                    observation=readiness.latest_cap_observation,
+                    safe_zone=safe_zone,
+                )
+                readiness = self._visual_state_from_evidence(
+                    cap=readiness.latest_cap_observation,
+                    safe_zone_evaluation=evaluation,
+                    previous=readiness,
+                )
+                self._save_visual_readiness(readiness)
+
+            self.event_log.emit(
+                "calibration.tool_estimate_saved",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "binding_id": binding.binding_id,
+                    "offset_x_mm": model.offset_x_mm,
+                    "offset_y_mm": model.offset_y_mm,
+                    "extra_padding_mm": safe_zone.extra_padding_mm,
+                    "safe_zone_margins_mm": safe_zone.margins_mm.model_dump(mode="json"),
+                },
+            )
+            return ToolEstimateResponse(
+                status="ready",
+                dry_run=self.config.dry_run,
+                cap_to_tip_model=model,
+                safe_zone=safe_zone,
+                binding=binding,
+                binding_file=str(self._latest_visual_position_binding_path()),
+                event_log=str(self.config.event_log_path),
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.tool_estimate_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return ToolEstimateResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                binding_file=str(self._latest_visual_position_binding_path()),
+                event_log=str(self.config.event_log_path),
+                error=str(exc),
+            )
+
     def visual_readiness_status(self) -> VisualReadinessResponse:
         try:
             state = self._load_latest_visual_readiness()
@@ -2242,10 +2419,10 @@ class PlotterBridge:
 
             previous = self._load_latest_visual_readiness_or_none()
             machine = self._load_machine_config()
-            safe_zone = (
-                previous.safe_zone
-                if previous is not None and previous.safe_zone is not None
-                else self._drawing_safe_zone(machine=machine, inset_x_mm=10.0, inset_y_mm=10.0)
+            safe_zone = self._current_drawing_safe_zone(
+                machine=machine,
+                registration=registration,
+                previous=previous,
             )
             cap = VisualCapObservation(
                 timestamp=sample.observed_at,
@@ -2318,10 +2495,10 @@ class PlotterBridge:
                 registration=registration,
             )
             previous = self._load_latest_visual_readiness_or_none()
-            safe_zone = self._drawing_safe_zone(
+            safe_zone = self._current_drawing_safe_zone(
                 machine=machine,
-                inset_x_mm=request.safe_zone_inset_x_mm,
-                inset_y_mm=request.safe_zone_inset_y_mm,
+                registration=registration,
+                previous=previous,
             )
             evaluation = evaluate_cap_inside_safe_zone(observation=cap, safe_zone=safe_zone)
             state = self._visual_state_from_evidence(
@@ -2534,6 +2711,7 @@ class PlotterBridge:
                 point_set=request.point_set,
                 point_count=len(mark_plan.points),
                 mark_size_mm=request.mark_size_mm,
+                safe_zone=mark_plan.safe_zone,
                 plan_hash=mark_plan.plan_hash,
                 planned_commands=mark_plan.plan.command_strings,
                 simulation=mark_plan.plan.simulation,
@@ -2551,6 +2729,8 @@ class PlotterBridge:
                     "point_count": len(mark_plan.points),
                     "camera_segment_count": len(mark_plan.camera_segments),
                     "plan_hash": mark_plan.plan_hash,
+                    "safe_zone_margins_mm": mark_plan.safe_zone.margins_mm.model_dump(mode="json"),
+                    "extra_padding_mm": mark_plan.safe_zone.extra_padding_mm,
                     "preview_only": True,
                 },
             )
@@ -2580,10 +2760,21 @@ class PlotterBridge:
     ) -> BindingMarkPreviewBundle:
         machine = self._load_machine_config()
         registration = self._load_latest_paper_registration()
+        binding = self._load_or_create_visual_position_binding(registration=registration)
+        safe_zone = self._drawing_safe_zone(
+            machine=machine,
+            cap_to_tip_model=binding.cap_to_tip_model,
+            extra_padding_mm=request.extra_padding_mm,
+            max_mark_size_mm=max(request.max_mark_size_mm, request.mark_size_mm),
+            park_clearance_mm=request.park_clearance_mm,
+            observation_clearance_mm=request.observation_clearance_mm,
+        )
+        binding.safe_zone = safe_zone
+        self._save_visual_position_binding(binding)
         points = _binding_mark_points(
             registration=registration,
             point_set=request.point_set,
-            margin_mm=request.margin_mm,
+            safe_zone=safe_zone,
         )
         polylines, segment_point_ids = _binding_mark_polylines(
             points=points,
@@ -2628,6 +2819,7 @@ class PlotterBridge:
         return BindingMarkPreviewBundle(
             machine=machine,
             registration=registration,
+            safe_zone=safe_zone,
             plan=plan,
             points=points,
             camera_points=camera_points,
@@ -4338,6 +4530,45 @@ class PlotterBridge:
         except Exception:
             return None
 
+    def _policy_safe_zone_or_none(
+        self,
+        safe_zone: DrawingSafeZone | None,
+    ) -> DrawingSafeZone | None:
+        if safe_zone is None:
+            return None
+        if safe_zone.extra_padding_mm < DEFAULT_DRAWABLE_EXTRA_PADDING_MM:
+            return None
+        return safe_zone
+
+    def _current_drawing_safe_zone(
+        self,
+        *,
+        machine: MachineConfig,
+        registration: PaperFrameRegistration | None = None,
+        previous: VisualReadinessState | None = None,
+        cap_to_tip_model: CapToTipModel | None = None,
+    ) -> DrawingSafeZone:
+        readiness_zone = self._policy_safe_zone_or_none(
+            previous.safe_zone if previous is not None else None
+        )
+        if readiness_zone is not None:
+            return readiness_zone
+
+        binding = self._load_latest_visual_position_binding_or_none()
+        if binding is not None and (
+            registration is None or binding.paper_registration_id == registration.registration_id
+        ):
+            binding_zone = self._policy_safe_zone_or_none(binding.safe_zone)
+            if binding_zone is not None:
+                return binding_zone
+            if cap_to_tip_model is None:
+                cap_to_tip_model = binding.cap_to_tip_model
+
+        return self._drawing_safe_zone(
+            machine=machine,
+            cap_to_tip_model=cap_to_tip_model,
+        )
+
     def _load_or_create_visual_position_binding(
         self,
         *,
@@ -4352,10 +4583,10 @@ class PlotterBridge:
         cap_observations = []
         if readiness is not None and readiness.latest_cap_observation is not None:
             cap_observations.append(readiness.latest_cap_observation)
-        safe_zone = (
-            readiness.safe_zone
-            if readiness is not None and readiness.safe_zone is not None
-            else self._drawing_safe_zone(machine=machine, inset_x_mm=10.0, inset_y_mm=10.0)
+        safe_zone = self._current_drawing_safe_zone(
+            machine=machine,
+            registration=registration,
+            previous=readiness,
         )
         binding = create_visual_position_binding(
             paper_registration_id=registration.registration_id,
@@ -4546,13 +4777,55 @@ class PlotterBridge:
             paper_registration_id=registration.registration_id,
         )
 
+    def _tool_estimate_point_paper_mm(
+        self,
+        point: ToolEstimatePointRequest,
+        *,
+        registration: PaperFrameRegistration,
+    ) -> PaperPointMM:
+        if point.paper_mm is not None:
+            return point.paper_mm
+        if point.observed_norm is not None:
+            return registration.camera_norm_to_paper_mm(point.observed_norm)
+        raise ValueError("Tool estimate points require paper_mm or observed_norm.")
+
     def _drawing_safe_zone(
         self,
         *,
         machine: MachineConfig,
-        inset_x_mm: float,
-        inset_y_mm: float,
+        inset_x_mm: float | None = None,
+        inset_y_mm: float | None = None,
+        cap_to_tip_model: CapToTipModel | None = None,
+        extra_padding_mm: float = DEFAULT_DRAWABLE_EXTRA_PADDING_MM,
+        max_mark_size_mm: float = DEFAULT_BINDING_MARK_MAX_SIZE_MM,
+        park_clearance_mm: float = DEFAULT_BINDING_PARK_CLEARANCE_MM,
+        observation_clearance_mm: float = DEFAULT_BINDING_MARK_OBSERVATION_CLEARANCE_MM,
     ) -> DrawingSafeZone:
+        cap_offset_x = (
+            cap_to_tip_model.offset_x_mm
+            if cap_to_tip_model is not None and cap_to_tip_model.source != "unsolved"
+            else 0.0
+        )
+        cap_offset_y = (
+            cap_to_tip_model.offset_y_mm
+            if cap_to_tip_model is not None and cap_to_tip_model.source != "unsolved"
+            else 0.0
+        )
+        mark_clearance_mm = max(0.0, max_mark_size_mm / 2.0)
+        base_x = max(
+            inset_x_mm if inset_x_mm is not None else 0.0,
+            extra_padding_mm + mark_clearance_mm + observation_clearance_mm,
+        )
+        base_y = max(
+            inset_y_mm if inset_y_mm is not None else 0.0,
+            extra_padding_mm + mark_clearance_mm + observation_clearance_mm,
+        )
+        # Current binding parking moves along X, so reserve X room without shrinking Y unnecessarily.
+        base_x += max(0.0, park_clearance_mm)
+        left = base_x + max(0.0, cap_offset_x)
+        right = base_x + max(0.0, -cap_offset_x)
+        bottom = base_y + max(0.0, cap_offset_y)
+        top = base_y + max(0.0, -cap_offset_y)
         return DrawingSafeZone.from_frame(
             drawing_frame=DrawingFrameMM(
                 origin_x_mm=machine.workspace.x_min,
@@ -4561,11 +4834,17 @@ class PlotterBridge:
                 height_mm=machine.workspace.y_max - machine.workspace.y_min,
             ),
             margins_mm=SafeZoneMarginsMM(
-                left=inset_x_mm,
-                right=inset_x_mm,
-                bottom=inset_y_mm,
-                top=inset_y_mm,
+                left=left,
+                right=right,
+                bottom=bottom,
+                top=top,
             ),
+            extra_padding_mm=extra_padding_mm,
+            mark_clearance_mm=mark_clearance_mm,
+            park_clearance_mm=park_clearance_mm,
+            observation_clearance_mm=observation_clearance_mm,
+            cap_to_tip_offset_x_mm=cap_offset_x,
+            cap_to_tip_offset_y_mm=cap_offset_y,
         )
 
     def _visual_state_from_evidence(
@@ -5008,22 +5287,20 @@ def _binding_mark_points(
     *,
     registration: PaperFrameRegistration,
     point_set: BindingMarkPointSet,
-    margin_mm: float,
+    safe_zone: DrawingSafeZone,
 ) -> list[tuple[str, PaperPointMM]]:
     width = registration.paper_size_mm.width
     height = registration.paper_size_mm.height
-    if margin_mm < 0:
-        raise ValueError("Binding mark margin_mm must be non-negative.")
-    if margin_mm * 2 >= width or margin_mm * 2 >= height:
-        raise ValueError("Binding mark margin_mm leaves no drawable paper area.")
     if point_set != "five":
         raise ValueError("Binding mark preview supports only the five-point set.")
 
-    center = PaperPointMM(x=width / 2.0, y=height / 2.0)
-    left = margin_mm
-    right = width - margin_mm
-    bottom = margin_mm
-    top = height - margin_mm
+    left = safe_zone.paper_min_x_norm * width
+    right = safe_zone.paper_max_x_norm * width
+    bottom = safe_zone.paper_min_y_norm * height
+    top = safe_zone.paper_max_y_norm * height
+    if left >= right or bottom >= top:
+        raise ValueError("Binding safe drawable region is collapsed.")
+    center = PaperPointMM(x=(left + right) / 2.0, y=(bottom + top) / 2.0)
     points = [
         center,
         PaperPointMM(x=left, y=bottom),
@@ -5526,6 +5803,16 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             VisualCapObservationRequest,
             bridge.observe_visual_cap,
             lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/calibration/setup/reset": PostRoute(
+            CalibrationSetupResetRequest,
+            bridge.reset_calibration_setup,
+            lambda response: getattr(response, "status", "") == "reset",
+        ),
+        "/calibration/tool/estimate": PostRoute(
+            ToolEstimateRequest,
+            bridge.estimate_tool_offset,
+            lambda response: getattr(response, "status", "") == "ready",
         ),
         "/calibration/binding/preview": PostRoute(
             BindingMarkPreviewRequest,
