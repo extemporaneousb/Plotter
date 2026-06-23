@@ -83,7 +83,7 @@ coordinates when sending motion commands.
 - Exposes the Machine panel as the operator surface for bridge/controller state, arm gates, alarms,
   busy state, stop/resume, pen actions, homing, centering, and jogs.
 - Supports the Visual Field Setup flow: manual paper fiducials, cap marker confirmation,
-  clearance-aware visual-machine calibration, and watched mark drawing. When the bridge already
+  clearance-aware motion calibration, and watched drawing calibration marks. When the bridge already
   reports a locked visual field after restart and the grid still aligns, Confirm Setup reuses that
   registration without re-clicking fiducials.
 - Presents two post-calibration lanes in Draw/Verify: capability checks and portrait/image-to-shape
@@ -93,7 +93,7 @@ The current true app flow is:
 
 ```text
 launch -> Visual Field Setup -> manual/confirmed fiducials -> cap confirmation
-  -> Visual-Machine Calibration -> preview binding marks -> run watched binding marks
+  -> Motion Calibration -> Drawing Calibration
   -> /calibration/binding/observe -> /calibration/binding/solve
   -> validated VisualPositionBinding -> preview -> Draw/Verify
 ```

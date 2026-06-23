@@ -46,6 +46,9 @@ def test_visual_position_binding_validates_affine_residuals() -> None:
     assert set(solved.residuals.axes_represented) == {"X", "Y"}
     assert solved.residuals.rms_residual_mm is not None
     assert solved.residuals.rms_residual_mm < 1e-9
+    assert solved.cap_to_tip_model.source == "residual_solver"
+    assert solved.cap_to_tip_model.offset_x_mm == 1.5
+    assert solved.cap_to_tip_model.offset_y_mm == -2.0
 
 
 def test_visual_position_binding_blocks_collinear_observations() -> None:

@@ -597,33 +597,6 @@ struct BridgeSetupResetResponse: Decodable {
     let error: String?
 }
 
-struct BridgeToolEstimatePointRequest: Encodable {
-    let observedNorm: NormPoint?
-    let paperMm: PaperPointMmSnapshot?
-}
-
-struct BridgeToolEstimateRequest: Encodable {
-    let cap: BridgeToolEstimatePointRequest
-    let tip: BridgeToolEstimatePointRequest
-    let source: String = "operator_measurement"
-    let extraPaddingMm: Double
-    let requestId: String? = nil
-    let traceId: String? = nil
-    let spanId: String? = nil
-    let parentSpanId: String? = nil
-}
-
-struct BridgeToolEstimateResponse: Decodable {
-    let status: String
-    let dryRun: Bool
-    let capToTipModel: BridgeCapToTipModel?
-    let safeZone: BridgeDrawingSafeZone?
-    let binding: BridgeVisualPositionBinding?
-    let bindingFile: String
-    let eventLog: String
-    let error: String?
-}
-
 struct BridgeCapToTipModel: Decodable, Equatable {
     let modelType: String
     let offsetXMm: Double
@@ -1166,10 +1139,6 @@ final class PlotterBridgeClient {
 
     func resetCalibrationSetup(_ request: BridgeSetupResetRequest) async throws -> BridgeSetupResetResponse {
         try await post(path: "calibration/setup/reset", request: request)
-    }
-
-    func estimateToolOffset(_ request: BridgeToolEstimateRequest) async throws -> BridgeToolEstimateResponse {
-        try await post(path: "calibration/tool/estimate", request: request)
     }
 
     func previewBindingMarks(_ request: BindingMarkPreviewRequest) async throws -> BindingMarkPreviewResponse {

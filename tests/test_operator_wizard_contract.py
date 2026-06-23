@@ -230,8 +230,8 @@ def test_wizard_drives_visual_position_binding_loop() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
 
-    assert "Preview Binding Marks" in content
-    assert "Run Binding Marks" in content
+    assert "Run Drawing Calibration" in content
+    assert "runWizardDrawingCalibration()" in content
     assert "recordVisualBindingInkObservation" in content
     assert "observeVisualBindingPoint" in content
     assert "solveVisualBinding" in content
@@ -311,24 +311,43 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
 
 
-def test_visual_field_setup_requires_tool_estimate_before_visual_machine() -> None:
+def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+    support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
-    assert "Click Pen Tip" in wizard
-    assert "private func startManualPenTipClick" in content
-    assert "private func recordConfirmedPenTip" in content
-    assert "estimateToolOffset(cap: cap, tip: tip)" in content
-    assert "bridge.toolCapToTipModel == nil { return \"Click Pen Tip\" }" in content
-    assert "&& bridge.toolCapToTipModel != nil" in content
-    assert "pen tip not confirmed" in content
-    assert "BridgeToolEstimateRequest" in client
-    assert 'post(path: "calibration/tool/estimate"' in client
+    assert 'title: "Fiducials"' in wizard
+    assert 'title: "Green Cap"' in wizard
+    assert 'title: "Motion Calibration"' in wizard
+    assert 'title: "Drawing Calibration"' in wizard
+    assert 'title: "Visual Field"' not in wizard
+    assert 'title: "Tool"' not in wizard
+    assert "Draw/Verify" not in wizard
+    assert "Click Pen Tip" not in wizard
+    assert "Move Field" not in wizard
+    assert "onSelect" not in support
+    assert "Button {" not in support.split("struct CalibrationWizardStepRow", 1)[1].split("enum CameraLayoutMode", 1)[0]
+
+    assert "private func startManualPenTipClick" not in content
+    assert "private func recordConfirmedPenTip" not in content
+    assert "manualPenTipMode" not in content
+    assert "confirmedPenTipPoint" not in content
+    assert "rollbackCalibrationWizardToStep" not in content
+    assert "Click Green Cap" in content
+    assert "Confirm Green Cap" in content
+    assert "Run Motion Calibration" in content
+    assert "Run Drawing Calibration" in content
+    assert "runWizardDrawingCalibration()" in content
+    assert "previewBindingMarks(pointSet: \"five\")" in content
+    assert "runVisualRelativeFivePointTest()" in content
+    assert "pen tip not confirmed" not in content
+    assert "estimateToolOffset(" not in content + model
+    assert "BridgeToolEstimateRequest" not in client
+    assert 'post(path: "calibration/tool/estimate"' not in client
     assert "@Published var bindingExtraPaddingMm = 40.0" in model
-    assert "extraPaddingMm: bindingExtraPaddingMm" in model
-    assert "toolCapToTipModel = response.capToTipModel" in model
+    assert 'binding.capToTipModel.source == "unsolved" ? nil : binding.capToTipModel' in model
 
 
 def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
@@ -337,10 +356,12 @@ def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
 
     assert "visualMachineCalibrationProbeDistances" in content
     assert "visualMachineCalibrationBoundedDistance" in content
-    assert "visualFieldRecoveryCommandMm" in content
     assert "No safe X/Y calibration travel from current machine position" in content
     assert "boundedMachineTravelDistance" in model
     assert "availableMachineTravelMm" in model
+    assert "visualCapReacquireCommands" in content
+    assert "x_field_recovery_prompted" not in content
+    assert "Move X into camera field?" not in content
     assert "previewBootstrapAdaptiveProbe(" not in content
     assert "runBootstrapAdaptiveProbe(" not in content
     assert "previewBootstrapAdaptiveProbe(" not in model
@@ -389,7 +410,7 @@ def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
 
-    assert "ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode || manualPenTipMode)" in content
+    assert "ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode)" in content
     assert "confirmedCapPoint: confirmedCapPoint" not in content
     assert "draw(confirmedCapPoint" not in overlay
     assert "CONF CAP" in _read(SWIFT_DIR / "Models.swift")

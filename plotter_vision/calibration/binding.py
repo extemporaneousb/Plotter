@@ -286,6 +286,8 @@ def solve_visual_position_binding(
             )
 
     latest_observed_at = max((sample.created_at for sample in observations), default=None)
+    if not blockers and observations:
+        binding.cap_to_tip_model = _learn_cap_to_tip_model(observations)
     binding.learned_transform = transform
     binding.residuals = residual_summary
     binding.freshness = BindingFreshness(
@@ -302,6 +304,29 @@ def solve_visual_position_binding(
     binding.blockers = blockers
     binding.updated_at = utc_now_iso()
     return binding
+
+
+def _learn_cap_to_tip_model(observations: list[ObservedGeometrySample]) -> CapToTipModel:
+    total_weight = sum(max(sample.confidence, 0.0) for sample in observations)
+    if total_weight <= 0.0:
+        total_weight = float(len(observations))
+        weighted = [(sample, 1.0) for sample in observations]
+    else:
+        weighted = [(sample, max(sample.confidence, 0.0)) for sample in observations]
+
+    offset_x = sum(
+        (sample.observed_paper_mm.x - sample.expected_paper_mm.x) * weight
+        for sample, weight in weighted
+    ) / total_weight
+    offset_y = sum(
+        (sample.observed_paper_mm.y - sample.expected_paper_mm.y) * weight
+        for sample, weight in weighted
+    ) / total_weight
+    return CapToTipModel(
+        offset_x_mm=offset_x,
+        offset_y_mm=offset_y,
+        source="residual_solver",
+    )
 
 
 def find_expected_sample(

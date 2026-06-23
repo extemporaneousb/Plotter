@@ -4,12 +4,8 @@ struct CalibrationWizardView: View {
     let instructionText: String
     let fiducialDetail: String
     let fiducialStatus: CalibrationWizardStepStatus
-    let paperDetail: String
-    let paperStatus: CalibrationWizardStepStatus
     let greenCapDetail: String
     let greenCapStatus: CalibrationWizardStepStatus
-    let capPositionDetail: String
-    let capPositionStatus: CalibrationWizardStepStatus
     let visualCalibrationDetail: String
     let visualCalibrationStatus: CalibrationWizardStepStatus
     let bindingDetail: String
@@ -22,15 +18,10 @@ struct CalibrationWizardView: View {
     let capStateLabel: String
     let isLiveMotionMode: Bool
     let capDetected: Bool
-    let canMoveXIntoCameraField: Bool
     let canConfirmSetup: Bool
     let primaryAction: () -> Void
     let confirmSetup: () -> Void
     let reset: () -> Void
-    let clickCap: () -> Void
-    let clickPenTip: () -> Void
-    let stepAction: (Int) -> Void
-    let moveXIntoCameraField: () -> Void
     let hide: () -> Void
 
     var body: some View {
@@ -86,51 +77,33 @@ struct CalibrationWizardView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus, onSelect: { stepAction(1) })
-            CalibrationWizardStepRow(index: 2, title: "Visual Field", detail: paperDetail, status: paperStatus, onSelect: { stepAction(2) })
-            CalibrationWizardStepRow(index: 3, title: "Tool", detail: capPositionDetail, status: capPositionStatus, onSelect: { stepAction(3) })
-            CalibrationWizardStepRow(index: 4, title: "Visual-Machine", detail: visualCalibrationDetail, status: visualCalibrationStatus, onSelect: { stepAction(4) })
-            CalibrationWizardStepRow(index: 5, title: "Draw/Verify", detail: bindingDetail, status: bindingStatus, onSelect: { stepAction(5) })
+            CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus)
+            CalibrationWizardStepRow(index: 2, title: "Green Cap", detail: greenCapDetail, status: greenCapStatus)
+            CalibrationWizardStepRow(index: 3, title: "Motion Calibration", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+            CalibrationWizardStepRow(index: 4, title: "Drawing Calibration", detail: bindingDetail, status: bindingStatus)
         }
     }
 
     private var actions: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button(action: primaryAction) {
-                    Label(
-                        primaryActionTitle,
-                        systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(primaryActionEnabled ? .cyan : .gray)
-                .disabled(!primaryActionEnabled)
-                .help(primaryActionDisabledReason ?? primaryActionTitle)
-
-                Button("Confirm Setup", action: confirmSetup)
-                    .buttonStyle(.bordered)
-                    .disabled(!canConfirmSetup)
-                    .help("Reuse the locked visual field when the visible grid still matches the setup")
-
-                Button("Reset", action: reset)
-                    .buttonStyle(.bordered)
+        HStack(spacing: 8) {
+            Button(action: primaryAction) {
+                Label(
+                    primaryActionTitle,
+                    systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
+                )
             }
+            .buttonStyle(.borderedProminent)
+            .tint(primaryActionEnabled ? .cyan : .gray)
+            .disabled(!primaryActionEnabled)
+            .help(primaryActionDisabledReason ?? primaryActionTitle)
 
-            HStack(spacing: 8) {
-                Button("Click Cap", action: clickCap)
-                    .buttonStyle(.bordered)
-                    .disabled(!hasPaperLock)
+            Button("Confirm Setup", action: confirmSetup)
+                .buttonStyle(.bordered)
+                .disabled(!canConfirmSetup)
+                .help("Reuse the locked visual field when the visible grid still matches the setup")
 
-                Button("Click Pen Tip", action: clickPenTip)
-                    .buttonStyle(.bordered)
-                    .disabled(!hasPaperLock)
-
-                Button("Move Field", action: moveXIntoCameraField)
-                    .buttonStyle(.bordered)
-                    .disabled(!canMoveXIntoCameraField)
-                    .help("Live bounded X recovery jog when the cap is parked outside the camera field")
-            }
+            Button("Reset", action: reset)
+                .buttonStyle(.bordered)
         }
         .controlSize(.small)
     }

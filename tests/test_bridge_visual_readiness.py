@@ -429,14 +429,20 @@ def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
         samples = preview["points"]
         assert len(samples) == 5
 
+        learned_dx_mm = 1.5
+        learned_dy_mm = -2.0
         for sample in samples:
+            paper_mm = sample["paper_mm"]
             status_code, observed = client.post(
                 "/calibration/binding/observe",
                 {
                     "command_id": "binding-preview",
                     "point_id": sample["point_id"],
                     "kind": "ink",
-                    "observed_paper_mm": sample["paper_mm"],
+                    "observed_paper_mm": {
+                        "x": paper_mm["x"] + learned_dx_mm,
+                        "y": paper_mm["y"] + learned_dy_mm,
+                    },
                 },
             )
             assert status_code == 200
@@ -449,6 +455,11 @@ def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
         assert binding["validation_status"] == "validated"
         assert binding["residuals"]["observation_count"] >= 5
         assert binding["residuals"]["rms_residual_mm"] <= 3.0
+        assert binding["cap_to_tip_model"]["source"] == "residual_solver"
+        assert binding["cap_to_tip_model"]["offset_x_mm"] == pytest.approx(learned_dx_mm)
+        assert binding["cap_to_tip_model"]["offset_y_mm"] == pytest.approx(learned_dy_mm)
+        assert binding["safe_zone"]["cap_to_tip_offset_x_mm"] == pytest.approx(learned_dx_mm)
+        assert binding["safe_zone"]["cap_to_tip_offset_y_mm"] == pytest.approx(learned_dy_mm)
 
         status_code, drawing = client.post(
             "/draw/program",

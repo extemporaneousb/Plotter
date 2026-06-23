@@ -75,7 +75,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 ## Acceptance Criteria For The Next Architecture Pass
 
 - The main operator path is app launch, Visual Field Setup, paper fiducials or Confirm Setup against
-  an already locked visual field, cap and pen-tip confirmation, Visual-Machine Calibration,
+  an already locked visual field, green cap confirmation, Motion Calibration, Drawing Calibration,
   persisted binding, then drawing.
 - Plotter-camera FOV zoom remains persisted Swift display state. Current segmentation and motion
   detection continue to run app-side on the full camera frame unless a separate ROI feature is added.
@@ -84,7 +84,7 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 - Preview routes force dry-run behavior, return simulated geometry only, never move hardware, and do
   not write controller transcripts. Preview success is evidence, not execution readiness.
 - Cap-only motion is relative session evidence. Absolute paper-plane drawing requires visual
-  position binding from cap localization plus ink or pen-tip observations and residual thresholds.
+  position binding from cap localization plus ink observations and residual thresholds.
 - Capability checks and portrait/image-to-shape both produce `DrawingProgram` data and use the same
   planner, simulator, video projection, execution, observation, and residual path.
 - Generic SVG/vector import remains deferred until the control, calibration, simulation, and residual

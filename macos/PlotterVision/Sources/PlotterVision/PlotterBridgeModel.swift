@@ -229,62 +229,6 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func estimateToolOffset(cap: ConfirmedCapPoint, tip: ConfirmedCapPoint) async -> Bool {
-        guard let capPaper = cap.paperMm, let tipPaper = tip.paperMm else {
-            statusText = "Tool estimate requires cap and pen-tip field points"
-            return false
-        }
-        do {
-            let response = try await client.estimateToolOffset(
-                BridgeToolEstimateRequest(
-                    cap: BridgeToolEstimatePointRequest(
-                        observedNorm: NormPoint(cap.cameraPoint),
-                        paperMm: capPaper
-                    ),
-                    tip: BridgeToolEstimatePointRequest(
-                        observedNorm: NormPoint(tip.cameraPoint),
-                        paperMm: tipPaper
-                    ),
-                    extraPaddingMm: bindingExtraPaddingMm
-                )
-            )
-            toolCapToTipModel = response.capToTipModel
-            drawableSafeZone = response.safeZone
-            if let binding = response.binding {
-                applyVisualBindingStatus(
-                    BridgeVisualPositionBindingResponse(
-                        status: response.status,
-                        dryRun: response.dryRun,
-                        binding: binding,
-                        bindingFile: response.bindingFile,
-                        observationId: nil,
-                        error: response.error
-                    )
-                )
-            }
-            statusText = String(
-                format: "Tool offset %.1f, %.1f mm",
-                response.capToTipModel?.offsetXMm ?? 0.0,
-                response.capToTipModel?.offsetYMm ?? 0.0
-            )
-            diagnosticsEvent(
-                "tool_offset_estimated",
-                [
-                    "status": response.status,
-                    "offset_x_mm": response.capToTipModel?.offsetXMm ?? 0.0,
-                    "offset_y_mm": response.capToTipModel?.offsetYMm ?? 0.0,
-                    "extra_padding_mm": bindingExtraPaddingMm
-                ],
-                snapshot: true
-            )
-            return response.status == "ready"
-        } catch {
-            statusText = error.localizedDescription
-            diagnosticsEvent("tool_offset_estimate_failed", errorPayload(error), snapshot: true)
-            return false
-        }
-    }
-
     var isMockBridge: Bool {
         bridgeController == "mock"
     }

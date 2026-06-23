@@ -40,22 +40,20 @@ The normal development target is the fixed-camera drawing loop:
 3. Confirm or click the paper fiducials. If the bridge already reports a locked visual field after
    restart and the rendered grid still aligns with the physical setup, use Confirm Setup to reuse
    that registration without re-clicking fiducials.
-4. Confirm or click the visible cap marker, then click the pen tip to save the cap-to-tip offset.
-   Setup reset clears the latest field/tool/probe/binding authority while preserving historical
-   evidence files.
-5. If the cap is outside the camera field, use the live-gated X-field recovery action. The app
-   chooses a bounded X direction from current machine clearance; this is not homing and does not
-   promote axis trust.
-6. Run or rerun Visual-Machine Calibration from the current cap location. The app samples bounded
+4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+   Setup reset clears the latest field/probe/binding authority while preserving historical evidence
+   files.
+5. Run or rerun Motion Calibration from the current cap location. The app samples bounded
    X/Y carriage motion using live machine clearance instead of assuming a fixed +X bootstrap.
-7. Preview the expected binding marks from the computed safe drawable region, draw the watched
-   visual-relative marks, collect ink observations, post them to `/calibration/binding/observe`,
-   solve `/calibration/binding/solve`, and draw the ready frame around that same region.
-8. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
+6. Run Drawing Calibration. The app previews expected binding marks from the computed safe drawable
+   region, draws the watched visual-relative marks, collects ink observations, posts them to
+   `/calibration/binding/observe`, solves `/calibration/binding/solve`, learns the cap-to-tip offset
+   from mark residuals, and draws the ready frame around that same region.
+7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
    drawing programs still require bridge preview before execution.
-9. Persist the learned parameters as future initialization values for the coordinate system and
+8. Persist the learned parameters as future initialization values for the coordinate system and
    shape-language parametrization.
-10. Open Draw/Verify and draw through one of two lanes:
+9. Open Draw/Verify and draw through one of two lanes:
    - capability checks: simple-to-more-complex shape programs that can include coordinate markup;
    - portrait drawing: camera capture, contour or polygon extraction, and translation into the
      drawing program.
@@ -85,16 +83,14 @@ The operator sequence should stay explicit:
 | --- | --- | --- | --- |
 | 1 | Visual field setup | Fiducial corners, paper registration id, reprojection error | Machine axes or pen position. |
 | 2 | Cap marker confirmation | Camera-space cap point mapped into paper/logical mm | Drawing authority. |
-| 3 | Move X into camera field when needed | App event with bounded signed X recovery and post-move cap observation if visible | Homing, absolute X zero, or axis trust. |
-| 4 | Visual-machine calibration | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
-| 5 | Center mark | Projected center target, watched relative moves, residual checks, ink visibility | Full-field geometry. |
-| 6 | Five-point marks | Multiple projected targets and residual/ink observations across the paper | Arbitrary shape correctness. |
-| 7 | Capabilities suite | `center_crosshair`, `line_length`, `square_closure`, `triangle`, then `multi_shape_coordinate_sheet` through the shared drawing pipeline | Portrait or image ingestion quality. |
-| 8 | Shape or portrait drawing | `DrawingProgram` preview, simulation, projected overlay, execution transcript, residual observations | A future run if camera/paper/controller state is stale. |
+| 3 | Motion calibration | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
+| 4 | Drawing calibration | Projected binding targets, watched relative moves, residual checks, ink visibility, learned cap-to-tip offset | Arbitrary shape correctness. |
+| 5 | Capabilities suite | `center_crosshair`, `line_length`, `square_closure`, `triangle`, then `multi_shape_coordinate_sheet` through the shared drawing pipeline | Portrait or image ingestion quality. |
+| 6 | Shape or portrait drawing | `DrawingProgram` preview, simulation, projected overlay, execution transcript, residual observations | A future run if camera/paper/controller state is stale. |
 
 Swift may collect and display probe samples, center-mark residuals, and operator events, but Python
 must own durable readiness, `VisualPositionBinding`, trust promotion, planning, persistence, and
-execution routing. Visual-Machine Calibration persists raw before/after cap observations and
+execution routing. Motion Calibration persists raw before/after cap observations and
 commanded moves through `/calibration/probe/observe`; the bridge no longer exposes a separate
 preview/run adaptive-probe motion route.
 
@@ -324,9 +320,9 @@ Interpretation rules:
   gates.
 
 In the app, use Visual Field Setup as the only setup path: manually clicked paper fiducials establish
-the field, the cap marker plus clicked pen tip establishes the cap-to-tip offset, and Visual-Machine
-Calibration learns bounded X/Y motion from current machine clearance. Binding ink marks are placed
-inside the bridge-computed safe drawable region and validate the durable `VisualPositionBinding`.
+the field, green cap confirmation starts Motion Calibration, and Drawing Calibration learns the
+cap-to-tip offset from watched binding marks. Binding ink marks are placed inside the
+bridge-computed safe drawable region and validate the durable `VisualPositionBinding`.
 Bridge previews simulate the exact command stream and project the expected path into the camera view
 before any real drawing action is enabled. If simulated or observed geometry fails its gate, the
 bridge returns a failed response and does not send the command stream. After binding validation, use
@@ -345,7 +341,7 @@ because this machine homes X/Y at the max-switch corner. The fixed-camera workfl
 session-local visual position binding on top of that model. A cap-only visual probe is relative
 motion evidence; it does not make `axis_model_trusted=true` by itself. Absolute drawing in the paper
 plane requires durable `axis_model_trusted=true` or a current validated visual position binding from
-ink or pen-tip observations with residuals. Restart the bridge after model changes so the running
+ink observations with residuals. Restart the bridge after model changes so the running
 process picks up the current transform.
 
 Real motion is still gated:

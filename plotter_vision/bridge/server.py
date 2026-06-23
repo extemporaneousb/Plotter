@@ -2608,6 +2608,7 @@ class PlotterBridge:
                 current_paper_registration_id=registration.registration_id,
                 current_camera_id=registration.camera_id,
             )
+            binding = self._refresh_binding_safe_zone_from_learned_tool(binding)
             self._save_visual_position_binding(binding)
             self.event_log.emit(
                 "calibration.binding_observation_added",
@@ -2619,6 +2620,7 @@ class PlotterBridge:
                     "point_id": observation.point_id,
                     "kind": observation.kind,
                     "validation_status": binding.validation_status,
+                    "cap_to_tip_source": binding.cap_to_tip_model.source,
                     "blockers": binding.blockers,
                 },
             )
@@ -2653,6 +2655,7 @@ class PlotterBridge:
                 current_paper_registration_id=registration.registration_id,
                 current_camera_id=registration.camera_id,
             )
+            binding = self._refresh_binding_safe_zone_from_learned_tool(binding)
             self._save_visual_position_binding(binding)
             self.event_log.emit(
                 "calibration.binding_solved",
@@ -2663,6 +2666,9 @@ class PlotterBridge:
                     "validation_status": binding.validation_status,
                     "rms_residual_mm": binding.residuals.rms_residual_mm,
                     "max_residual_mm": binding.residuals.max_residual_mm,
+                    "cap_to_tip_source": binding.cap_to_tip_model.source,
+                    "cap_to_tip_offset_x_mm": binding.cap_to_tip_model.offset_x_mm,
+                    "cap_to_tip_offset_y_mm": binding.cap_to_tip_model.offset_y_mm,
                     "blockers": binding.blockers,
                 },
             )
@@ -4539,6 +4545,40 @@ class PlotterBridge:
         if safe_zone.extra_padding_mm < DEFAULT_DRAWABLE_EXTRA_PADDING_MM:
             return None
         return safe_zone
+
+    def _refresh_binding_safe_zone_from_learned_tool(
+        self,
+        binding: VisualPositionBinding,
+    ) -> VisualPositionBinding:
+        if binding.cap_to_tip_model.source == "unsolved":
+            return binding
+        machine = self._load_machine_config()
+        previous = binding.safe_zone
+        binding.safe_zone = self._drawing_safe_zone(
+            machine=machine,
+            cap_to_tip_model=binding.cap_to_tip_model,
+            extra_padding_mm=(
+                previous.extra_padding_mm
+                if previous is not None
+                else DEFAULT_DRAWABLE_EXTRA_PADDING_MM
+            ),
+            max_mark_size_mm=(
+                max(DEFAULT_BINDING_MARK_MAX_SIZE_MM, previous.mark_clearance_mm * 2.0)
+                if previous is not None
+                else DEFAULT_BINDING_MARK_MAX_SIZE_MM
+            ),
+            park_clearance_mm=(
+                previous.park_clearance_mm
+                if previous is not None
+                else DEFAULT_BINDING_PARK_CLEARANCE_MM
+            ),
+            observation_clearance_mm=(
+                previous.observation_clearance_mm
+                if previous is not None
+                else DEFAULT_BINDING_MARK_OBSERVATION_CLEARANCE_MM
+            ),
+        )
+        return binding
 
     def _current_drawing_safe_zone(
         self,
