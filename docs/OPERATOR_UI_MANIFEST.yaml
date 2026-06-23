@@ -16,6 +16,7 @@ review_semantics:
     merge: Combine this item into merge_with.
     split: Split this item into separate controls or surfaces.
     promote_to_panel: Make this a fixed panel or inspector instead of a menu item.
+    promote_to_window: Make this a separate SwiftUI Window instead of a menu item or in-main overlay.
     demote_to_menu: Keep this only as a secondary menu setting.
     question: Needs explicit human review before implementation.
 
@@ -139,12 +140,13 @@ layout_model:
         cleanup: preserve_shared_code
 
       - id: visual_field_setup
-        label: Field
-        type: button
-        action: open Visual Field Setup
-        decision: promote_to_panel
+        label: Setup
+        type: window_toggle_button
+        action: open or close Setup window
+        decision: promote_to_window
         cleanup: preserve_shared_code
-        move_to: visual_field_setup_panel
+        move_to: setup_window
+        window_id: setup-panel
 
       - id: portrait
         label: Portrait
@@ -223,11 +225,11 @@ layout_model:
       - id: cap_marker
         label: Cap Marker
         decision: move
-        move_to: visual_field_setup_panel
+        move_to: setup_window
         cleanup: preserve_shared_code
         controls:
-          - { id: sample_cap_color, label: Sample Cap Color, type: button, decision: move, move_to: visual_field_setup_panel, cleanup: preserve_shared_code }
-          - { id: reset_cap_color, label: Reset Cap Color, type: button, decision: move, move_to: visual_field_setup_panel, cleanup: preserve_shared_code }
+          - { id: sample_cap_color, label: Sample Cap Color, type: button, decision: move, move_to: setup_window, cleanup: preserve_shared_code }
+          - { id: reset_cap_color, label: Reset Cap Color, type: button, decision: move, move_to: setup_window, cleanup: preserve_shared_code }
 
       - id: image_baseline
         label: Image Baseline
@@ -324,7 +326,9 @@ layout_model:
   visual_field_setup_panel:
     owner: CalibrationWizardView
     placement: floating_overlay
-    proposed_placement: fixed_left_or_right_panel
+    proposed_owner: SetupPanel
+    proposed_placement: separate_window
+    proposed_window_id: setup-panel
     source_files:
       - macos/PlotterVision/Sources/PlotterVision/CalibrationWizardView.swift
       - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
@@ -333,7 +337,7 @@ layout_model:
       - plotter_vision/bridge/server.py
     role: Visual field setup, cap confirmation, motion calibration, and drawing calibration.
     authority_boundary: Swift displays and collects observations. Python persists registration, probe evidence, binding solves, and trust state.
-    decision: keep
+    decision: promote_to_window
     cleanup: preserve_shared_code
     steps:
       - { id: fiducials, label: Fiducials, decision: keep, cleanup: preserve_shared_code }
@@ -358,6 +362,106 @@ layout_model:
     decision: keep
     cleanup: preserve_shared_code
     note: Keep machine actions separate from visual rendering and portrait controls.
+
+target_layout_model:
+  status: proposed_operator_ui
+  note: >
+    Desired UI structure for the next SwiftUI implementation pass. This section is
+    intentionally target-state; layout_model above still names current files and
+    source ownership for safe cleanup.
+
+  main_window:
+    owner: ContentView
+    role: Camera workspace plus top-level window launch controls.
+    camera_workspace_rule:
+      plotter_camera_visible_and_face_camera_visible: split plane
+      plotter_camera_visible_only: show plotter pane only
+      face_camera_visible_only: show face pane only
+      no_camera_visible: show empty black workspace
+    initial_camera_visibility:
+      plotter_camera_visible: false
+      face_camera_visible: false
+
+  top_bar:
+    owner: ContentView.topBar
+    controls:
+      - { id: app_brand, type: static_label, decision: keep, cleanup: ui_only }
+      - { id: machine_bridge, type: status_button, behavior: bridge_status_or_reconnect, decision: keep, cleanup: preserve_shared_code }
+      - { id: machine_control_window, type: window_toggle_button, window_id: machine-controls, behavior: open_or_close_window, decision: keep, cleanup: preserve_shared_code }
+      - { id: plotter_camera_dropdown, type: camera_device_dropdown, model: plotterCamera, decision: keep, cleanup: preserve_shared_code }
+      - { id: plotter_camera_toggle, type: toggle_button, behavior: show_or_hide_camera_pane, starts_camera: true, stops_camera: true, initial_state: false, decision: keep, cleanup: preserve_shared_code }
+      - { id: plotter_video_panel, type: window_toggle_button, window_id: plotter-video-panel, behavior: open_or_close_window, decision: keep, cleanup: preserve_shared_code }
+      - { id: face_camera_dropdown, type: camera_device_dropdown, model: faceCamera, decision: keep, cleanup: preserve_shared_code }
+      - { id: face_camera_toggle, type: toggle_button, behavior: show_or_hide_camera_pane, starts_camera: true, stops_camera: true, initial_state: false, decision: keep, cleanup: preserve_shared_code }
+      - { id: face_video_panel, type: window_toggle_button, window_id: face-video-panel, behavior: open_or_close_window, decision: keep, cleanup: preserve_shared_code }
+      - { id: setup_window, type: window_toggle_button, window_id: setup-panel, behavior: open_or_close_window, decision: keep, cleanup: preserve_shared_code }
+
+  windows:
+    machine_control_window:
+      owner: MachineControlPanel
+      window_id: machine-controls
+      source_files:
+        - macos/PlotterVision/Sources/PlotterVision/MachineControlPanel.swift
+        - macos/PlotterVision/Sources/PlotterVision/AppMain.swift
+      role: Machine status, stop, pen, jog, arming, and bridge/controller action surface.
+      decision: keep
+      cleanup: preserve_shared_code
+
+    setup_window:
+      current_owner: CalibrationWizardView
+      proposed_owner: SetupPanel
+      window_id: setup-panel
+      source_files:
+        - macos/PlotterVision/Sources/PlotterVision/CalibrationWizardView.swift
+        - macos/PlotterVision/Sources/PlotterVision/ContentView.swift
+        - macos/PlotterVision/Sources/PlotterVision/AppMain.swift
+        - plotter_vision/calibration/readiness.py
+        - plotter_vision/calibration/binding.py
+        - plotter_vision/bridge/server.py
+      role: Visual field setup, cap confirmation, motion calibration, drawing calibration, and post-checkout drawing controls.
+      decision: promote_to_window
+      cleanup: preserve_shared_code
+      implementation_note: >
+        Move presentation from ContentView.showCalibrationWizard to a SwiftUI Window
+        scene. Keep calibration and binding authority in Python. Swift should share
+        camera observation and bridge state with the setup window rather than creating
+        an independent calibration model.
+
+    plotter_video_panel:
+      proposed_owner: PlotterVideoPanel
+      window_id: plotter-video-panel
+      role: Plotter camera display controls such as rotation, fit/original, filters, overlays, and measurement display settings.
+      decision: promote_to_window
+      cleanup: preserve_shared_code
+
+    face_video_panel:
+      proposed_owner: FaceVideoPanel
+      window_id: face-video-panel
+      role: Face camera contour monitor, portrait rendering parameters, capture strip, and portrait drawing creation.
+      decision: promote_to_window
+      cleanup: preserve_shared_code
+
+  planned_deletions:
+    - id: camera_layout_selector
+      current_symbols: [CameraLayoutControl, CameraLayoutMode, ContentView.cameraLayout]
+      decision: remove
+      cleanup: delete_related_code
+      replacement: plotter_camera_toggle plus face_camera_toggle determine camera workspace layout.
+    - id: start_cameras_button
+      current_symbols: [ContentView.startVisibleCameras]
+      decision: remove
+      cleanup: delete_related_code
+      replacement: individual camera toggles start and stop their own camera streams.
+    - id: top_bar_visuals_menu
+      current_symbols: [VisualControlsMenu]
+      decision: remove
+      cleanup: delete_related_code
+      replacement: plotter_video_panel and face_video_panel.
+    - id: top_bar_draw_verify_examples
+      current_symbols: [DrawVerifyMenu shape preview section]
+      decision: remove
+      cleanup: delete_related_code
+      replacement: defer drawing examples until the setup window has a checked-out-to-draw section.
 
 review_examples:
   remove_button_only:
