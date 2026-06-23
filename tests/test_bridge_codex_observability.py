@@ -143,6 +143,16 @@ def test_canonical_codex_events_reads_are_read_only_and_posts_append(tmp_path: P
     assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
 
 
+def test_superseded_observability_read_routes_are_removed(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=True)
+
+    with _running_bridge(bridge) as client:
+        for path in ("/events", "/codex/app/state", "/codex/app/events"):
+            status_code, response = client.get(path)
+            assert status_code == 404
+            assert response == {"error": "not found"}
+
+
 def test_bridge_event_log_aggregates_repeated_identical_events(tmp_path: Path) -> None:
     event_log = EventLog(tmp_path / "bridge_events.jsonl")
 

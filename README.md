@@ -278,8 +278,9 @@ The app-side diagnostics surfaces are:
 - `artifacts/app_events.jsonl`: bounded append-only app lifecycle, UI action, bridge polling,
   preview/draw, visual-probe, and visible error events.
 - `POST /codex/app/state` and `POST /codex/app/events`: append-only bridge ingestion routes for app
-  diagnostics. They are not command routes.
-- `GET /codex/snapshot` and `GET /codex/events`: the read-only diagnostics routes agents should use.
+  diagnostics. They are not command routes, and they are not read surfaces.
+- `GET /codex/snapshot` and `GET /codex/events`: the only app/bridge observability reads agents
+  should use.
 
 Use the live endpoints to understand state before acting:
 

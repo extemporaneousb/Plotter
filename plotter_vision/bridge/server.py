@@ -5559,50 +5559,11 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             if parsed_url.path == "/health":
                 self._write_model(HTTPStatus.OK, bridge.health())
                 return
-            if parsed_url.path == "/events":
-                self._write_json(
-                    HTTPStatus.OK,
-                    {
-                        "canonical": False,
-                        "superseded_by": "/codex/events",
-                        "events": [
-                            event.model_dump(mode="json", by_alias=True)
-                            for event in bridge.recent_events()
-                        ]
-                    },
-                )
-                return
             if parsed_url.path == "/codex/events":
                 self._write_model(HTTPStatus.OK, bridge.codex_events())
                 return
             if parsed_url.path == "/codex/snapshot":
                 self._write_model(HTTPStatus.OK, bridge.codex_snapshot())
-                return
-            if parsed_url.path == "/codex/app/state":
-                self._write_json(
-                    HTTPStatus.OK,
-                    {
-                        "canonical": False,
-                        "superseded_by": "/codex/snapshot",
-                        "diagnostics": bridge.app_diagnostics_snapshot().model_dump(
-                            mode="json",
-                            by_alias=True,
-                        ),
-                    },
-                )
-                return
-            if parsed_url.path == "/codex/app/events":
-                self._write_json(
-                    HTTPStatus.OK,
-                    {
-                        "canonical": False,
-                        "superseded_by": "/codex/events",
-                        "diagnostics": bridge.app_diagnostics_snapshot().model_dump(
-                            mode="json",
-                            by_alias=True,
-                        ),
-                    },
-                )
                 return
             if parsed_url.path == "/machine/status":
                 self._write_model(HTTPStatus.OK, bridge.machine_status())

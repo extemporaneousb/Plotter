@@ -212,7 +212,8 @@ Status: implemented as a v2 bridge/app diagnostics contract plus native app JSON
 - Keep `GET /codex/snapshot` read-only and first-class. It merges `/health`, cached machine status,
   `/paper/status`, latest app diagnostics, normalized events, computed blockers, active workflow,
   latest visible error, recent traces, and debug-bundle hints. `POST /codex/app/state` and
-  `POST /codex/app/events` are append-only diagnostics ingestion routes, not command routes.
+  `POST /codex/app/events` are append-only diagnostics ingestion routes, not command routes or read
+  surfaces.
 - Keep `plotterctl doctor --json` and `make debug-snapshot` as the canonical debug-bundle interface.
 - Do not route machine commands through `/codex/snapshot` or app artifacts. Any action remains an
   explicit typed bridge route with existing safety gates.
