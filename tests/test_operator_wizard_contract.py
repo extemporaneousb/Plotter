@@ -126,6 +126,8 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "Picker(\"Mode\"" in portrait_panel
     assert "settingsTechniqueBinding()" in portrait_panel
     assert "BridgePortraitContourPreviewRequest" in client
+    assert "let technique: String" in client
+    assert "technique: settings.technique.rawValue" in model
     assert "BridgePortraitContourOverlay" in client
     assert "portraitOverlay" in client
     assert 'post(path: "draw/portrait/preview"' in client

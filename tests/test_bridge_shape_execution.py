@@ -330,6 +330,84 @@ def test_bridge_portrait_contour_preview_is_preview_only_and_projected(tmp_path:
     assert not (tmp_path / "transcripts" / "portrait-preview.jsonl").exists()
 
 
+@pytest.mark.parametrize(
+    ("technique", "summary_count_name"),
+    [
+        ("crosshatch", "hatch_polyline_count"),
+        ("facets", "outline_polyline_count"),
+        ("stipple", "mark_polyline_count"),
+    ],
+)
+def test_bridge_portrait_non_contour_preview_uses_canonical_planner(
+    tmp_path: Path,
+    technique: str,
+    summary_count_name: str,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
+    registration = bridge.register_paper(
+        PaperRegistrationRequest(
+            paper_width_mm=533.4,
+            paper_height_mm=215.9,
+            corners=[
+                PaperRegistrationCornerRequest(
+                    corner=corner,  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=observed[0], y=observed[1]),
+                )
+                for corner, observed in [
+                    ("bottom_left", _project_paper_to_camera(0.0, 0.0)),
+                    ("bottom_right", _project_paper_to_camera(1.0, 0.0)),
+                    ("top_right", _project_paper_to_camera(1.0, 1.0)),
+                    ("top_left", _project_paper_to_camera(0.0, 1.0)),
+                ]
+            ],
+        )
+    )
+
+    width = 28
+    height = 36
+    samples = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            eye_shadow = 0.28 if 8 <= y <= 13 and 7 <= x <= 20 else 0.0
+            nose_shadow = 0.18 if 15 <= y <= 25 and 12 <= x <= 15 else 0.0
+            mouth_shadow = 0.24 if 26 <= y <= 29 and 9 <= x <= 19 else 0.0
+            row.append(max(0.0, min(1.0, 0.76 - eye_shadow - nose_shadow - mouth_shadow)))
+        samples.append(row)
+
+    response = bridge.preview_portrait_contours(
+        PortraitContourPreviewRequest(
+            raster=LuminanceRaster(samples=samples),
+            options=PortraitContourOptions(
+                technique=technique,
+                auto_contrast=False,
+                illumination_radius=0,
+                smoothing_radius=0,
+                max_contours=200,
+            ),
+            request_id=f"portrait-preview-{technique}",
+        )
+    )
+
+    assert response.status == "ready"
+    assert response.preview_only is True
+    assert response.dry_run is True
+    assert response.controller_transcript is None
+    assert response.portrait_summary is not None
+    assert response.portrait_summary.technique == technique
+    assert response.portrait_summary.contour_count > 0
+    assert response.portrait_overlay is not None
+    assert len(response.portrait_overlay.contours) == response.portrait_summary.contour_count
+    assert response.summary is not None
+    assert response.summary.polyline_count == response.portrait_summary.contour_count
+    assert getattr(response.summary, summary_count_name) > 0
+    assert response.preview_overlay is not None
+    assert response.preview_overlay.projected is True
+    assert response.preview_overlay.paper_registration_id == registration.registration["registration_id"]
+    assert not (tmp_path / "transcripts" / f"portrait-preview-{technique}.jsonl").exists()
+
+
 def test_bridge_paper_registration_solves_and_persists_homography(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(tmp_path=tmp_path, config_path=config_path)

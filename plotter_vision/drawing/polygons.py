@@ -105,7 +105,7 @@ class PointMarkPrimitive(BaseModel):
 
 class PolylinePrimitive(BaseModel):
     points: list[PaperPointNorm]
-    role: Literal["outline", "contour"] = "contour"
+    role: Literal["outline", "hatch", "mark", "contour"] = "contour"
     closed: bool = False
 
     @model_validator(mode="after")

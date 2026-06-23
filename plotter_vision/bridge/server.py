@@ -1763,7 +1763,7 @@ class PlotterBridge:
                 options=request.options,
             )
             if not program.polylines:
-                raise MotionSafetyError("Portrait normalization produced no preview contours.")
+                raise MotionSafetyError("Portrait normalization produced no preview polylines.")
 
             portrait_overlay = PortraitContourOverlay(
                 raster_width=request.raster.width,
@@ -1802,6 +1802,7 @@ class PlotterBridge:
                 command_id=command_id,
                 status="ready",
                 payload={
+                    "technique": portrait_summary.technique,
                     "contour_count": portrait_summary.contour_count,
                     "draw_segment_count": plan.summary.draw_segment_count,
                     "dry_run": True,

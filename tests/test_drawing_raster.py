@@ -152,6 +152,48 @@ def test_portrait_normalization_keeps_features_under_uneven_illumination() -> No
     assert len(program.polylines) == summary.contour_count
 
 
+@pytest.mark.parametrize(
+    ("technique", "role"),
+    [
+        ("crosshatch", "hatch"),
+        ("facets", "outline"),
+        ("stipple", "mark"),
+    ],
+)
+def test_portrait_non_contour_techniques_emit_plottable_polylines(
+    technique: str,
+    role: str,
+) -> None:
+    width = 28
+    height = 36
+    samples = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            eye_shadow = 0.28 if 8 <= y <= 13 and 7 <= x <= 20 else 0.0
+            nose_shadow = 0.18 if 15 <= y <= 25 and 12 <= x <= 15 else 0.0
+            mouth_shadow = 0.22 if 26 <= y <= 29 and 9 <= x <= 19 else 0.0
+            row.append(max(0.0, min(1.0, 0.76 - eye_shadow - nose_shadow - mouth_shadow)))
+        samples.append(row)
+
+    program, summary = build_portrait_contour_program_from_luminance_raster(
+        raster=LuminanceRaster(samples=samples),
+        options=PortraitContourOptions(
+            technique=technique,
+            auto_contrast=False,
+            illumination_radius=0,
+            smoothing_radius=0,
+            max_contours=200,
+        ),
+    )
+
+    assert summary.technique == technique
+    assert summary.contour_count > 0
+    assert len(program.polylines) == summary.contour_count
+    assert {polyline.role for polyline in program.polylines} == {role}
+    assert all(polyline.points for polyline in program.polylines)
+
+
 def test_raster_rejects_non_rectangular_samples() -> None:
     with pytest.raises(ValueError, match="same width"):
         LuminanceRaster(samples=[[0.1, 0.2], [0.3]])

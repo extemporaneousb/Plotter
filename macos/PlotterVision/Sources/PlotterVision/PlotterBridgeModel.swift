@@ -1577,6 +1577,7 @@ final class PlotterBridgeModel: ObservableObject {
                     raster: BridgeLuminanceRasterRequest(samples: raster.samples),
                     frame: frame,
                     options: BridgePortraitContourOptionsRequest(
+                        technique: settings.technique.rawValue,
                         contourLevels: settings.contourLevels,
                         lowQuantile: settings.lowQuantile,
                         highQuantile: settings.highQuantile,

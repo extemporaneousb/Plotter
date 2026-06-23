@@ -344,6 +344,7 @@ struct BridgeRasterContourOptionsRequest: Encodable {
 }
 
 struct BridgePortraitContourOptionsRequest: Encodable {
+    let technique: String
     let contourLevels: Int
     let lowQuantile: Double
     let highQuantile: Double

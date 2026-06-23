@@ -1,46 +1,35 @@
-from plotter_vision.calibration.binding import (
-    ObservedGeometrySample,
-    VisualPositionBinding,
-    solve_visual_position_binding,
-)
-from plotter_vision.calibration.paper import (
-    PaperFrameRegistration,
-    paper_corner_norm,
-)
-from plotter_vision.calibration.probe_evidence import (
-    VisualProbeCapSnapshot,
-    VisualProbeRun,
-    VisualProbeSample,
-    VisualProbeSummary,
-)
-from plotter_vision.calibration.readiness import (
-    DrawingSafeZone,
-    SafeZoneEvaluation,
-    SafeZoneMarginsMM,
-    VisualCapObservation,
-    VisualReadinessState,
-    build_visual_readiness_state,
-    evaluate_cap_inside_safe_zone,
-)
-from plotter_vision.calibration.scale import ScaleObservation, build_scale_observation
+from __future__ import annotations
 
-__all__ = [
-    "DrawingSafeZone",
-    "ObservedGeometrySample",
-    "PaperFrameRegistration",
-    "SafeZoneEvaluation",
-    "SafeZoneMarginsMM",
-    "ScaleObservation",
-    "VisualCapObservation",
-    "VisualPositionBinding",
-    "VisualProbeCapSnapshot",
-    "VisualProbeRun",
-    "VisualProbeSample",
-    "VisualProbeSummary",
-    "VisualReadinessState",
-    "build_scale_observation",
-    "build_visual_readiness_state",
-    "evaluate_cap_inside_safe_zone",
-    "paper_corner_norm",
-    "solve_visual_position_binding",
-]
+from importlib import import_module
+from typing import Any
+
+_EXPORT_MODULES = {
+    "DrawingSafeZone": "plotter_vision.calibration.readiness",
+    "ObservedGeometrySample": "plotter_vision.calibration.binding",
+    "PaperFrameRegistration": "plotter_vision.calibration.paper",
+    "SafeZoneEvaluation": "plotter_vision.calibration.readiness",
+    "SafeZoneMarginsMM": "plotter_vision.calibration.readiness",
+    "ScaleObservation": "plotter_vision.calibration.scale",
+    "VisualCapObservation": "plotter_vision.calibration.readiness",
+    "VisualPositionBinding": "plotter_vision.calibration.binding",
+    "VisualProbeCapSnapshot": "plotter_vision.calibration.probe_evidence",
+    "VisualProbeRun": "plotter_vision.calibration.probe_evidence",
+    "VisualProbeSample": "plotter_vision.calibration.probe_evidence",
+    "VisualProbeSummary": "plotter_vision.calibration.probe_evidence",
+    "VisualReadinessState": "plotter_vision.calibration.readiness",
+    "build_scale_observation": "plotter_vision.calibration.scale",
+    "build_visual_readiness_state": "plotter_vision.calibration.readiness",
+    "evaluate_cap_inside_safe_zone": "plotter_vision.calibration.readiness",
+    "paper_corner_norm": "plotter_vision.calibration.paper",
+    "solve_visual_position_binding": "plotter_vision.calibration.binding",
+}
+
+__all__ = list(_EXPORT_MODULES)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORT_MODULES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(_EXPORT_MODULES[name]), name)
+    globals()[name] = value
+    return value

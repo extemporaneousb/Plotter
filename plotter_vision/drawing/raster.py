@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -10,6 +11,10 @@ from plotter_vision.drawing.polygons import (
     PolylinePrimitive,
     PolygonPrimitive,
 )
+
+
+PortraitRenderTechnique = Literal["contours", "hatch", "crosshatch", "facets", "stipple"]
+PortraitPolylineRole = Literal["outline", "hatch", "mark", "contour"]
 
 
 class LuminanceRaster(BaseModel):
@@ -113,6 +118,7 @@ class RasterContourSummary(BaseModel):
 
 
 class PortraitContourOptions(BaseModel):
+    technique: PortraitRenderTechnique = "contours"
     contour_levels: int = 7
     low_quantile: float = 0.18
     high_quantile: float = 0.92
@@ -152,6 +158,7 @@ class PortraitContourOptions(BaseModel):
 
 
 class PortraitContourSummary(BaseModel):
+    technique: PortraitRenderTechnique = "contours"
     raster_width: int
     raster_height: int
     cell_count: int
@@ -243,28 +250,33 @@ def build_portrait_contour_program_from_luminance_raster(
     opts = options or PortraitContourOptions()
     values = _portrait_normalized_values(raster.samples, options=opts)
     flat_values = [value for row in values for value in row]
-    levels = _contour_levels(flat_values, options=opts)
-
-    raw_contours: list[tuple[list[tuple[float, float]], bool]] = []
-    for level in levels:
-        raw_contours.extend(_marching_squares_contours(values, level=level))
+    levels = _contour_levels(flat_values, options=opts) if opts.technique == "contours" else []
+    raw_polylines = _portrait_raw_polylines(values=values, levels=levels, options=opts)
+    if opts.technique != "contours":
+        raw_polylines = raw_polylines[: opts.max_contours]
 
     polylines: list[PolylinePrimitive] = []
     raw_point_count = 0
     kept_point_count = 0
-    for points, closed in sorted(
-        raw_contours,
+    min_points = opts.min_points_per_contour if opts.technique == "contours" else 2
+    min_length = opts.min_contour_length_norm if opts.technique == "contours" else 0.004
+    for points, closed, role in sorted(
+        raw_polylines,
         key=lambda contour: _polyline_length_norm(contour[0], closed=contour[1]),
         reverse=True,
     ):
         raw_point_count += len(points)
-        if len(points) < opts.min_points_per_contour:
+        if len(points) < min_points:
             continue
-        if _polyline_length_norm(points, closed=closed) < opts.min_contour_length_norm:
+        if _polyline_length_norm(points, closed=closed) < min_length:
             continue
 
-        simplified = _simplify_points(points, epsilon=opts.simplification_epsilon_norm)
-        if len(simplified) < opts.min_points_per_contour:
+        simplified = (
+            _simplify_points(points, epsilon=opts.simplification_epsilon_norm)
+            if opts.technique == "contours"
+            else points
+        )
+        if len(simplified) < min_points:
             continue
         kept_point_count += len(simplified)
         if kept_point_count > opts.max_points:
@@ -272,7 +284,7 @@ def build_portrait_contour_program_from_luminance_raster(
 
         polylines.append(
             PolylinePrimitive(
-                role="contour",
+                role=role,
                 closed=closed,
                 points=[PaperPointNorm(x=x, y=y) for x, y in simplified],
             )
@@ -282,11 +294,12 @@ def build_portrait_contour_program_from_luminance_raster(
 
     luminance_values = [sample for row in raster.samples for sample in row]
     summary = PortraitContourSummary(
+        technique=opts.technique,
         raster_width=raster.width,
         raster_height=raster.height,
         cell_count=raster.width * raster.height,
         contour_count=len(polylines),
-        raw_contour_count=len(raw_contours),
+        raw_contour_count=len(raw_polylines),
         raw_point_count=raw_point_count,
         kept_point_count=kept_point_count,
         min_luminance=min(luminance_values),
@@ -459,6 +472,183 @@ def _contour_levels(values: list[float], *, options: PortraitContourOptions) -> 
         low + (high - low) * ((index + 1) / (options.contour_levels + 1))
         for index in range(options.contour_levels)
     ]
+
+
+def _portrait_raw_polylines(
+    *,
+    values: list[list[float]],
+    levels: list[float],
+    options: PortraitContourOptions,
+) -> list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]]:
+    if options.technique == "contours":
+        polylines: list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]] = []
+        for level in levels:
+            polylines.extend(
+                (points, closed, "contour")
+                for points, closed in _marching_squares_contours(values, level=level)
+            )
+        return polylines
+    if options.technique == "hatch":
+        return _portrait_hatch_polylines(values=values, options=options, crosshatch=False)
+    if options.technique == "crosshatch":
+        return _portrait_hatch_polylines(values=values, options=options, crosshatch=True)
+    if options.technique == "facets":
+        return _portrait_facet_polylines(values=values, options=options)
+    return _portrait_stipple_polylines(values=values, options=options)
+
+
+def _portrait_hatch_polylines(
+    *,
+    values: list[list[float]],
+    options: PortraitContourOptions,
+    crosshatch: bool,
+) -> list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]]:
+    height = len(values)
+    width = len(values[0])
+    cell_width = 1.0 / max(width - 1, 1)
+    cell_height = 1.0 / max(height - 1, 1)
+    polylines: list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]] = []
+    for row_index, row in enumerate(values):
+        for column_index, darkness in enumerate(row):
+            if darkness <= 0.18:
+                continue
+            density = max(0.0, min(1.0, (darkness - 0.18) / 0.82))
+            skip = 1 if density > 0.72 else 2 if density > 0.44 else 3
+            if (row_index + column_index) % skip != 0:
+                continue
+
+            center_x, center_y = _portrait_grid_point(
+                row=row_index,
+                column=column_index,
+                height=height,
+                width=width,
+            )
+            scale = 0.28 + 0.26 * density
+            dx = cell_width * scale
+            dy = cell_height * scale
+            polylines.append(
+                (
+                    [
+                        _clamped_point(center_x - dx, center_y + dy),
+                        _clamped_point(center_x + dx, center_y - dy),
+                    ],
+                    False,
+                    "hatch",
+                )
+            )
+
+            if crosshatch and darkness > 0.42 and (row_index * 2 + column_index) % max(1, skip - 1) == 0:
+                polylines.append(
+                    (
+                        [
+                            _clamped_point(center_x - dx, center_y - dy),
+                            _clamped_point(center_x + dx, center_y + dy),
+                        ],
+                        False,
+                        "hatch",
+                    )
+                )
+
+            if len(polylines) >= options.max_contours:
+                return polylines
+    return polylines
+
+
+def _portrait_facet_polylines(
+    *,
+    values: list[list[float]],
+    options: PortraitContourOptions,
+) -> list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]]:
+    height = len(values)
+    width = len(values[0])
+    polylines: list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]] = []
+    for row_index in range(height - 1):
+        for column_index in range(width - 1):
+            top_left = values[row_index][column_index]
+            top_right = values[row_index][column_index + 1]
+            bottom_right = values[row_index + 1][column_index + 1]
+            bottom_left = values[row_index + 1][column_index]
+            local = [top_left, top_right, bottom_right, bottom_left]
+            avg_darkness = sum(local) / 4.0
+            contrast = max(local) - min(local)
+            if avg_darkness <= 0.22 and contrast <= 0.11:
+                continue
+
+            p0 = _portrait_grid_point(row=row_index, column=column_index, height=height, width=width)
+            p1 = _portrait_grid_point(row=row_index, column=column_index + 1, height=height, width=width)
+            p2 = _portrait_grid_point(row=row_index + 1, column=column_index + 1, height=height, width=width)
+            p3 = _portrait_grid_point(row=row_index + 1, column=column_index, height=height, width=width)
+            if top_left + bottom_right >= top_right + bottom_left:
+                polylines.append(([p0, p1, p2], True, "outline"))
+                if avg_darkness > 0.40 or contrast > 0.18:
+                    polylines.append(([p0, p2, p3], True, "outline"))
+            else:
+                polylines.append(([p0, p1, p3], True, "outline"))
+                if avg_darkness > 0.40 or contrast > 0.18:
+                    polylines.append(([p1, p2, p3], True, "outline"))
+
+            if len(polylines) >= options.max_contours:
+                return polylines
+    return polylines
+
+
+def _portrait_stipple_polylines(
+    *,
+    values: list[list[float]],
+    options: PortraitContourOptions,
+) -> list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]]:
+    height = len(values)
+    width = len(values[0])
+    base_radius = min(1.0 / max(width - 1, 1), 1.0 / max(height - 1, 1))
+    polylines: list[tuple[list[tuple[float, float]], bool, PortraitPolylineRole]] = []
+    for row_index, row in enumerate(values):
+        for column_index, darkness in enumerate(row):
+            if darkness <= 0.24:
+                continue
+            density = max(0.0, min(1.0, (darkness - 0.24) / 0.76))
+            skip = 2 if density > 0.78 else 3 if density > 0.48 else 4
+            if (row_index * 5 + column_index * 3) % skip != 0:
+                continue
+
+            center_x, center_y = _portrait_grid_point(
+                row=row_index,
+                column=column_index,
+                height=height,
+                width=width,
+            )
+            radius = base_radius * (0.16 + 0.26 * density)
+            polylines.append(
+                (
+                    [
+                        _clamped_point(center_x, center_y + radius),
+                        _clamped_point(center_x + radius, center_y),
+                        _clamped_point(center_x, center_y - radius),
+                        _clamped_point(center_x - radius, center_y),
+                    ],
+                    True,
+                    "mark",
+                )
+            )
+            if len(polylines) >= options.max_contours:
+                return polylines
+    return polylines
+
+
+def _portrait_grid_point(
+    *,
+    row: int,
+    column: int,
+    height: int,
+    width: int,
+) -> tuple[float, float]:
+    return (
+        column / max(width - 1, 1),
+        1.0 - row / max(height - 1, 1),
+    )
+
+
+def _clamped_point(x: float, y: float) -> tuple[float, float]:
+    return (max(0.0, min(1.0, x)), max(0.0, min(1.0, y)))
 
 
 def _marching_squares_contours(
