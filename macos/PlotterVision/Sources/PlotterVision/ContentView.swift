@@ -3,6 +3,11 @@ import SwiftUI
 private let visualProbeMinimumObservedMm = 1.5
 private let machineVideoAgreementMinimumObservedNorm = 0.0015
 private let machineVideoAgreementInitialMoveMm = 6.0
+private let machineVideoAgreementMaxMoveMm = 40.0
+private let machineVideoAgreementMinSamples = 8
+private let machineVideoAgreementMaxSamples = 32
+private let machineVideoAgreementNoiseSampleCount = 18
+private let machineVideoAgreementSignalToNoise = 8.0
 private let visualMotionInitialProbeMoveMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
 private let visualMotionTravelFeedMmMin = 1200.0
@@ -262,6 +267,16 @@ struct ContentView: View {
         }
     }
 
+    private var visualFieldOverlayTransform: PaperRegistrationSnapshot? {
+        guard let registration = bridge.paperRegistrationSnapshot else { return nil }
+        if workspace.setupWindowActive,
+           machineVideoAgreementModel?.isPrecisionConverged != true,
+           !visualMotionValidated {
+            return nil
+        }
+        return registration
+    }
+
     private var plotterCameraPane: some View {
         ZStack {
             Color.black
@@ -286,7 +301,7 @@ struct ContentView: View {
                         expectedPathSegments: bridge.expectedPathSegments,
                         bindingMarkPreviewSegments: bridge.bindingMarkPreviewSegments,
                         bindingMarkPreviewPoints: bridge.bindingMarkPreviewPoints,
-                        paperTransform: bridge.paperRegistrationSnapshot,
+                        paperTransform: visualFieldOverlayTransform,
                         plotterOverlay: plotterOverlay,
                         pathRevealProgress: bridge.pathRevealProgress,
                         videoSize: plotterCamera.videoSize,
@@ -684,9 +699,11 @@ struct ContentView: View {
         visualMotionModel = nil
         visualMotionSamples = []
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
+        manualFiducials = []
         manualPenMode = false
         manualFiducialMode = false
         manualCapColorMode = false
+        plotterCamera.showGrid = false
 
         await bridge.refreshMachineStatus()
 
@@ -713,10 +730,8 @@ struct ContentView: View {
         }
         machineVideoAgreementModel = agreement
 
-        if !bridge.hasPaperLock {
-            guard await seedAndLockFieldFromMachineVideoAgreement(agreement) else {
-                return
-            }
+        guard await seedAndLockFieldFromMachineVideoAgreement(agreement) else {
+            return
         }
 
         guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
@@ -836,85 +851,209 @@ struct ContentView: View {
 
     @MainActor
     private func runMachineVideoAgreementProbe() async -> MachineVideoAgreementModel? {
-        let probeCommands: [(axis: String, distance: Double)] = [
-            ("X", machineVideoAgreementInitialMoveMm),
-            ("X", -machineVideoAgreementInitialMoveMm),
-            ("Y", machineVideoAgreementInitialMoveMm),
-            ("Y", -machineVideoAgreementInitialMoveMm)
-        ]
-        var samples: [MachineVideoAgreementSample] = []
-
-        for command in probeCommands {
-            guard let sample = await runMachineVideoAgreementMove(
-                axis: command.axis,
-                distanceMm: command.distance,
-                sampleIndex: samples.count + 1
-            ) else {
-                return nil
-            }
-            samples.append(sample)
-            machineVideoAgreementSamples = samples
-            updateMachineVideoAgreementSummary(samples: samples, status: "LEARN")
-        }
-
-        let usable = samples.filter {
-            $0.observedDistanceNorm >= machineVideoAgreementMinimumObservedNorm
-        }
-        guard let model = MachineVideoAgreementModel.solve(samples: usable) else {
-            frameLearning = FrameLearningState(
-                status: "WEAK",
-                detail: "Machine-video basis solve failed",
-                sampleCount: samples.count,
-                xPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "X" }),
-                yPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "Y" }),
-                lastPins: bridge.machinePins
-            )
-            calibrationStatusText = "CAL machine-video agreement weak: basis solve failed"
+        guard let noise = await measureMachineVideoAgreementNoise() else {
+            frameLearning.status = "STOP"
+            frameLearning.detail = "Could not measure cap jitter before agreement"
+            calibrationStatusText = "CAL machine-video probe stopped: cap jitter measurement failed"
             return nil
         }
 
-        machineVideoAgreementModel = model
+        let minimumSignalNorm = max(
+            machineVideoAgreementMinimumObservedNorm,
+            noise.rmsNorm * machineVideoAgreementSignalToNoise,
+            noise.maxDeviationNorm * 3.0
+        )
+        var samples: [MachineVideoAgreementSample] = []
+        var magnitudeMm = machineVideoAgreementInitialMoveMm
+        var bestModel: MachineVideoAgreementModel?
+        var cycle = 0
+
         frameLearning = FrameLearningState(
-            status: "AGREE",
+            status: "NOISE",
             detail: String(
-                format: "Machine-video agreement rms %.4f max %.4f X %.4f Y %.4f",
+                format: "Cap jitter rms %.4f max %.4f; need signal %.4f",
+                noise.rmsNorm,
+                noise.maxDeviationNorm,
+                minimumSignalNorm
+            ),
+            sampleCount: 0,
+            xPixelsPerMm: 0,
+            yPixelsPerMm: 0,
+            lastPins: bridge.machinePins
+        )
+        calibrationStatusText = String(
+            format: "CAL machine-video jitter rms %.4f; adaptive agreement starting",
+            noise.rmsNorm
+        )
+        bridge.recordOperatorEvent(
+            "machine_video_agreement_noise_measured",
+            details: [
+                "sample_count": noise.sampleCount,
+                "rms_norm": noise.rmsNorm,
+                "max_deviation_norm": noise.maxDeviationNorm,
+                "minimum_signal_norm": minimumSignalNorm
+            ]
+        )
+
+        while samples.count < machineVideoAgreementMaxSamples {
+            cycle += 1
+            let vectors = machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm)
+            for vector in vectors {
+                guard samples.count < machineVideoAgreementMaxSamples else { break }
+                guard let sample = await runMachineVideoAgreementMove(
+                    label: vector.label,
+                    machineDxMm: vector.xMm,
+                    machineDyMm: vector.yMm,
+                    minimumSignalNorm: minimumSignalNorm,
+                    sampleIndex: samples.count + 1
+                ) else {
+                    return nil
+                }
+                samples.append(sample)
+                machineVideoAgreementSamples = samples
+
+                if let model = MachineVideoAgreementModel.solve(
+                    samples: samples,
+                    observationNoiseNorm: noise.rmsNorm
+                ) {
+                    bestModel = model
+                }
+                updateMachineVideoAgreementSummary(
+                    samples: samples,
+                    status: bestModel?.isPrecisionConverged == true ? "AGREE" : "LEARN",
+                    noise: noise,
+                    minimumSignalNorm: minimumSignalNorm,
+                    bestModel: bestModel
+                )
+            }
+
+            if let model = bestModel,
+               samples.count >= machineVideoAgreementMinSamples,
+               model.isPrecisionConverged {
+                machineVideoAgreementModel = model
+                frameLearning = FrameLearningState(
+                    status: "AGREE",
+                    detail: String(
+                        format: "Agreement converged corner %.1fmm rms %.4f max %.4f cond %.1f samples %d",
+                        model.fieldCornerPrecisionMm,
+                        model.rmsResidualNorm,
+                        model.maxResidualNorm,
+                        model.conditionNumber,
+                        model.sampleCount
+                    ),
+                    sampleCount: model.sampleCount,
+                    xPixelsPerMm: model.xBasisLengthNorm,
+                    yPixelsPerMm: model.yBasisLengthNorm,
+                    lastPins: bridge.machinePins
+                )
+                calibrationStatusText = "CAL machine-video agreement converged; seeding 200x150 field"
+                recordMachineVideoAgreementModel(model, noise: noise, minimumSignalNorm: minimumSignalNorm)
+                return model
+            }
+
+            magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.45, magnitudeMm + 2.0))
+            calibrationStatusText = String(
+                format: "CAL machine-video agreement refining cycle %d samples %d next %.1fmm",
+                cycle,
+                samples.count,
+                magnitudeMm
+            )
+        }
+
+        guard let model = bestModel else {
+            frameLearning.status = "WEAK"
+            frameLearning.detail = "Machine-video basis solve failed"
+            frameLearning.sampleCount = samples.count
+            calibrationStatusText = "CAL machine-video agreement weak: basis solve failed"
+            return nil
+        }
+        frameLearning = FrameLearningState(
+            status: "WEAK",
+            detail: String(
+                format: "Agreement did not converge corner %.1fmm rms %.4f max %.4f cond %.1f samples %d",
+                model.fieldCornerPrecisionMm,
                 model.rmsResidualNorm,
                 model.maxResidualNorm,
-                model.xBasisLengthNorm,
-                model.yBasisLengthNorm
+                model.conditionNumber,
+                model.sampleCount
             ),
             sampleCount: model.sampleCount,
             xPixelsPerMm: model.xBasisLengthNorm,
             yPixelsPerMm: model.yBasisLengthNorm,
             lastPins: bridge.machinePins
         )
-        calibrationStatusText = "CAL machine-video agreement learned; seeding field"
-        bridge.recordOperatorEvent(
-            "machine_video_agreement_measured",
-            details: [
-                "sample_count": model.sampleCount,
-                "x_basis_dx_norm": model.xBasisDxNorm,
-                "x_basis_dy_norm": model.xBasisDyNorm,
-                "y_basis_dx_norm": model.yBasisDxNorm,
-                "y_basis_dy_norm": model.yBasisDyNorm,
-                "determinant": model.determinant,
-                "rms_residual_norm": model.rmsResidualNorm,
-                "max_residual_norm": model.maxResidualNorm
-            ]
+        calibrationStatusText = "CAL machine-video agreement weak: precision target not reached"
+        recordMachineVideoAgreementModel(model, noise: noise, minimumSignalNorm: minimumSignalNorm)
+        return nil
+    }
+
+    @MainActor
+    private func measureMachineVideoAgreementNoise() async -> MachineVideoAgreementNoise? {
+        var observations: [GreenCapCameraObservation] = []
+        var lastFrame: Int?
+        let deadline = Date().addingTimeInterval(4.0)
+
+        while observations.count < machineVideoAgreementNoiseSampleCount && Date() < deadline {
+            guard let observation = await waitForGreenCapCameraObservation(
+                afterFrame: lastFrame,
+                timeoutSeconds: 0.7
+            ) else {
+                continue
+            }
+            observations.append(observation)
+            lastFrame = observation.frameNumber
+        }
+
+        guard observations.count >= 6 else { return nil }
+        let centerX = observations.reduce(0.0) { $0 + Double($1.cameraPoint.x) } / Double(observations.count)
+        let centerY = observations.reduce(0.0) { $0 + Double($1.cameraPoint.y) } / Double(observations.count)
+        let deviations = observations.map {
+            hypot(Double($0.cameraPoint.x) - centerX, Double($0.cameraPoint.y) - centerY)
+        }
+        let rms = sqrt(deviations.reduce(0.0) { $0 + $1 * $1 } / Double(observations.count))
+        return MachineVideoAgreementNoise(
+            sampleCount: observations.count,
+            centerXNorm: centerX,
+            centerYNorm: centerY,
+            rmsNorm: max(rms, 0.000_25),
+            maxDeviationNorm: max(deviations.max() ?? 0.0, 0.000_5)
         )
-        return model
+    }
+
+    private func machineVideoAgreementProbeVectors(
+        magnitudeMm: Double
+    ) -> [(label: String, xMm: Double, yMm: Double)] {
+        let magnitude = min(machineVideoAgreementMaxMoveMm, max(1.0, magnitudeMm))
+        let diagonal = magnitude / sqrt(2.0)
+        return [
+            ("X+", magnitude, 0.0),
+            ("X-", -magnitude, 0.0),
+            ("Y+", 0.0, magnitude),
+            ("Y-", 0.0, -magnitude),
+            ("D++", diagonal, diagonal),
+            ("D--", -diagonal, -diagonal),
+            ("D+-", diagonal, -diagonal),
+            ("D-+", -diagonal, diagonal)
+        ]
     }
 
     @MainActor
     private func runMachineVideoAgreementMove(
-        axis: String,
-        distanceMm: Double,
+        label: String,
+        machineDxMm: Double,
+        machineDyMm: Double,
+        minimumSignalNorm: Double,
         sampleIndex: Int
     ) async -> MachineVideoAgreementSample? {
-        let attempts = reducedProbeDistances(from: distanceMm)
         let feedMmMin = min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin)
+        let baseLength = max(hypot(machineDxMm, machineDyMm), 0.000_001)
+        let expansionScales = [1.0, 1.6, 2.4, 3.2]
 
-        for (attemptIndex, commandDistance) in attempts.enumerated() {
+        for (attemptIndex, scale) in expansionScales.enumerated() {
+            let requestedLength = min(machineVideoAgreementMaxMoveMm, baseLength * scale)
+            let commandScale = requestedLength / baseLength
+            let commandX = machineDxMm * commandScale
+            let commandY = machineDyMm * commandScale
             guard let before = await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) else {
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Cap marker lost before machine-video move"
@@ -923,30 +1062,24 @@ struct ContentView: View {
             }
 
             frameLearning.detail = String(
-                format: "Machine-video %@%+.1f attempt %d",
-                axis,
-                commandDistance,
+                format: "Machine-video %@ X%+.1f Y%+.1f attempt %d",
+                label,
+                commandX,
+                commandY,
                 attemptIndex + 1
             )
             calibrationStatusText = String(
-                format: "CAL machine-video probe: move %@%+.1f",
-                axis,
-                commandDistance
+                format: "CAL machine-video probe: %@ X%+.1f Y%+.1f",
+                label,
+                commandX,
+                commandY
             )
 
-            guard let response = await bridge.learningJog(
-                axis: axis,
-                distanceMm: commandDistance,
+            guard let response = await runMachineVideoAgreementVectorJog(
+                xMm: commandX,
+                yMm: commandY,
                 feedMmMin: feedMmMin
             ) else {
-                if attemptIndex + 1 < attempts.count {
-                    calibrationStatusText = String(
-                        format: "CAL machine-video probe: %@%+.1f failed; retrying smaller",
-                        axis,
-                        commandDistance
-                    )
-                    continue
-                }
                 frameLearning.status = "STOP"
                 frameLearning.detail = bridge.statusText.isEmpty ? "Learning move failed" : bridge.statusText
                 calibrationStatusText = "CAL machine-video probe stopped: \(frameLearning.detail)"
@@ -955,7 +1088,7 @@ struct ContentView: View {
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
                 frameLearning.status = "STOP"
-                frameLearning.detail = "Pin active after \(axis) move: \(pins)"
+                frameLearning.detail = "Pin active after \(label) move: \(pins)"
                 frameLearning.lastPins = pins
                 calibrationStatusText = "CAL machine-video probe stopped: pin active \(pins)"
                 return nil
@@ -966,16 +1099,15 @@ struct ContentView: View {
                 afterFrame: before.frameNumber,
                 timeoutSeconds: 3.0
             ) else {
-                if attemptIndex + 1 < attempts.count {
+                if attemptIndex + 1 < expansionScales.count {
                     calibrationStatusText = String(
-                        format: "CAL machine-video probe: no fresh cap after %@%+.1f; retrying smaller",
-                        axis,
-                        commandDistance
+                        format: "CAL machine-video probe: no fresh cap after %@; retrying",
+                        label
                     )
                     continue
                 }
                 frameLearning.status = "STOP"
-                frameLearning.detail = "No fresh cap observation after \(axis) move"
+                frameLearning.detail = "No fresh cap observation after \(label) move"
                 calibrationStatusText = "CAL machine-video probe stopped: no fresh cap observation"
                 return nil
             }
@@ -983,9 +1115,33 @@ struct ContentView: View {
             let dx = Double(after.cameraPoint.x - before.cameraPoint.x)
             let dy = Double(after.cameraPoint.y - before.cameraPoint.y)
             let observedDistance = hypot(dx, dy)
+            if observedDistance < minimumSignalNorm,
+               attemptIndex + 1 < expansionScales.count {
+                bridge.recordOperatorEvent(
+                    "machine_video_agreement_weak_signal",
+                    details: [
+                        "sample_index": sampleIndex,
+                        "attempt_index": attemptIndex + 1,
+                        "label": label,
+                        "command_x_mm": commandX,
+                        "command_y_mm": commandY,
+                        "observed_distance_norm": observedDistance,
+                        "minimum_signal_norm": minimumSignalNorm
+                    ]
+                )
+                calibrationStatusText = String(
+                    format: "CAL machine-video %@ signal %.4f < %.4f; expanding move",
+                    label,
+                    observedDistance,
+                    minimumSignalNorm
+                )
+                continue
+            }
+
             let sample = MachineVideoAgreementSample(
-                axis: axis,
-                distanceMm: commandDistance,
+                label: label,
+                machineDxMm: commandX,
+                machineDyMm: commandY,
                 observedDxNorm: dx,
                 observedDyNorm: dy,
                 observedDistanceNorm: observedDistance,
@@ -996,8 +1152,9 @@ struct ContentView: View {
                 details: [
                     "sample_index": sampleIndex,
                     "attempt_index": attemptIndex + 1,
-                    "axis": axis,
-                    "command_mm": commandDistance,
+                    "label": label,
+                    "command_x_mm": commandX,
+                    "command_y_mm": commandY,
                     "before_frame": before.frameNumber,
                     "after_frame": after.frameNumber,
                     "before_camera_x": before.cameraPoint.x,
@@ -1010,10 +1167,11 @@ struct ContentView: View {
                 ]
             )
             calibrationStatusText = String(
-                format: "CAL machine-video sample %d %@%+.1f cam d%.4f %.4f",
+                format: "CAL machine-video sample %d %@ X%+.1f Y%+.1f cam d%.4f %.4f",
                 sampleIndex,
-                axis,
-                commandDistance,
+                label,
+                commandX,
+                commandY,
                 dx,
                 dy
             )
@@ -1023,27 +1181,67 @@ struct ContentView: View {
         return nil
     }
 
-    private func reducedProbeDistances(from distanceMm: Double) -> [Double] {
-        let sign = distanceMm < 0 ? -1.0 : 1.0
-        let magnitude = abs(distanceMm)
-        return [
-            magnitude,
-            max(2.0, magnitude * 0.5),
-            max(1.0, magnitude * 0.25)
-        ]
-        .map { sign * $0 }
+    @MainActor
+    private func runMachineVideoAgreementVectorJog(
+        xMm: Double,
+        yMm: Double,
+        feedMmMin: Double
+    ) async -> MachineCommandResponse? {
+        var latestResponse: MachineCommandResponse?
+        if abs(xMm) >= 0.000_001 {
+            guard let response = await bridge.learningJog(axis: "X", distanceMm: xMm, feedMmMin: feedMmMin) else {
+                return nil
+            }
+            latestResponse = response
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                return response
+            }
+        }
+        if abs(yMm) >= 0.000_001 {
+            guard let response = await bridge.learningJog(axis: "Y", distanceMm: yMm, feedMmMin: feedMmMin) else {
+                return nil
+            }
+            latestResponse = response
+        }
+        return latestResponse
     }
 
     private func updateMachineVideoAgreementSummary(
         samples: [MachineVideoAgreementSample],
-        status: String
+        status: String,
+        noise: MachineVideoAgreementNoise,
+        minimumSignalNorm: Double,
+        bestModel: MachineVideoAgreementModel?
     ) {
+        let xBasis = bestModel?.xBasisLengthNorm ?? averageCameraNormPerCommandMm(
+            samples: samples.filter { abs($0.machineDxMm) > abs($0.machineDyMm) }
+        )
+        let yBasis = bestModel?.yBasisLengthNorm ?? averageCameraNormPerCommandMm(
+            samples: samples.filter { abs($0.machineDyMm) > abs($0.machineDxMm) }
+        )
+        let detail: String
+        if let bestModel {
+            detail = String(
+                format: "Agreement samples %d corner %.1fmm rms %.4f signal %.4f",
+                samples.count,
+                bestModel.fieldCornerPrecisionMm,
+                bestModel.rmsResidualNorm,
+                minimumSignalNorm
+            )
+        } else {
+            detail = String(
+                format: "Agreement samples %d; jitter %.4f signal %.4f",
+                samples.count,
+                noise.rmsNorm,
+                minimumSignalNorm
+            )
+        }
         frameLearning = FrameLearningState(
             status: status,
-            detail: String(format: "Machine-video samples %d/4", samples.count),
+            detail: detail,
             sampleCount: samples.count,
-            xPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "X" }),
-            yPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "Y" }),
+            xPixelsPerMm: xBasis,
+            yPixelsPerMm: yBasis,
             lastPins: bridge.machinePins
         )
     }
@@ -1051,9 +1249,34 @@ struct ContentView: View {
     private func averageCameraNormPerCommandMm(samples: [MachineVideoAgreementSample]) -> Double {
         guard !samples.isEmpty else { return 0 }
         let total = samples.reduce(0.0) { partial, sample in
-            partial + sample.observedDistanceNorm / max(abs(sample.distanceMm), 0.000_001)
+            partial + sample.observedDistanceNorm / max(sample.commandDistanceMm, 0.000_001)
         }
         return total / Double(samples.count)
+    }
+
+    private func recordMachineVideoAgreementModel(
+        _ model: MachineVideoAgreementModel,
+        noise: MachineVideoAgreementNoise,
+        minimumSignalNorm: Double
+    ) {
+        bridge.recordOperatorEvent(
+            "machine_video_agreement_measured",
+            details: [
+                "sample_count": model.sampleCount,
+                "x_basis_dx_norm": model.xBasisDxNorm,
+                "x_basis_dy_norm": model.xBasisDyNorm,
+                "y_basis_dx_norm": model.yBasisDxNorm,
+                "y_basis_dy_norm": model.yBasisDyNorm,
+                "determinant": model.determinant,
+                "condition_number": model.conditionNumber,
+                "rms_residual_norm": model.rmsResidualNorm,
+                "max_residual_norm": model.maxResidualNorm,
+                "observation_noise_norm": noise.rmsNorm,
+                "minimum_signal_norm": minimumSignalNorm,
+                "field_corner_precision_mm": model.fieldCornerPrecisionMm,
+                "precision_converged": model.isPrecisionConverged
+            ]
+        )
     }
 
     @MainActor
@@ -1068,6 +1291,7 @@ struct ContentView: View {
 
         manualFiducials = corners
         manualFiducialMode = false
+        plotterCamera.showGrid = true
         calibrationStatusText = "FIELD seeded from machine-video agreement; locking 200x150"
         guard let response = await bridge.registerPaperHomography(
             fiducials: corners,
@@ -1098,61 +1322,68 @@ struct ContentView: View {
         from model: MachineVideoAgreementModel,
         center: CGPoint
     ) -> [ManualFiducialPoint]? {
-        let xLength = model.xBasisLengthNorm
-        let yLength = model.yBasisLengthNorm
-        guard xLength > 0.000_001, yLength > 0.000_001 else { return nil }
-
-        let xUnit = CGVector(
-            dx: CGFloat(model.xBasisDxNorm / xLength),
-            dy: CGFloat(model.xBasisDyNorm / xLength)
+        let xVector = CGVector(
+            dx: CGFloat(model.xBasisDxNorm * 200.0),
+            dy: CGFloat(model.xBasisDyNorm * 200.0)
         )
-        let yUnit = CGVector(
-            dx: CGFloat(model.yBasisDxNorm / yLength),
-            dy: CGFloat(model.yBasisDyNorm / yLength)
+        let yVector = CGVector(
+            dx: CGFloat(model.yBasisDxNorm * 150.0),
+            dy: CGFloat(model.yBasisDyNorm * 150.0)
         )
-        let margin = 0.08
-        var fieldCenter = CGPoint(
-            x: CGFloat(clampDouble(Double(center.x), min: 0.24, max: 0.76)),
-            y: CGFloat(clampDouble(Double(center.y), min: 0.24, max: 0.76))
-        )
-        var halfWidth = 0.30
-        var halfHeight = halfWidth * 0.75
-
-        for attempt in 0..<36 {
-            let corners = fieldCorners(
-                center: fieldCenter,
-                xUnit: xUnit,
-                yUnit: yUnit,
-                halfWidth: halfWidth,
-                halfHeight: halfHeight
-            )
-            if corners.allSatisfy({ pointInsideCameraBounds($0, margin: margin) }) {
-                return manualFieldPoints(cameraCorners: corners)
-            }
-            if attempt == 12 {
-                fieldCenter = CGPoint(x: 0.5, y: 0.5)
-            }
-            halfWidth *= 0.92
-            halfHeight = halfWidth * 0.75
+        guard hypot(xVector.dx, xVector.dy) > 0.000_001,
+              hypot(yVector.dx, yVector.dy) > 0.000_001 else {
+            return nil
         }
-        return nil
+        let margin = 0.08
+        let offsets = fieldCornerOffsets(xVector: xVector, yVector: yVector)
+        guard let fittedCenter = fitFieldCenter(
+            preferredCenter: center,
+            offsets: offsets,
+            margin: margin
+        ) else {
+            return nil
+        }
+        let corners = offsets.map {
+            CGPoint(x: fittedCenter.x + $0.dx, y: fittedCenter.y + $0.dy)
+        }
+        guard corners.allSatisfy({ pointInsideCameraBounds($0, margin: margin) }) else { return nil }
+        return manualFieldPoints(cameraCorners: corners)
     }
 
-    private func fieldCorners(
-        center: CGPoint,
-        xUnit: CGVector,
-        yUnit: CGVector,
-        halfWidth: Double,
-        halfHeight: Double
-    ) -> [CGPoint] {
-        let xVector = CGVector(dx: xUnit.dx * CGFloat(halfWidth), dy: xUnit.dy * CGFloat(halfWidth))
-        let yVector = CGVector(dx: yUnit.dx * CGFloat(halfHeight), dy: yUnit.dy * CGFloat(halfHeight))
+    private func fieldCornerOffsets(
+        xVector: CGVector,
+        yVector: CGVector
+    ) -> [CGVector] {
+        let halfX = CGVector(dx: xVector.dx * 0.5, dy: xVector.dy * 0.5)
+        let halfY = CGVector(dx: yVector.dx * 0.5, dy: yVector.dy * 0.5)
         return [
-            CGPoint(x: center.x - xVector.dx - yVector.dx, y: center.y - xVector.dy - yVector.dy),
-            CGPoint(x: center.x + xVector.dx - yVector.dx, y: center.y + xVector.dy - yVector.dy),
-            CGPoint(x: center.x + xVector.dx + yVector.dx, y: center.y + xVector.dy + yVector.dy),
-            CGPoint(x: center.x - xVector.dx + yVector.dx, y: center.y - xVector.dy + yVector.dy)
+            CGVector(dx: -halfX.dx - halfY.dx, dy: -halfX.dy - halfY.dy),
+            CGVector(dx: halfX.dx - halfY.dx, dy: halfX.dy - halfY.dy),
+            CGVector(dx: halfX.dx + halfY.dx, dy: halfX.dy + halfY.dy),
+            CGVector(dx: -halfX.dx + halfY.dx, dy: -halfX.dy + halfY.dy)
         ]
+    }
+
+    private func fitFieldCenter(
+        preferredCenter: CGPoint,
+        offsets: [CGVector],
+        margin: Double
+    ) -> CGPoint? {
+        guard let minOffsetX = offsets.map(\.dx).min(),
+              let maxOffsetX = offsets.map(\.dx).max(),
+              let minOffsetY = offsets.map(\.dy).min(),
+              let maxOffsetY = offsets.map(\.dy).max() else {
+            return nil
+        }
+        let minCenterX = CGFloat(margin) - minOffsetX
+        let maxCenterX = CGFloat(1.0 - margin) - maxOffsetX
+        let minCenterY = CGFloat(margin) - minOffsetY
+        let maxCenterY = CGFloat(1.0 - margin) - maxOffsetY
+        guard minCenterX <= maxCenterX, minCenterY <= maxCenterY else { return nil }
+        return CGPoint(
+            x: min(max(preferredCenter.x, minCenterX), maxCenterX),
+            y: min(max(preferredCenter.y, minCenterY), maxCenterY)
+        )
     }
 
     private func pointInsideCameraBounds(_ point: CGPoint, margin: Double) -> Bool {

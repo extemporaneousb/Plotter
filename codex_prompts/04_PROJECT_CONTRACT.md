@@ -47,11 +47,13 @@ The app-first drawing flow is:
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-4. Run a machine-video agreement probe before drawing a field box. This probe measures which
-   camera/video direction corresponds to machine-relative `+X` and `+Y`, including swapped or
-   sign-reversed axes, using small adaptive moves.
-5. Define Drawing Field from that learned basis. The seeded field is 200 mm x 150 mm, with the
-   larger dimension on visual `+X`, and the existing field-corner affordance remains adjustable.
+4. Run a machine-video agreement probe before drawing any field box or grid. The probe first measures
+   cap jitter, then uses adaptive relative X/Y/diagonal machine vectors to learn a 2x2
+   machine-to-video matrix. It stops on precision convergence, not on a fixed sample count, and accepts
+   swapped, rotated, skewed, or sign-reversed axes when the matrix is stable.
+5. Define Drawing Field from the converged 2x2 transform. The seeded field is 200 mm x 150 mm, with
+   the larger declared dimension on visual `+X`, and the existing field-corner affordance remains
+   adjustable.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    Success for this milestone means predictable green-cap motion in the user-defined visual drawing
    field.
@@ -69,7 +71,9 @@ Cap-only motion is relative session evidence. For this milestone, the bridge is 
 visual field is registered, the cap is localized in that field, and the learned 2x2 relative motion
 model is stable, invertible, and validated by observed cap movement. Machine axes may be swapped,
 rotated, skewed, or sign-reversed relative to the video field. Swift observations are evidence;
-Python decides whether the field, cap, and motion model are valid.
+Python decides whether the field, cap, and motion model are valid. During setup, no 200 mm x 150 mm
+field frame or millimeter grid should be drawn until Machine-Video Agreement reaches the precision
+target and seeds field registration from the converged matrix.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned

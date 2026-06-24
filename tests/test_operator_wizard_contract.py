@@ -309,6 +309,12 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Confirm Green Cap" in content
     assert "Run Machine-Video Probe" in content
     assert "runMachineVideoAgreementProbe" in content
+    assert "measureMachineVideoAgreementNoise" in content
+    assert "machineVideoAgreementProbeVectors" in content
+    assert "runMachineVideoAgreementVectorJog" in content
+    assert "machineVideoAgreementMaxSamples" in content
+    assert "isPrecisionConverged" in content + _read(SWIFT_DIR / "Models.swift")
+    assert "fieldCornerPrecisionMm" in content + _read(SWIFT_DIR / "Models.swift")
     assert "seedAndLockFieldFromMachineVideoAgreement" in content
     assert "currentGreenCapCameraObservation" in content
     assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
@@ -328,6 +334,8 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "boundedMachineTravelDistance" not in content
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
+    assert "Machine-video samples %d/4" not in content
+    assert "reducedProbeDistances" not in content
 
 
 def test_old_binding_runner_is_not_active_setup() -> None:
@@ -427,8 +435,15 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
 def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
 
-    assert "let probeCommands: [(axis: String, distance: Double)]" in content
+    assert "machineVideoAgreementProbeVectors" in content
+    assert '("D++", diagonal, diagonal)' in content
+    assert '("D+-", diagonal, -diagonal)' in content
+    assert "let machineDxMm: Double" in models
+    assert "let machineDyMm: Double" in models
+    assert "observedDistanceNorm / max(sample.commandDistanceMm" in content
+    assert "cameraDelta(forMachineX" in models
     assert "bridge.learningJog(" in content
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
@@ -450,6 +465,59 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "runBootstrapAdaptiveProbe(" not in content
     assert "previewBootstrapAdaptiveProbe(" not in model
     assert "runBootstrapAdaptiveProbe(" not in model
+
+
+def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+    readme = _read(ROOT / "README.md")
+    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
+    plan = _read(ROOT / "docs" / "REPOSITORY_PLAN.md")
+
+    assert "private var visualFieldOverlayTransform: PaperRegistrationSnapshot?" in content
+    overlay_gate = content.split("private var visualFieldOverlayTransform", 1)[1].split(
+        "private var plotterCameraPane",
+        1,
+    )[0]
+    assert "workspace.setupWindowActive" in overlay_gate
+    assert "machineVideoAgreementModel?.isPrecisionConverged != true" in overlay_gate
+    assert "return nil" in overlay_gate
+    assert "paperTransform: visualFieldOverlayTransform" in content
+
+    agreement_probe = content.split("private func runMachineVideoAgreementProbe", 1)[1].split(
+        "@MainActor\n    private func measureMachineVideoAgreementNoise",
+        1,
+    )[0]
+    assert "while samples.count < machineVideoAgreementMaxSamples" in agreement_probe
+    assert "model.isPrecisionConverged" in agreement_probe
+    assert "samples.count >= machineVideoAgreementMinSamples" in agreement_probe
+    assert "magnitudeMm = min(machineVideoAgreementMaxMoveMm" in agreement_probe
+    assert "machineVideoAgreementMaxSamples = 32" in content
+    assert "machineVideoAgreementMinSamples = 8" in content
+    assert "fieldCornerPrecisionMm <= 2.0" in models
+    assert "conditionNumber <= 30.0" in models
+    assert "maxResidualNorm <= max(0.004, observationNoiseNorm * 8.0)" in models
+
+    field_seed = content.split("private func seededFieldCorners", 1)[1].split(
+        "private func pointInsideCameraBounds",
+        1,
+    )[0]
+    assert "model.xBasisDxNorm * 200.0" in field_seed
+    assert "model.xBasisDyNorm * 200.0" in field_seed
+    assert "model.yBasisDxNorm * 150.0" in field_seed
+    assert "model.yBasisDyNorm * 150.0" in field_seed
+    assert "fitFieldCenter" in field_seed
+    assert "halfWidth *= 0.92" not in content
+    assert "halfHeight = halfWidth * 0.75" not in content
+
+    assert "before drawing any field box or grid" in readme
+    assert "loop increases move size only when the observed video signal is too weak" in readme
+    assert "converged 2x2 machine-video transform" in readme
+    assert "before drawing any field box or grid" in contract
+    assert "stops on precision convergence, not on a fixed sample count" in contract
+    assert "before drawing any field box or grid" in plan
+    assert "stops on precision" in plan
+    assert "fixed four-move script" in plan
 
 
 def test_operator_log_replaces_bottom_status_bar() -> None:

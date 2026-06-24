@@ -605,13 +605,34 @@ struct FrameLearningSample: Equatable {
 }
 
 struct MachineVideoAgreementSample: Equatable {
-    let axis: String
-    let distanceMm: Double
+    let label: String
+    let machineDxMm: Double
+    let machineDyMm: Double
     let observedDxNorm: Double
     let observedDyNorm: Double
     let observedDistanceNorm: Double
     var residualNorm: Double = 0.0
     let strength: Double
+
+    var commandDistanceMm: Double {
+        hypot(machineDxMm, machineDyMm)
+    }
+}
+
+struct MachineVideoAgreementNoise: Equatable {
+    let sampleCount: Int
+    let centerXNorm: Double
+    let centerYNorm: Double
+    let rmsNorm: Double
+    let maxDeviationNorm: Double
+
+    static let fallback = MachineVideoAgreementNoise(
+        sampleCount: 0,
+        centerXNorm: 0,
+        centerYNorm: 0,
+        rmsNorm: 0.000_5,
+        maxDeviationNorm: 0.001
+    )
 }
 
 struct VisualMotionSample: Equatable {
@@ -743,10 +764,52 @@ struct MachineVideoAgreementModel: Equatable {
     let rmsResidualNorm: Double
     let maxResidualNorm: Double
     let sampleCount: Int
+    let observationNoiseNorm: Double
+    let fieldCornerPrecisionMm: Double
 
-    static func solve(samples: [MachineVideoAgreementSample]) -> MachineVideoAgreementModel? {
+    static func solve(
+        samples: [MachineVideoAgreementSample],
+        observationNoiseNorm: Double = 0.0
+    ) -> MachineVideoAgreementModel? {
         guard samples.count >= 4 else { return nil }
 
+        var weights = Array(repeating: 1.0, count: samples.count)
+        var fitted: MachineVideoAgreementModel?
+        for _ in 0..<3 {
+            guard let model = solveWeighted(
+                samples: samples,
+                weights: weights,
+                observationNoiseNorm: observationNoiseNorm
+            ) else {
+                return nil
+            }
+            fitted = model
+            let residuals = samples.map { sample in
+                let predicted = model.cameraDelta(forMachineX: sample.machineDxMm, yMm: sample.machineDyMm)
+                return hypot(sample.observedDxNorm - predicted.dx, sample.observedDyNorm - predicted.dy)
+            }
+            let robustScale = max(
+                observationNoiseNorm * 3.0,
+                median(residuals) * 1.4826,
+                0.000_3
+            )
+            weights = residuals.map { residual in
+                guard residual > 0 else { return 1.0 }
+                return min(1.0, (1.5 * robustScale) / residual)
+            }
+        }
+        return solveWeighted(
+            samples: samples,
+            weights: weights,
+            observationNoiseNorm: observationNoiseNorm
+        ) ?? fitted
+    }
+
+    private static func solveWeighted(
+        samples: [MachineVideoAgreementSample],
+        weights: [Double],
+        observationNoiseNorm: Double
+    ) -> MachineVideoAgreementModel? {
         var sxx = 0.0
         var sxy = 0.0
         var syy = 0.0
@@ -755,17 +818,18 @@ struct MachineVideoAgreementModel: Equatable {
         var ux = 0.0
         var uy = 0.0
 
-        for sample in samples {
-            let x = sample.axis == "X" ? sample.distanceMm : 0.0
-            let y = sample.axis == "Y" ? sample.distanceMm : 0.0
+        for (index, sample) in samples.enumerated() {
+            let x = sample.machineDxMm
+            let y = sample.machineDyMm
+            let weight = weights.indices.contains(index) ? weights[index] : 1.0
             guard x.isFinite, y.isFinite else { return nil }
-            sxx += x * x
-            sxy += x * y
-            syy += y * y
-            tx += x * sample.observedDxNorm
-            ty += y * sample.observedDxNorm
-            ux += x * sample.observedDyNorm
-            uy += y * sample.observedDyNorm
+            sxx += weight * x * x
+            sxy += weight * x * y
+            syy += weight * y * y
+            tx += weight * x * sample.observedDxNorm
+            ty += weight * y * sample.observedDxNorm
+            ux += weight * x * sample.observedDyNorm
+            uy += weight * y * sample.observedDyNorm
         }
 
         let normalDeterminant = sxx * syy - sxy * sxy
@@ -777,14 +841,27 @@ struct MachineVideoAgreementModel: Equatable {
         let yBasisDyNorm = (sxx * uy - sxy * ux) / normalDeterminant
 
         let residuals = samples.map { sample in
-            let machineX = sample.axis == "X" ? sample.distanceMm : 0.0
-            let machineY = sample.axis == "Y" ? sample.distanceMm : 0.0
-            let predictedDx = xBasisDxNorm * machineX + yBasisDxNorm * machineY
-            let predictedDy = xBasisDyNorm * machineX + yBasisDyNorm * machineY
+            let predictedDx = xBasisDxNorm * sample.machineDxMm + yBasisDxNorm * sample.machineDyMm
+            let predictedDy = xBasisDyNorm * sample.machineDxMm + yBasisDyNorm * sample.machineDyMm
             return hypot(sample.observedDxNorm - predictedDx, sample.observedDyNorm - predictedDy)
         }
         let rmsResidual = sqrt(residuals.reduce(0.0) { $0 + $1 * $1 } / Double(max(residuals.count, 1)))
         let maxResidual = residuals.max() ?? .infinity
+        let residualSigma = max(rmsResidual, observationNoiseNorm, 0.000_001)
+        let inverseNormalXX = syy / normalDeterminant
+        let inverseNormalXY = -sxy / normalDeterminant
+        let inverseNormalYY = sxx / normalDeterminant
+        let fieldX = 200.0
+        let fieldY = 150.0
+        let cornerVarianceFactor = max(
+            0.0,
+            fieldX * fieldX * inverseNormalXX
+                + 2.0 * fieldX * fieldY * inverseNormalXY
+                + fieldY * fieldY * inverseNormalYY
+        )
+        let cornerUncertaintyNorm = sqrt(2.0) * residualSigma * sqrt(cornerVarianceFactor)
+        let minBasisNormPerMm = max(min(hypot(xBasisDxNorm, xBasisDyNorm), hypot(yBasisDxNorm, yBasisDyNorm)), 0.000_001)
+        let fieldCornerPrecisionMm = cornerUncertaintyNorm / minBasisNormPerMm
 
         let model = MachineVideoAgreementModel(
             xBasisDxNorm: xBasisDxNorm,
@@ -793,9 +870,21 @@ struct MachineVideoAgreementModel: Equatable {
             yBasisDyNorm: yBasisDyNorm,
             rmsResidualNorm: rmsResidual,
             maxResidualNorm: maxResidual,
-            sampleCount: samples.count
+            sampleCount: samples.count,
+            observationNoiseNorm: observationNoiseNorm,
+            fieldCornerPrecisionMm: fieldCornerPrecisionMm
         )
         return model.isUsable ? model : nil
+    }
+
+    private static func median(_ values: [Double]) -> Double {
+        let sorted = values.filter(\.isFinite).sorted()
+        guard !sorted.isEmpty else { return 0 }
+        let middle = sorted.count / 2
+        if sorted.count % 2 == 0 {
+            return (sorted[middle - 1] + sorted[middle]) / 2.0
+        }
+        return sorted[middle]
     }
 
     var determinant: Double {
@@ -810,6 +899,27 @@ struct MachineVideoAgreementModel: Equatable {
         hypot(yBasisDxNorm, yBasisDyNorm)
     }
 
+    var conditionNumber: Double {
+        let a = xBasisDxNorm
+        let b = yBasisDxNorm
+        let c = xBasisDyNorm
+        let d = yBasisDyNorm
+        let trace = a * a + b * b + c * c + d * d
+        let determinantSquared = pow(a * d - b * c, 2.0)
+        let discriminant = sqrt(max(0.0, trace * trace - 4.0 * determinantSquared))
+        let sigmaMax = sqrt(max(0.0, (trace + discriminant) / 2.0))
+        let sigmaMin = sqrt(max(0.0, (trace - discriminant) / 2.0))
+        guard sigmaMin > 0 else { return .infinity }
+        return sigmaMax / sigmaMin
+    }
+
+    var isPrecisionConverged: Bool {
+        sampleCount >= 8
+            && fieldCornerPrecisionMm <= 2.0
+            && maxResidualNorm <= max(0.004, observationNoiseNorm * 8.0)
+            && conditionNumber <= 30.0
+    }
+
     var isUsable: Bool {
         abs(determinant) > 0.000_000_2
             && xBasisLengthNorm > 0.000_2
@@ -817,5 +927,14 @@ struct MachineVideoAgreementModel: Equatable {
             && rmsResidualNorm.isFinite
             && maxResidualNorm.isFinite
             && sampleCount >= 4
+            && conditionNumber.isFinite
+            && conditionNumber <= 80.0
+    }
+
+    func cameraDelta(forMachineX xMm: Double, yMm: Double) -> (dx: Double, dy: Double) {
+        (
+            dx: xBasisDxNorm * xMm + yBasisDxNorm * yMm,
+            dy: xBasisDyNorm * xMm + yBasisDyNorm * yMm
+        )
     }
 }
