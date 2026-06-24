@@ -1,10 +1,13 @@
 import SwiftUI
 
-private let visualProbeMinimumObservedMm = 8.0
+private let visualProbeMinimumObservedMm = 1.5
+private let machineVideoAgreementMinimumObservedNorm = 0.0015
+private let machineVideoAgreementInitialMoveMm = 6.0
+private let visualMotionInitialProbeMoveMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
 private let visualMotionTravelFeedMmMin = 1200.0
-private let visualCapReacquireStepXMm = 25.0
-private let visualCapReacquireMaxTotalXMm = 150.0
+private let visualCapReacquireStepXMm = 10.0
+private let visualCapReacquireMaxTotalXMm = 40.0
 private let visualCapReacquireMaxAttempts = 2
 private let visualCapFreshFrameAdvance = 3
 
@@ -41,7 +44,10 @@ struct ContentView: View {
 
     var calibrationStatusText: String {
         get { workspace.calibrationStatusText }
-        nonmutating set { workspace.calibrationStatusText = newValue }
+        nonmutating set {
+            workspace.calibrationStatusText = newValue
+            workspace.appendOperatorLog(newValue, source: "Setup", level: logLevel(for: newValue))
+        }
     }
 
     var visualMoveIntent: VisualMoveIntent? {
@@ -104,6 +110,16 @@ struct ContentView: View {
         nonmutating set { workspace.confirmedCapPoint = newValue }
     }
 
+    private var machineVideoAgreementModel: MachineVideoAgreementModel? {
+        get { workspace.machineVideoAgreementModel }
+        nonmutating set { workspace.machineVideoAgreementModel = newValue }
+    }
+
+    private var machineVideoAgreementSamples: [MachineVideoAgreementSample] {
+        get { workspace.machineVideoAgreementSamples }
+        nonmutating set { workspace.machineVideoAgreementSamples = newValue }
+    }
+
     private var visualMotionModel: VisualMotionModel? {
         get { workspace.visualMotionModel }
         nonmutating set { workspace.visualMotionModel = newValue }
@@ -129,7 +145,6 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 topBar
                 Spacer()
-                statusBar
             }
             .padding(18)
 
@@ -193,6 +208,9 @@ struct ContentView: View {
             if plotterViewport.focusMode == .focused {
                 focusPlotterVideoOnPaper(source: "paper_registration_changed")
             }
+        }
+        .onChange(of: bridge.statusText) { _, status in
+            workspace.appendOperatorLog(status, source: "Bridge", level: logLevel(for: status))
         }
         .onChange(of: drawingFrame) { _, _ in
             saveFrameState()
@@ -602,10 +620,28 @@ struct ContentView: View {
         return "WAIT"
     }
 
+    private func logLevel(for message: String) -> OperatorLogLevel {
+        let normalized = message.uppercased()
+        if normalized.contains("ERROR")
+            || normalized.contains("ERR")
+            || normalized.contains("FAILED")
+            || normalized.contains("ALARM") {
+            return .error
+        }
+        if normalized.contains("BLOCK")
+            || normalized.contains("STOP")
+            || normalized.contains("WEAK")
+            || normalized.contains("PIN")
+            || normalized.contains("LOST") {
+            return .warning
+        }
+        return .info
+    }
+
     @MainActor
     private func runFrameLearning() async {
         guard bridge.isLiveMotionMode else {
-            calibrationStatusText = "CAL cap-marker probe blocked: \(bridge.motionGateMessage)"
+            calibrationStatusText = "CAL machine-video probe blocked: \(bridge.motionGateMessage)"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
                 detail: bridge.motionGateMessage,
@@ -618,7 +654,7 @@ struct ContentView: View {
         }
 
         guard bridge.isOnline else {
-            calibrationStatusText = "CAL cap-marker probe blocked: bridge offline"
+            calibrationStatusText = "CAL machine-video probe blocked: bridge offline"
             frameLearning = FrameLearningState(
                 status: "ERROR",
                 detail: "Bridge offline",
@@ -630,11 +666,11 @@ struct ContentView: View {
             return
         }
 
-        guard bridge.hasPaperLock else {
-            calibrationStatusText = "CAL motion calibration blocked: drawing field corners required"
+        guard await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) != nil else {
+            calibrationStatusText = "CAL machine-video probe blocked: cap not detected"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
-                detail: "Drawing field corners required",
+                detail: "Green cap detection required before machine-video agreement",
                 sampleCount: 0,
                 xPixelsPerMm: 0,
                 yPixelsPerMm: 0,
@@ -643,18 +679,8 @@ struct ContentView: View {
             return
         }
 
-        guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
-            calibrationStatusText = "CAL cap-marker probe blocked: cap not detected"
-            frameLearning = FrameLearningState(
-                status: "BLOCK",
-                detail: "Green cap detection required before motion calibration",
-                sampleCount: 0,
-                xPixelsPerMm: 0,
-                yPixelsPerMm: 0,
-                lastPins: bridge.machinePins
-            )
-            return
-        }
+        machineVideoAgreementModel = nil
+        machineVideoAgreementSamples = []
         visualMotionModel = nil
         visualMotionSamples = []
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
@@ -664,10 +690,10 @@ struct ContentView: View {
 
         await bridge.refreshMachineStatus()
 
-        calibrationStatusText = "CAL motion calibration starting"
+        calibrationStatusText = "CAL machine-video agreement starting"
         frameLearning = FrameLearningState(
             status: "LEARN",
-            detail: "Starting cap-marker motion calibration jog probe",
+            detail: "Learning machine +X/+Y in camera space",
             sampleCount: 0,
             xPixelsPerMm: 0,
             yPixelsPerMm: 0,
@@ -678,8 +704,39 @@ struct ContentView: View {
         guard !bridge.isMachineAlarm else {
             frameLearning.status = "STOP"
             frameLearning.detail = "Pen-up failed or machine alarm"
-            calibrationStatusText = "CAL cap-marker probe stopped: pen-up failed"
+            calibrationStatusText = "CAL machine-video probe stopped: pen-up failed"
             return
+        }
+
+        guard let agreement = await runMachineVideoAgreementProbe() else {
+            return
+        }
+        machineVideoAgreementModel = agreement
+
+        if !bridge.hasPaperLock {
+            guard await seedAndLockFieldFromMachineVideoAgreement(agreement) else {
+                return
+            }
+        }
+
+        guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
+            calibrationStatusText = "CAL motion calibration blocked: cap is not mapped into the field"
+            frameLearning = FrameLearningState(
+                status: "BLOCK",
+                detail: "Field locked, but cap is not mapped into field millimeters",
+                sampleCount: machineVideoAgreementSamples.count,
+                xPixelsPerMm: agreement.xBasisLengthNorm,
+                yPixelsPerMm: agreement.yBasisLengthNorm,
+                lastPins: bridge.machinePins
+            )
+            return
+        }
+        if let confirmedCapPoint {
+            self.confirmedCapPoint = ConfirmedCapPoint(
+                point: confirmedCapPoint.point,
+                cameraPoint: initialObservation.cameraPoint,
+                paperMm: initialObservation.paperMm
+            )
         }
 
         guard await bridge.observeVisualCapForProbe(
@@ -691,25 +748,13 @@ struct ContentView: View {
         ) else {
             frameLearning.status = "STOP"
             frameLearning.detail = "Bridge rejected cap observation"
-            calibrationStatusText = "CAL cap-marker probe stopped: bridge cap observation failed"
+            calibrationStatusText = "CAL motion calibration stopped: bridge cap observation failed"
             return
         }
 
-        guard isGreenCapInsideSafeZone(initialObservation.paperMm) else {
-            calibrationStatusText = "CAL motion calibration blocked: \(greenCapProbeReadinessDetail)"
-            frameLearning = FrameLearningState(
-                status: "BLOCK",
-                detail: greenCapProbeReadinessDetail,
-                sampleCount: 0,
-                xPixelsPerMm: 0,
-                yPixelsPerMm: 0,
-                lastPins: bridge.machinePins
-            )
-            return
-        }
-        calibrationStatusText = "CAL motion calibration sampling relative X/Y moves"
+        calibrationStatusText = "CAL motion calibration sampling field-mm X/Y moves"
 
-        let commandDistanceMm = 20.0
+        let commandDistanceMm = visualMotionInitialProbeMoveMm
         let probeCommands: [(axis: String, distance: Double)] = [
             ("X", commandDistanceMm),
             ("X", -commandDistanceMm),
@@ -755,7 +800,7 @@ struct ContentView: View {
         guard evaluation.passed else {
             visualMotionModel = nil
             visualMotionSamples = []
-            calibrationStatusText = "CAL cap-marker probe weak: \(evaluation.detail)"
+            calibrationStatusText = "CAL motion calibration weak: \(evaluation.detail)"
             return
         }
 
@@ -771,7 +816,7 @@ struct ContentView: View {
                 status: "WEAK",
                 detail: "Motion basis solve failed"
             )
-            calibrationStatusText = "CAL cap-marker probe weak: basis solve failed"
+            calibrationStatusText = "CAL motion calibration weak: basis solve failed"
             return
         }
         visualMotionSamples = fittedSamples
@@ -780,13 +825,351 @@ struct ContentView: View {
             samples: evaluatedSamples,
             status: "MEASURED",
             detail: String(
-                format: "Motion measured rms %.1f max %.1f samples %d; preview target next",
+                format: "Motion measured rms %.1f max %.1f samples %d; validate target next",
                 fittedModel.rmsResidualMm,
                 fittedModel.maxResidualMm,
                 fittedModel.sampleCount
             )
         )
-        calibrationStatusText = "CAL cap-marker probe measured; preview target next"
+        calibrationStatusText = "CAL motion calibration measured; validate target next"
+    }
+
+    @MainActor
+    private func runMachineVideoAgreementProbe() async -> MachineVideoAgreementModel? {
+        let probeCommands: [(axis: String, distance: Double)] = [
+            ("X", machineVideoAgreementInitialMoveMm),
+            ("X", -machineVideoAgreementInitialMoveMm),
+            ("Y", machineVideoAgreementInitialMoveMm),
+            ("Y", -machineVideoAgreementInitialMoveMm)
+        ]
+        var samples: [MachineVideoAgreementSample] = []
+
+        for command in probeCommands {
+            guard let sample = await runMachineVideoAgreementMove(
+                axis: command.axis,
+                distanceMm: command.distance,
+                sampleIndex: samples.count + 1
+            ) else {
+                return nil
+            }
+            samples.append(sample)
+            machineVideoAgreementSamples = samples
+            updateMachineVideoAgreementSummary(samples: samples, status: "LEARN")
+        }
+
+        let usable = samples.filter {
+            $0.observedDistanceNorm >= machineVideoAgreementMinimumObservedNorm
+        }
+        guard let model = MachineVideoAgreementModel.solve(samples: usable) else {
+            frameLearning = FrameLearningState(
+                status: "WEAK",
+                detail: "Machine-video basis solve failed",
+                sampleCount: samples.count,
+                xPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "X" }),
+                yPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "Y" }),
+                lastPins: bridge.machinePins
+            )
+            calibrationStatusText = "CAL machine-video agreement weak: basis solve failed"
+            return nil
+        }
+
+        machineVideoAgreementModel = model
+        frameLearning = FrameLearningState(
+            status: "AGREE",
+            detail: String(
+                format: "Machine-video agreement rms %.4f max %.4f X %.4f Y %.4f",
+                model.rmsResidualNorm,
+                model.maxResidualNorm,
+                model.xBasisLengthNorm,
+                model.yBasisLengthNorm
+            ),
+            sampleCount: model.sampleCount,
+            xPixelsPerMm: model.xBasisLengthNorm,
+            yPixelsPerMm: model.yBasisLengthNorm,
+            lastPins: bridge.machinePins
+        )
+        calibrationStatusText = "CAL machine-video agreement learned; seeding field"
+        bridge.recordOperatorEvent(
+            "machine_video_agreement_measured",
+            details: [
+                "sample_count": model.sampleCount,
+                "x_basis_dx_norm": model.xBasisDxNorm,
+                "x_basis_dy_norm": model.xBasisDyNorm,
+                "y_basis_dx_norm": model.yBasisDxNorm,
+                "y_basis_dy_norm": model.yBasisDyNorm,
+                "determinant": model.determinant,
+                "rms_residual_norm": model.rmsResidualNorm,
+                "max_residual_norm": model.maxResidualNorm
+            ]
+        )
+        return model
+    }
+
+    @MainActor
+    private func runMachineVideoAgreementMove(
+        axis: String,
+        distanceMm: Double,
+        sampleIndex: Int
+    ) async -> MachineVideoAgreementSample? {
+        let attempts = reducedProbeDistances(from: distanceMm)
+        let feedMmMin = min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin)
+
+        for (attemptIndex, commandDistance) in attempts.enumerated() {
+            guard let before = await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Cap marker lost before machine-video move"
+                calibrationStatusText = "CAL machine-video probe stopped: cap lost before move"
+                return nil
+            }
+
+            frameLearning.detail = String(
+                format: "Machine-video %@%+.1f attempt %d",
+                axis,
+                commandDistance,
+                attemptIndex + 1
+            )
+            calibrationStatusText = String(
+                format: "CAL machine-video probe: move %@%+.1f",
+                axis,
+                commandDistance
+            )
+
+            guard let response = await bridge.learningJog(
+                axis: axis,
+                distanceMm: commandDistance,
+                feedMmMin: feedMmMin
+            ) else {
+                if attemptIndex + 1 < attempts.count {
+                    calibrationStatusText = String(
+                        format: "CAL machine-video probe: %@%+.1f failed; retrying smaller",
+                        axis,
+                        commandDistance
+                    )
+                    continue
+                }
+                frameLearning.status = "STOP"
+                frameLearning.detail = bridge.statusText.isEmpty ? "Learning move failed" : bridge.statusText
+                calibrationStatusText = "CAL machine-video probe stopped: \(frameLearning.detail)"
+                return nil
+            }
+
+            if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Pin active after \(axis) move: \(pins)"
+                frameLearning.lastPins = pins
+                calibrationStatusText = "CAL machine-video probe stopped: pin active \(pins)"
+                return nil
+            }
+
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let after = await waitForFreshGreenCapCameraObservation(
+                afterFrame: before.frameNumber,
+                timeoutSeconds: 3.0
+            ) else {
+                if attemptIndex + 1 < attempts.count {
+                    calibrationStatusText = String(
+                        format: "CAL machine-video probe: no fresh cap after %@%+.1f; retrying smaller",
+                        axis,
+                        commandDistance
+                    )
+                    continue
+                }
+                frameLearning.status = "STOP"
+                frameLearning.detail = "No fresh cap observation after \(axis) move"
+                calibrationStatusText = "CAL machine-video probe stopped: no fresh cap observation"
+                return nil
+            }
+
+            let dx = Double(after.cameraPoint.x - before.cameraPoint.x)
+            let dy = Double(after.cameraPoint.y - before.cameraPoint.y)
+            let observedDistance = hypot(dx, dy)
+            let sample = MachineVideoAgreementSample(
+                axis: axis,
+                distanceMm: commandDistance,
+                observedDxNorm: dx,
+                observedDyNorm: dy,
+                observedDistanceNorm: observedDistance,
+                strength: min(before.strength, after.strength)
+            )
+            bridge.recordOperatorEvent(
+                "machine_video_agreement_sample",
+                details: [
+                    "sample_index": sampleIndex,
+                    "attempt_index": attemptIndex + 1,
+                    "axis": axis,
+                    "command_mm": commandDistance,
+                    "before_frame": before.frameNumber,
+                    "after_frame": after.frameNumber,
+                    "before_camera_x": before.cameraPoint.x,
+                    "before_camera_y": before.cameraPoint.y,
+                    "after_camera_x": after.cameraPoint.x,
+                    "after_camera_y": after.cameraPoint.y,
+                    "observed_dx_norm": dx,
+                    "observed_dy_norm": dy,
+                    "observed_distance_norm": observedDistance
+                ]
+            )
+            calibrationStatusText = String(
+                format: "CAL machine-video sample %d %@%+.1f cam d%.4f %.4f",
+                sampleIndex,
+                axis,
+                commandDistance,
+                dx,
+                dy
+            )
+            return sample
+        }
+
+        return nil
+    }
+
+    private func reducedProbeDistances(from distanceMm: Double) -> [Double] {
+        let sign = distanceMm < 0 ? -1.0 : 1.0
+        let magnitude = abs(distanceMm)
+        return [
+            magnitude,
+            max(2.0, magnitude * 0.5),
+            max(1.0, magnitude * 0.25)
+        ]
+        .map { sign * $0 }
+    }
+
+    private func updateMachineVideoAgreementSummary(
+        samples: [MachineVideoAgreementSample],
+        status: String
+    ) {
+        frameLearning = FrameLearningState(
+            status: status,
+            detail: String(format: "Machine-video samples %d/4", samples.count),
+            sampleCount: samples.count,
+            xPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "X" }),
+            yPixelsPerMm: averageCameraNormPerCommandMm(samples: samples.filter { $0.axis == "Y" }),
+            lastPins: bridge.machinePins
+        )
+    }
+
+    private func averageCameraNormPerCommandMm(samples: [MachineVideoAgreementSample]) -> Double {
+        guard !samples.isEmpty else { return 0 }
+        let total = samples.reduce(0.0) { partial, sample in
+            partial + sample.observedDistanceNorm / max(abs(sample.distanceMm), 0.000_001)
+        }
+        return total / Double(samples.count)
+    }
+
+    @MainActor
+    private func seedAndLockFieldFromMachineVideoAgreement(_ model: MachineVideoAgreementModel) async -> Bool {
+        guard let cap = await waitForGreenCapCameraObservation(timeoutSeconds: 2.0),
+              let corners = seededFieldCorners(from: model, center: cap.cameraPoint) else {
+            frameLearning.status = "BLOCK"
+            frameLearning.detail = "Could not seed a 200x150 field from machine-video agreement"
+            calibrationStatusText = "FIELD seed blocked: machine-video basis did not fit in camera"
+            return false
+        }
+
+        manualFiducials = corners
+        manualFiducialMode = false
+        calibrationStatusText = "FIELD seeded from machine-video agreement; locking 200x150"
+        guard let response = await bridge.registerPaperHomography(
+            fiducials: corners,
+            paperWidthMm: 200.0,
+            paperHeightMm: 150.0
+        ), response.registration != nil else {
+            frameLearning.status = "BLOCK"
+            frameLearning.detail = bridge.statusText.isEmpty ? "Field registration failed" : bridge.statusText
+            calibrationStatusText = "FIELD seed failed: \(frameLearning.detail)"
+            return false
+        }
+
+        focusPlotterVideoOnPaper(source: "machine_video_agreement_field_seeded")
+        calibrationStatusText = "FIELD 200x150 locked from machine-video agreement"
+        bridge.recordOperatorEvent(
+            "field_seeded_from_machine_video_agreement",
+            details: [
+                "field_width_mm": 200.0,
+                "field_height_mm": 150.0,
+                "corner_count": corners.count,
+                "paper_registration_id": bridge.paperRegistrationSnapshot?.registrationId ?? ""
+            ]
+        )
+        return true
+    }
+
+    private func seededFieldCorners(
+        from model: MachineVideoAgreementModel,
+        center: CGPoint
+    ) -> [ManualFiducialPoint]? {
+        let xLength = model.xBasisLengthNorm
+        let yLength = model.yBasisLengthNorm
+        guard xLength > 0.000_001, yLength > 0.000_001 else { return nil }
+
+        let xUnit = CGVector(
+            dx: CGFloat(model.xBasisDxNorm / xLength),
+            dy: CGFloat(model.xBasisDyNorm / xLength)
+        )
+        let yUnit = CGVector(
+            dx: CGFloat(model.yBasisDxNorm / yLength),
+            dy: CGFloat(model.yBasisDyNorm / yLength)
+        )
+        let margin = 0.08
+        var fieldCenter = CGPoint(
+            x: CGFloat(clampDouble(Double(center.x), min: 0.24, max: 0.76)),
+            y: CGFloat(clampDouble(Double(center.y), min: 0.24, max: 0.76))
+        )
+        var halfWidth = 0.30
+        var halfHeight = halfWidth * 0.75
+
+        for attempt in 0..<36 {
+            let corners = fieldCorners(
+                center: fieldCenter,
+                xUnit: xUnit,
+                yUnit: yUnit,
+                halfWidth: halfWidth,
+                halfHeight: halfHeight
+            )
+            if corners.allSatisfy({ pointInsideCameraBounds($0, margin: margin) }) {
+                return manualFieldPoints(cameraCorners: corners)
+            }
+            if attempt == 12 {
+                fieldCenter = CGPoint(x: 0.5, y: 0.5)
+            }
+            halfWidth *= 0.92
+            halfHeight = halfWidth * 0.75
+        }
+        return nil
+    }
+
+    private func fieldCorners(
+        center: CGPoint,
+        xUnit: CGVector,
+        yUnit: CGVector,
+        halfWidth: Double,
+        halfHeight: Double
+    ) -> [CGPoint] {
+        let xVector = CGVector(dx: xUnit.dx * CGFloat(halfWidth), dy: xUnit.dy * CGFloat(halfWidth))
+        let yVector = CGVector(dx: yUnit.dx * CGFloat(halfHeight), dy: yUnit.dy * CGFloat(halfHeight))
+        return [
+            CGPoint(x: center.x - xVector.dx - yVector.dx, y: center.y - xVector.dy - yVector.dy),
+            CGPoint(x: center.x + xVector.dx - yVector.dx, y: center.y + xVector.dy - yVector.dy),
+            CGPoint(x: center.x + xVector.dx + yVector.dx, y: center.y + xVector.dy + yVector.dy),
+            CGPoint(x: center.x - xVector.dx + yVector.dx, y: center.y - xVector.dy + yVector.dy)
+        ]
+    }
+
+    private func pointInsideCameraBounds(_ point: CGPoint, margin: Double) -> Bool {
+        Double(point.x) >= margin
+            && Double(point.x) <= 1.0 - margin
+            && Double(point.y) >= margin
+            && Double(point.y) <= 1.0 - margin
+    }
+
+    private func manualFieldPoints(cameraCorners: [CGPoint]) -> [ManualFiducialPoint] {
+        cameraCorners.enumerated().map { index, cameraPoint in
+            ManualFiducialPoint(
+                id: index + 1,
+                point: CGPoint(x: cameraPoint.x, y: 1.0 - cameraPoint.y),
+                cameraPoint: cameraPoint
+            )
+        }
     }
 
     @MainActor
@@ -1193,11 +1576,46 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func waitForGreenCapCameraObservation(
+        afterFrame: Int? = nil,
+        minimumFrameAdvance: Int = 1,
+        timeoutSeconds: Double
+    ) async -> GreenCapCameraObservation? {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var latest: GreenCapCameraObservation?
+        while Date() < deadline {
+            if let observation = currentGreenCapCameraObservation() {
+                latest = observation
+                if afterFrame == nil || observation.frameNumber >= afterFrame! + minimumFrameAdvance {
+                    return observation
+                }
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        return latest
+    }
+
+    @MainActor
     private func waitForFreshGreenCapPaperObservation(
         afterFrame: Int,
         timeoutSeconds: Double
     ) async -> GreenCapPaperObservation? {
         guard let observation = await waitForGreenCapPaperObservation(
+            afterFrame: afterFrame,
+            minimumFrameAdvance: visualCapFreshFrameAdvance,
+            timeoutSeconds: timeoutSeconds
+        ), observation.frameNumber >= afterFrame + visualCapFreshFrameAdvance else {
+            return nil
+        }
+        return observation
+    }
+
+    @MainActor
+    private func waitForFreshGreenCapCameraObservation(
+        afterFrame: Int,
+        timeoutSeconds: Double
+    ) async -> GreenCapCameraObservation? {
+        guard let observation = await waitForGreenCapCameraObservation(
             afterFrame: afterFrame,
             minimumFrameAdvance: visualCapFreshFrameAdvance,
             timeoutSeconds: timeoutSeconds
@@ -1349,16 +1767,27 @@ struct ContentView: View {
 
     @MainActor
     private func currentGreenCapPaperObservation() -> GreenCapPaperObservation? {
+        guard let cameraObservation = currentGreenCapCameraObservation() else { return nil }
+        let cameraPoint = cameraObservation.cameraPoint
+        guard let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint) else { return nil }
+        return GreenCapPaperObservation(
+            frameNumber: cameraObservation.frameNumber,
+            cameraPoint: cameraPoint,
+            paperMm: paperMm,
+            strength: cameraObservation.strength
+        )
+    }
+
+    @MainActor
+    private func currentGreenCapCameraObservation() -> GreenCapCameraObservation? {
         guard let marker = currentCarriageMarker else { return nil }
         let cameraPoint = CGPoint(
             x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
         )
-        guard let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint) else { return nil }
-        return GreenCapPaperObservation(
+        return GreenCapCameraObservation(
             frameNumber: marker.id,
             cameraPoint: cameraPoint,
-            paperMm: paperMm,
             strength: marker.strength
         )
     }
@@ -1526,17 +1955,19 @@ struct ContentView: View {
     }
 
     private var currentGreenCapSafeZoneReady: Bool {
+        guard bridge.hasPaperLock else { return currentGreenCapCameraObservation() != nil }
         guard let observation = currentGreenCapPaperObservation() else { return false }
         return isGreenCapInsideSafeZone(observation.paperMm)
     }
 
     private var confirmedCapSafeZoneReady: Bool {
+        guard bridge.hasPaperLock else { return confirmedCapPoint != nil }
         guard let paperMm = confirmedCapPoint?.paperMm else { return false }
         return isGreenCapInsideSafeZone(paperMm)
     }
 
     private var greenCapSafeZoneDetail: String {
-        guard bridge.hasPaperLock else { return "Drawing field corners required" }
+        guard bridge.hasPaperLock else { return "Machine-video agreement must run before field bounds exist" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         guard isGreenCapInsideSafeZone(observation.paperMm) else {
             return String(
@@ -1548,7 +1979,11 @@ struct ContentView: View {
     }
 
     private var greenCapProbeReadinessDetail: String {
-        guard bridge.hasPaperLock else { return "Drawing field corners required" }
+        guard bridge.hasPaperLock else {
+            return currentGreenCapCameraObservation() == nil
+                ? "Cap marker not detected"
+                : "Cap marker ready for machine-video agreement"
+        }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         guard isGreenCapInsideSafeZone(observation.paperMm) else {
             return String(
@@ -1560,7 +1995,7 @@ struct ContentView: View {
     }
 
     private var confirmedCapSafeZoneDetail: String {
-        guard bridge.hasPaperLock else { return "Drawing field corners required" }
+        guard bridge.hasPaperLock else { return "Confirmed cap ready for machine-video agreement" }
         guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap marker not confirmed" }
         guard isGreenCapInsideSafeZone(paperMm) else {
             return String(
@@ -1588,9 +2023,8 @@ struct ContentView: View {
 
     private var canRunWizardMotionProbe: Bool {
         bridge.canRunSetupRelativeMotionCommand
-            && confirmedCapPoint?.paperMm != nil
+            && confirmedCapPoint != nil
             && currentCarriageMarker != nil
-            && currentGreenCapSafeZoneReady
             && !bridge.isMachineBusy
             && !bridge.isRunning
             && !bridge.isMachineAlarm
@@ -2181,6 +2615,19 @@ struct ContentView: View {
                         beforeOpen: startCalibrationWizard
                     )
                 }
+
+                controlButton(
+                    systemName: "list.bullet.rectangle",
+                    label: "Log",
+                    help: "Open or close the operator log",
+                    isActive: OperatorWindowSupport.isWindowOpen(title: "Log", identifier: OperatorWindowID.operatorLog)
+                ) {
+                    toggleOperatorWindow(
+                        id: OperatorWindowID.operatorLog,
+                        title: "Log",
+                        source: "top_bar"
+                    )
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -2189,47 +2636,6 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        )
-    }
-
-    private var statusBar: some View {
-        HStack(spacing: 12) {
-            Text(plotterCamera.statusText)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.86))
-                .lineLimit(1)
-                .frame(minWidth: 210, alignment: .leading)
-
-            Text(faceCamera.statusText)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(1)
-                .frame(minWidth: 180, alignment: .leading)
-
-            Divider()
-                .frame(height: 24)
-                .overlay(Color.white.opacity(0.18))
-
-            Text("BRIDGE \(bridge.bridgeLifecycleStatusLine)  FIELD \(bridge.hasPaperLock ? "LOCK" : "--")  \(plotterViewport.focusLabel.uppercased()) \(Int(plotterViewport.rotationDegrees))deg \(plotterViewport.zoomLabel)  \(plotterCamera.changeReport.summary)  \(bridge.statusText)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.7))
-                .lineLimit(1)
-            Text("\(calibrationStatusText)  FIELD corners:\(manualFiducials.count)/4  MOTION \(frameLearning.status)")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.cyan.opacity(0.78))
-                .lineLimit(1)
-            Text(confirmedCapStatusText)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.green.opacity(0.78))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 1)
         )
     }
 
@@ -2321,17 +2727,20 @@ struct ContentView: View {
 
     private var wizardFiducialStatus: CalibrationWizardStepStatus {
         if bridge.hasPaperLock { return .done }
-        return manualFiducials.count >= 4 ? .done : .active
+        if machineVideoAgreementModel?.isUsable == true { return .active }
+        return .pending
     }
 
     private var wizardGreenCapStatus: CalibrationWizardStepStatus {
-        if confirmedCapPoint?.paperMm != nil { return .done }
-        return bridge.hasPaperLock ? .active : .pending
+        if confirmedCapPoint != nil { return .done }
+        return currentCarriageMarker == nil ? .blocked : .active
     }
 
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
-        if frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated { return .done }
-        if confirmedCapPoint?.paperMm != nil {
+        if frameLearning.status == "AGREE" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
+            return .done
+        }
+        if confirmedCapPoint != nil {
             return canRunWizardMotionProbe ? .active : .blocked
         }
         return .pending
@@ -2353,8 +2762,11 @@ struct ContentView: View {
         if bridge.hasPaperLock && manualFiducials.count < 4 {
             return "Stored visual field in use"
         }
-        if manualFiducials.count >= 4 { return "BL, BR, TR, TL corners captured" }
-        return "Click \(nextFiducialLabel)  \(manualFiducials.count)/4"
+        if manualFiducials.count >= 4 { return "200x150 field corners captured" }
+        if machineVideoAgreementModel?.isUsable == true {
+            return "Ready to seed 200x150 field from agreement"
+        }
+        return "Hidden until machine-video agreement is learned"
     }
 
     private var wizardFieldDetail: String {
@@ -2371,6 +2783,13 @@ struct ContentView: View {
         if let confirmedCapPoint, let paperMm = confirmedCapPoint.paperMm {
             return String(format: "Confirmed field x%.1f y%.1f mm", paperMm.x, paperMm.y)
         }
+        if let confirmedCapPoint {
+            return String(
+                format: "Confirmed camera x%.3f y%.3f",
+                confirmedCapPoint.cameraPoint.x,
+                confirmedCapPoint.cameraPoint.y
+            )
+        }
         guard let marker = currentCarriageMarker else {
             return "Waiting for bright cap marker"
         }
@@ -2380,7 +2799,7 @@ struct ContentView: View {
     private var wizardCapStateLabel: String {
         if currentGreenCapSafeZoneReady { return "LIVE-SAFE" }
         if confirmedCapSafeZoneReady { return "CONF-SAFE" }
-        if confirmedCapPoint?.paperMm != nil { return "CONF-OUT" }
+        if confirmedCapPoint != nil { return bridge.hasPaperLock ? "CONF-OUT" : "CONF-CAM" }
         return "--"
     }
 
@@ -2412,34 +2831,30 @@ struct ContentView: View {
         if frameLearning.status == "VALIDATE" {
             return frameLearning.detail
         }
-        return "Run motion calibration first"
+        if let model = machineVideoAgreementModel, model.isUsable {
+            return String(
+                format: "Agreement ready X %.4f Y %.4f",
+                model.xBasisLengthNorm,
+                model.yBasisLengthNorm
+            )
+        }
+        return "Run machine-video agreement first"
     }
 
     private var wizardInstructionText: String {
-        if !bridge.hasPaperLock {
-            if manualFiducials.count < 4 {
-                return "Click drawing field corners in order: bottom-left, bottom-right, top-right, top-left."
-            }
-            return "Drawing field corners are captured. Lock the field before confirming the cap marker."
+        if confirmedCapPoint == nil {
+            return currentCarriageMarker == nil
+                ? "Show the green cap in the plotter camera before setup movement."
+                : "Confirm the detected green cap before machine-video agreement."
         }
-        if confirmedCapPoint?.paperMm == nil {
-            if currentCarriageMarker == nil {
-                return "Visual field is locked. Confirm setup if the grid still aligns, then click or confirm the cap marker."
+        if frameLearning.status != "MEASURED" && !visualMotionValidated {
+            if !bridge.hasPaperLock {
+                return "Run machine-video agreement. The field box is intentionally hidden until +X/+Y are learned from movement."
             }
-            if currentGreenCapPaperObservation() == nil {
-                return "Cap marker is detected but not mapped to the field. Click the cap marker or reset field corners."
-            }
-            return "Visual field is locked. Confirm setup if the grid still aligns, then confirm the detected carriage cap."
+            return "Run non-homed relative motion calibration only when the nearby path is clear."
         }
         if visualMotionValidated {
             return "Motion calibration is validated for green-cap movement inside the field."
-        }
-        if frameLearning.status != "MEASURED" {
-            if currentCarriageMarker == nil {
-                return "Motion calibration needs the green cap visible in the camera field."
-            }
-            if !currentGreenCapSafeZoneReady { return greenCapProbeReadinessDetail }
-            return "Cap marker is confirmed. Run non-homed relative motion calibration only when the nearby path is clear."
         }
         if !visualMotionValidated {
             return "Motion calibration is measured. Validate the relative motion model before leaving setup."
@@ -2448,28 +2863,18 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionTitle: String {
-        if !bridge.hasPaperLock {
-            if manualFiducials.count < 4 {
-                return manualFiducialMode ? "Click \(nextFiducialLabel)" : "Start Field Corners"
-            }
-            return "Lock Drawing Field"
-        }
-        if confirmedCapPoint?.paperMm == nil {
-            return currentGreenCapPaperObservation() == nil ? "Click Green Cap" : "Confirm Green Cap"
+        if confirmedCapPoint == nil {
+            return currentCarriageMarker == nil ? "Click Green Cap" : "Confirm Green Cap"
         }
         if frameLearning.status == "VALIDATE" { return "Validating Motion" }
         if visualMotionValidated { return "Motion Validated" }
-        if frameLearning.status != "MEASURED" { return "Run Motion Calibration" }
+        if frameLearning.status != "MEASURED" { return "Run Machine-Video Probe" }
         if frameLearning.status == "MEASURED" { return "Validate Motion" }
         return "Blocked"
     }
 
     private var wizardPrimaryActionEnabled: Bool {
-        if !bridge.hasPaperLock {
-            if manualFiducials.count < 4 { return true }
-            return bridge.isOnline && manualFiducials.count >= 4 && !bridge.isCalibrating
-        }
-        if confirmedCapPoint?.paperMm == nil {
+        if confirmedCapPoint == nil {
             return true
         }
         if frameLearning.status == "VALIDATE" { return false }
@@ -2484,12 +2889,7 @@ struct ContentView: View {
 
     private var wizardPrimaryActionDisabledReason: String? {
         guard !wizardPrimaryActionEnabled else { return nil }
-        if !bridge.hasPaperLock {
-            if !bridge.isOnline { return "bridge offline" }
-            if bridge.isCalibrating { return "field lock already running" }
-            return "visual field not locked"
-        }
-        if confirmedCapPoint?.paperMm == nil {
+        if confirmedCapPoint == nil {
             return "cap marker not confirmed"
         }
         if frameLearning.status == "VALIDATE" { return "motion validation running" }
@@ -2499,8 +2899,7 @@ struct ContentView: View {
             if bridge.isMachineAlarm { return "machine alarm" }
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
             if currentCarriageMarker == nil { return "green cap not detected" }
-            if !currentGreenCapSafeZoneReady { return greenCapProbeReadinessDetail }
-            return "motion calibration blocked"
+            return "machine-video agreement blocked"
         }
         if visualMotionModel?.isUsable != true { return "motion model not usable" }
         if currentCarriageMarker == nil { return "green cap not detected" }
@@ -2524,17 +2923,8 @@ struct ContentView: View {
     }
 
     private func runCalibrationWizardPrimaryAction() {
-        if !bridge.hasPaperLock {
-            if manualFiducials.count < 4 {
-                startCalibrationWizard()
-                return
-            }
-            solvePaperHomographyFromWizard()
-            return
-        }
-
-        if confirmedCapPoint?.paperMm == nil {
-            if currentGreenCapPaperObservation() != nil {
+        if confirmedCapPoint == nil {
+            if currentCarriageMarker != nil {
                 useDetectedCarriageMarker()
             } else {
                 startManualPenClick()
@@ -2552,7 +2942,7 @@ struct ContentView: View {
                 calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
                 return
             }
-            calibrationStatusText = "FIELD motion calibration requested"
+            calibrationStatusText = "FIELD machine-video agreement requested"
             Task {
                 await runFrameLearning()
             }
@@ -2652,24 +3042,18 @@ struct ContentView: View {
         showPlotterCameraForSetup(source: "setup")
         refreshSetupSnapshot()
 
-        if bridge.hasPaperLock {
-            manualFiducialMode = false
-            manualPenMode = false
-            manualCapColorMode = false
-            calibrationStatusText = "FIELD visual field ready; confirm setup if grid aligns"
-            return
-        }
-
-        if manualFiducials.count < 4 {
-            manualFiducialMode = true
-            manualPenMode = false
-            manualCapColorMode = false
-            calibrationStatusText = "FIELD click \(nextFiducialLabel)"
-            return
-        }
-
         manualFiducialMode = false
-        solvePaperHomographyFromWizard()
+        manualPenMode = false
+        manualCapColorMode = false
+        if confirmedCapPoint == nil {
+            calibrationStatusText = currentCarriageMarker == nil
+                ? "FIELD show green cap in camera"
+                : "FIELD confirm green cap"
+        } else if frameLearning.status != "MEASURED" {
+            calibrationStatusText = "FIELD run machine-video agreement before drawing field box"
+        } else {
+            calibrationStatusText = "FIELD motion measured; validate motion"
+        }
     }
 
     private func confirmWizardSetupFromExistingRegistration() {
@@ -2741,19 +3125,21 @@ struct ContentView: View {
         Task {
             _ = await bridge.resetCalibrationSetup()
             clearWizardLocalState(resetFiducials: true)
-            calibrationStatusText = "FIELD reset; click FIELD-BL"
+            calibrationStatusText = "FIELD reset; confirm green cap"
         }
     }
 
     private func clearWizardLocalState(resetFiducials: Bool) {
         workspace.setupWindowActive = true
-        manualFiducialMode = true
+        manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false
         if resetFiducials {
             manualFiducials = []
         }
         confirmedCapPoint = nil
+        machineVideoAgreementModel = nil
+        machineVideoAgreementSamples = []
         visualMotionModel = nil
         visualMotionSamples = []
         visualCenterDotTaskActive = false
@@ -2931,9 +3317,7 @@ struct ContentView: View {
         confirmedCapPoint = nil
         bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
-        calibrationStatusText = bridge.hasPaperLock
-            ? "FIELD click cap marker on plotter view"
-            : "FIELD visual field required before cap click"
+        calibrationStatusText = "FIELD click cap marker on plotter view"
     }
 
     private func startCapColorPick() {
@@ -3019,7 +3403,7 @@ struct ContentView: View {
             )
         }
 
-        if workspace.setupWindowActive, paperMm != nil {
+        if workspace.setupWindowActive {
             manualPenMode = false
         }
     }

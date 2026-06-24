@@ -77,9 +77,9 @@ struct CalibrationWizardView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CalibrationWizardStepRow(index: 1, title: "Define Drawing Field", detail: fiducialDetail, status: fiducialStatus)
-            CalibrationWizardStepRow(index: 2, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
-            CalibrationWizardStepRow(index: 3, title: "Run Motion Calibration", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+            CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
+            CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+            CalibrationWizardStepRow(index: 3, title: "Define Drawing Field", detail: fiducialDetail, status: fiducialStatus)
             CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
         }
     }

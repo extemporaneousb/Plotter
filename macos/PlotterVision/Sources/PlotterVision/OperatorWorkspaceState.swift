@@ -26,14 +26,43 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var manualCapColorMode = false
     @Published var confirmedCapPoint: ConfirmedCapPoint?
     @Published var visualMoveIntent: VisualMoveIntent?
+    @Published var machineVideoAgreementModel: MachineVideoAgreementModel?
+    @Published var machineVideoAgreementSamples: [MachineVideoAgreementSample] = []
     @Published var visualMotionModel: VisualMotionModel?
     @Published var visualMotionSamples: [VisualMotionSample] = []
     @Published var visualCenterDotTaskActive = false
+    @Published var operatorLog: [OperatorLogEntry] = []
     @Published var setupSnapshot = SetupPanelSnapshot.idle
     @Published var pendingSetupCommand: SetupPanelCommandRequest?
     @Published var pendingPanelCommand: OperatorPanelCommandRequest?
 
     private init() {}
+
+    func appendOperatorLog(
+        _ message: String,
+        source: String = "App",
+        level: OperatorLogLevel = .info
+    ) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let last = operatorLog.last,
+           last.message == trimmed,
+           last.source == source,
+           last.level == level {
+            return
+        }
+        operatorLog.append(
+            OperatorLogEntry(
+                timestamp: Date(),
+                level: level,
+                source: source,
+                message: trimmed
+            )
+        )
+        if operatorLog.count > 240 {
+            operatorLog.removeFirst(operatorLog.count - 240)
+        }
+    }
 
     func requestSetupCommand(_ command: SetupPanelCommand) {
         pendingSetupCommand = SetupPanelCommandRequest(command: command)
@@ -55,7 +84,8 @@ final class OperatorWorkspaceState: ObservableObject {
                 "machine_controls": OperatorWindowSupport.isWindowOpen(title: "Machine", identifier: OperatorWindowID.machineControls),
                 "setup_panel": setupWindowActive,
                 "plotter_video_panel": OperatorWindowSupport.isWindowOpen(title: "Plotter Video", identifier: OperatorWindowID.plotterVideoPanel),
-                "face_video_panel": OperatorWindowSupport.isWindowOpen(title: "Face Video", identifier: OperatorWindowID.faceVideoPanel)
+                "face_video_panel": OperatorWindowSupport.isWindowOpen(title: "Face Video", identifier: OperatorWindowID.faceVideoPanel),
+                "operator_log": OperatorWindowSupport.isWindowOpen(title: "Log", identifier: OperatorWindowID.operatorLog)
             ],
             "cameras": [
                 "plotter": [
@@ -75,7 +105,10 @@ final class OperatorWorkspaceState: ObservableObject {
                 "manual_fiducials": manualFiducials.count,
                 "manual_fiducial_mode": manualFiducialMode,
                 "manual_cap_mode": manualPenMode,
-                "cap_color_pick_mode": manualCapColorMode
+                "cap_color_pick_mode": manualCapColorMode,
+                "machine_video_agreement_samples": machineVideoAgreementSamples.count,
+                "machine_video_agreement_valid": machineVideoAgreementModel?.isUsable == true,
+                "operator_log_entries": operatorLog.count
             ]
         ]
     }

@@ -42,12 +42,12 @@ The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
-3. Define Drawing Field by clicking or adjusting the four visual field corners. The operator-facing
-   setup shows the `0,0` origin, `+X`/`+Y` directions, and physical field size in millimeters.
-4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-5. Run Motion Calibration to measure relative cap motion with small relative machine moves. This path
-   does not require homing, `homing_trusted`, `axis_model_trusted`, or absolute machine-position
-   workspace clearance.
+3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+4. Run a machine-video agreement probe before drawing a field box. This probe measures which
+   camera/video direction corresponds to machine-relative `+X` and `+Y`, including swapped or
+   sign-reversed axes, using small adaptive moves.
+5. Define Drawing Field from that learned basis. The seeded field is 200 mm x 150 mm, with the
+   larger dimension on visual `+X`, and the existing field-corner affordance remains adjustable.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    Success for this milestone means predictable green-cap motion in the user-defined visual drawing
    field.

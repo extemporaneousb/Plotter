@@ -75,8 +75,8 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 ## Acceptance Criteria For The Next Architecture Pass
 
-- The main operator path is app launch, Setup, Define Drawing Field or Confirm Setup against an
-  already locked visual field, Confirm Green Cap, Run Motion Calibration, and Validate Motion.
+- The main operator path is app launch, Setup, Confirm Green Cap, Machine-Video Agreement, Define
+  Drawing Field or Confirm Setup against an already locked visual field, and Validate Motion.
 - Plotter-camera FOV zoom remains persisted Swift display state. Current segmentation and motion
   detection continue to run app-side on the full camera frame unless a separate ROI feature is added.
 - Python remains the only authority that can promote persisted setup evidence or trust flags. Swift

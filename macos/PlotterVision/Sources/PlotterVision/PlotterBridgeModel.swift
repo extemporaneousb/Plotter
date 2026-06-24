@@ -485,7 +485,6 @@ final class PlotterBridgeModel: ObservableObject {
         if let blockReason = liveMachineCommandBlockReason(allowBusy: allowBusy) {
             return blockReason
         }
-        if !hasPaperLock { return "Setup motion blocked: drawing field missing" }
         return nil
     }
 
@@ -1937,8 +1936,8 @@ final class PlotterBridgeModel: ObservableObject {
     ) async -> Bool {
         let paperNorm = NormPoint(
             CGPoint(
-                x: min(1.0, max(0.0, paperMm.x / max(workspaceXMm, 0.000_001))),
-                y: min(1.0, max(0.0, paperMm.y / max(workspaceYMm, 0.000_001)))
+                x: min(1.0, max(0.0, paperMm.x / max(visualFieldWidthMm, 0.000_001))),
+                y: min(1.0, max(0.0, paperMm.y / max(visualFieldHeightMm, 0.000_001)))
             )
         )
         do {

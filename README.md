@@ -41,14 +41,14 @@ The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Setup. The Setup button opens or closes a separate setup window.
-3. Define Drawing Field by clicking or adjusting the four visual field corners in the plotter-camera
-   view. The operator must understand the displayed `0,0` origin and `+X`/`+Y` directions.
-4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-   Setup reset clears the latest field, cap, and motion-model authority while preserving historical
-   evidence files.
-5. Run Motion Calibration from the confirmed cap location. The app sends small relative machine
-   moves without requiring homing, axis-model trust, or absolute machine-position clearance. The
-   bridge records observed green-cap movement in visual-field millimeters.
+3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+4. Run the machine-video agreement probe before drawing a field box. The app sends small relative
+   machine moves without requiring homing, axis-model trust, absolute machine-position clearance, or
+   a preexisting visual field. The first probe learns which camera/video direction corresponds to
+   machine `+X` and `+Y`, including swapped axes.
+5. Define Drawing Field from the learned machine-video basis. The app seeds a clear 200 mm x 150 mm
+   field with the larger dimension on `+X`; the operator can still adjust the existing field-corner
+   affordance when needed.
 6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
    relative model. Success for this milestone means the green cap can be moved predictably inside the
    user-defined field.
@@ -80,9 +80,9 @@ The operator sequence should stay explicit:
 
 | Step | Action | Evidence recorded | Does not prove |
 | --- | --- | --- | --- |
-| 1 | Define Drawing Field | Visual-field corners, field registration id, field size in millimeters, reprojection error | Machine axes, pen position, or cap location. |
-| 2 | Confirm Green Cap | Camera-space cap point mapped into visual-field millimeters | Relative motion model or drawing authority. |
-| 3 | Run Motion Calibration | Commanded relative machine moves, before/after cap observations, observed visual-field deltas, residuals | Cap-to-tip offset, ink position, or durable absolute workspace proof. |
+| 1 | Confirm Green Cap | Camera-space cap point | Relative motion model or drawing authority. |
+| 2 | Machine-Video Agreement Probe | Commanded relative machine moves, before/after camera-space cap observations, learned machine `+X`/`+Y` video basis | Field millimeter scale, cap-to-tip offset, or drawing authority. |
+| 3 | Define Drawing Field | Visual-field corners, field registration id, field size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
 | 5 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
 

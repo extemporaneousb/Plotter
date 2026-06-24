@@ -153,6 +153,57 @@ struct MeasurementOverlay: View {
         .font(.system(size: 10, weight: .bold, design: .monospaced))
         .foregroundStyle(color.opacity(0.98))
         context.draw(label, at: mapper.point(cameraCorners[3]), anchor: .bottomLeading)
+
+        drawFieldAxis(
+            start: mapper.point(cameraCorners[0]),
+            end: mapper.point(cameraCorners[1]),
+            label: String(format: "+X %.0fmm", registration.paperSizeMm.width),
+            color: .cyan,
+            in: &context
+        )
+        drawFieldAxis(
+            start: mapper.point(cameraCorners[0]),
+            end: mapper.point(cameraCorners[3]),
+            label: String(format: "+Y %.0fmm", registration.paperSizeMm.height),
+            color: .green,
+            in: &context
+        )
+        let origin = Text("0,0")
+            .font(.system(size: 11, weight: .black, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.98))
+        context.draw(origin, at: mapper.point(cameraCorners[0]), anchor: .topTrailing)
+    }
+
+    private func drawFieldAxis(
+        start: CGPoint,
+        end: CGPoint,
+        label: String,
+        color: Color,
+        in context: inout GraphicsContext
+    ) {
+        let vector = CGPoint(x: end.x - start.x, y: end.y - start.y)
+        let axisLength = hypot(vector.x, vector.y)
+        guard axisLength > 12 else { return }
+        let scale = min(0.32, 54.0 / axisLength)
+        let axisEnd = CGPoint(x: start.x + vector.x * scale, y: start.y + vector.y * scale)
+        var axis = Path()
+        axis.move(to: start)
+        axis.addLine(to: axisEnd)
+        context.stroke(
+            axis,
+            with: .color(.black.opacity(0.86)),
+            style: StrokeStyle(lineWidth: 9.0, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            axis,
+            with: .color(color.opacity(0.96)),
+            style: StrokeStyle(lineWidth: 4.0, lineCap: .round, lineJoin: .round)
+        )
+        drawArrowHead(start: start, end: axisEnd, color: color, in: &context)
+        let axisLabel = Text(label)
+            .font(.system(size: 10, weight: .black, design: .monospaced))
+            .foregroundStyle(color.opacity(0.98))
+        context.draw(axisLabel, at: axisEnd, anchor: .bottomLeading)
     }
 
     private func drawExpectedPath(

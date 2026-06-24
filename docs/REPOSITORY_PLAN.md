@@ -75,13 +75,13 @@ The fixed-camera workflow is:
 
 1. Start the app.
 2. Open Setup. The Setup button opens or closes a separate setup window.
-3. Define Drawing Field by clicking or adjusting the four visual field corners. If the bridge
-   already has a locked field after restart and the rendered grid still aligns, use Confirm Setup to
-   reuse that registration without re-clicking corners.
-4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-5. Run Motion Calibration from the current cap location. Calibration samples small relative
-   machine-axis moves without requiring homing, axis-model trust, absolute `MPos` clearance, or
-   machine workspace proof.
+3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+4. Run Machine-Video Agreement from the current cap location before drawing a field box. Calibration
+   samples small relative machine-axis moves without requiring homing, axis-model trust, absolute
+   `MPos` clearance, a preexisting field lock, or machine workspace proof.
+5. Define Drawing Field from the learned camera/video basis. The seeded field uses 200 mm x 150 mm
+   with the longer dimension on visual `+X`; the existing field-corner affordance remains available
+   for operator adjustment.
 6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
    swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.

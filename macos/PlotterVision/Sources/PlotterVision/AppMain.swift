@@ -81,6 +81,21 @@ struct PlotterVisionApp: App {
         }
         .defaultSize(width: 390, height: 720)
         .restorationBehavior(.disabled)
+
+        Window(PlotterWindowConfiguration.logTitle, id: OperatorWindowID.operatorLog) {
+            OperatorLogPanel(workspace: workspace)
+                .preferredColorScheme(.dark)
+                .onAppear {
+                    bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.operatorLog])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
+                }
+                .onDisappear {
+                    bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.operatorLog])
+                    bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
+                }
+        }
+        .defaultSize(width: 620, height: 520)
+        .restorationBehavior(.disabled)
     }
 }
 
@@ -90,6 +105,7 @@ private enum PlotterWindowConfiguration {
     static let setupTitle = "Setup"
     static let plotterVideoTitle = "Plotter Video"
     static let faceVideoTitle = "Face Video"
+    static let logTitle = "Log"
     static let mainIdentifier = NSUserInterfaceItemIdentifier("plotter-main-window")
     static let mainFrameAutosaveName = NSWindow.FrameAutosaveName("PlotterVisionMainWindow")
 }

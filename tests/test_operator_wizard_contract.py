@@ -282,13 +282,16 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
 
     assert "CalibrationWizardView(" in setup_panel
     assert "Visual Field Setup" in wizard
-    assert 'title: "Define Drawing Field"' in wizard
     assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Run Motion Calibration"' in wizard
+    assert 'title: "Machine-Video Agreement"' in wizard
+    assert 'title: "Define Drawing Field"' in wizard
     assert 'title: "Validate Motion"' in wizard
-    assert "Start Field Corners" in content
     assert "Confirm Green Cap" in content
-    assert "Run Motion Calibration" in content
+    assert "Run Machine-Video Probe" in content
+    assert "runMachineVideoAgreementProbe" in content
+    assert "seedAndLockFieldFromMachineVideoAgreement" in content
+    assert "currentGreenCapCameraObservation" in content
+    assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
     assert "Validate Motion" in content
     assert "runFrameLearning()" in content
     assert "runWizardMotionValidation" in content
@@ -301,6 +304,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     )[0]
     assert "machineHomingTrusted" not in setup_gate
     assert "machineAxisModelTrusted" not in setup_gate
+    assert "hasPaperLock" not in setup_gate
     assert "boundedMachineTravelDistance" not in content
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
@@ -350,18 +354,8 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
     assert "Stored visual field in use" in content
-    assert "FIELD visual field ready; confirm setup if grid aligns" in content
-
-    primary_title = content.split("private var wizardPrimaryActionTitle", 1)[1].split(
-        "private var wizardPrimaryActionEnabled",
-        1,
-    )[0]
-    primary_action = content.split("private func runCalibrationWizardPrimaryAction", 1)[1].split(
-        "private func startCalibrationWizard",
-        1,
-    )[0]
-    assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Field Corners")
-    assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
+    assert "FIELD run machine-video agreement before drawing field box" in content
+    assert "FIELD 200x150 locked from machine-video agreement" in content
 
 
 def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
@@ -372,9 +366,9 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
-    assert 'title: "Define Drawing Field"' in wizard
     assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Run Motion Calibration"' in wizard
+    assert 'title: "Machine-Video Agreement"' in wizard
+    assert 'title: "Define Drawing Field"' in wizard
     assert 'title: "Validate Motion"' in wizard
     assert 'title: "Fiducials"' not in wizard
     assert 'title: "Drawing Calibration"' not in wizard
@@ -393,7 +387,7 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     assert "rollbackCalibrationWizardToStep" not in content
     assert "Click Green Cap" in content
     assert "Confirm Green Cap" in content
-    assert "Run Motion Calibration" in content
+    assert "Run Machine-Video Probe" in content
     assert "Validate Motion" in content
     assert "Run Drawing Calibration" not in content
     assert "runWizardDrawingCalibration" not in content
@@ -424,6 +418,7 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     )[0]
     assert "machineHomingTrusted" not in setup_gate
     assert "machineAxisModelTrusted" not in setup_gate
+    assert "hasPaperLock" not in setup_gate
     assert "boundedMachineTravelDistance" not in setup_gate
     assert "availableMachineTravelMm" not in setup_gate
     assert "boundedMachineTravelDistance" in model
@@ -435,6 +430,24 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "runBootstrapAdaptiveProbe(" not in content
     assert "previewBootstrapAdaptiveProbe(" not in model
     assert "runBootstrapAdaptiveProbe(" not in model
+
+
+def test_operator_log_replaces_bottom_status_bar() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    app_main = _read(SWIFT_DIR / "AppMain.swift")
+    support = _read(SWIFT_DIR / "OperatorWindowSupport.swift")
+    workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
+    log_panel = _read(SWIFT_DIR / "OperatorLogPanel.swift")
+
+    assert "private var statusBar" not in content
+    assert "statusBar" not in content
+    assert "OperatorLogPanel" in app_main
+    assert 'static let operatorLog = "operator-log"' in support
+    assert "appendOperatorLog" in workspace
+    assert "workspace.appendOperatorLog(newValue" in content
+    assert "workspace.appendOperatorLog(status, source: \"Bridge\"" in content
+    assert "Operator Log" in log_panel
+    assert "textSelection(.enabled)" in log_panel
 
 
 def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:

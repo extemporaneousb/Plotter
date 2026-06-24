@@ -5,6 +5,7 @@ enum OperatorWindowID {
     static let setupPanel = "setup-panel"
     static let plotterVideoPanel = "plotter-video-panel"
     static let faceVideoPanel = "face-video-panel"
+    static let operatorLog = "operator-log"
 }
 
 enum OperatorWindowSupport {

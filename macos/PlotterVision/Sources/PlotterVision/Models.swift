@@ -178,6 +178,26 @@ struct VisualMoveIntent: Identifiable, Equatable {
     var detail: String
 }
 
+enum OperatorLogLevel: String, Equatable {
+    case info = "INFO"
+    case warning = "WARN"
+    case error = "ERR"
+}
+
+struct OperatorLogEntry: Identifiable, Equatable {
+    let id = UUID()
+    let timestamp: Date
+    let level: OperatorLogLevel
+    let source: String
+    let message: String
+
+    var timestampLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: timestamp)
+    }
+}
+
 struct VisionAnalysisResult {
     let segments: [VisionSegment]
     let carriageMarker: CarriageMarker?
@@ -584,6 +604,16 @@ struct FrameLearningSample: Equatable {
     let strength: Double
 }
 
+struct MachineVideoAgreementSample: Equatable {
+    let axis: String
+    let distanceMm: Double
+    let observedDxNorm: Double
+    let observedDyNorm: Double
+    let observedDistanceNorm: Double
+    var residualNorm: Double = 0.0
+    let strength: Double
+}
+
 struct VisualMotionSample: Equatable {
     let machineDxMm: Double
     let machineDyMm: Double
@@ -597,6 +627,12 @@ struct GreenCapPaperObservation: Equatable {
     let frameNumber: Int
     let cameraPoint: CGPoint
     let paperMm: PaperPointMmSnapshot
+    let strength: Double
+}
+
+struct GreenCapCameraObservation: Equatable {
+    let frameNumber: Int
+    let cameraPoint: CGPoint
     let strength: Double
 }
 
@@ -696,5 +732,90 @@ struct VisualMotionModel: Equatable {
             dx: xBasisDx * xMm + yBasisDx * yMm,
             dy: xBasisDy * xMm + yBasisDy * yMm
         )
+    }
+}
+
+struct MachineVideoAgreementModel: Equatable {
+    let xBasisDxNorm: Double
+    let xBasisDyNorm: Double
+    let yBasisDxNorm: Double
+    let yBasisDyNorm: Double
+    let rmsResidualNorm: Double
+    let maxResidualNorm: Double
+    let sampleCount: Int
+
+    static func solve(samples: [MachineVideoAgreementSample]) -> MachineVideoAgreementModel? {
+        guard samples.count >= 4 else { return nil }
+
+        var sxx = 0.0
+        var sxy = 0.0
+        var syy = 0.0
+        var tx = 0.0
+        var ty = 0.0
+        var ux = 0.0
+        var uy = 0.0
+
+        for sample in samples {
+            let x = sample.axis == "X" ? sample.distanceMm : 0.0
+            let y = sample.axis == "Y" ? sample.distanceMm : 0.0
+            guard x.isFinite, y.isFinite else { return nil }
+            sxx += x * x
+            sxy += x * y
+            syy += y * y
+            tx += x * sample.observedDxNorm
+            ty += y * sample.observedDxNorm
+            ux += x * sample.observedDyNorm
+            uy += y * sample.observedDyNorm
+        }
+
+        let normalDeterminant = sxx * syy - sxy * sxy
+        guard abs(normalDeterminant) > 0.01 else { return nil }
+
+        let xBasisDxNorm = (tx * syy - ty * sxy) / normalDeterminant
+        let yBasisDxNorm = (sxx * ty - sxy * tx) / normalDeterminant
+        let xBasisDyNorm = (ux * syy - uy * sxy) / normalDeterminant
+        let yBasisDyNorm = (sxx * uy - sxy * ux) / normalDeterminant
+
+        let residuals = samples.map { sample in
+            let machineX = sample.axis == "X" ? sample.distanceMm : 0.0
+            let machineY = sample.axis == "Y" ? sample.distanceMm : 0.0
+            let predictedDx = xBasisDxNorm * machineX + yBasisDxNorm * machineY
+            let predictedDy = xBasisDyNorm * machineX + yBasisDyNorm * machineY
+            return hypot(sample.observedDxNorm - predictedDx, sample.observedDyNorm - predictedDy)
+        }
+        let rmsResidual = sqrt(residuals.reduce(0.0) { $0 + $1 * $1 } / Double(max(residuals.count, 1)))
+        let maxResidual = residuals.max() ?? .infinity
+
+        let model = MachineVideoAgreementModel(
+            xBasisDxNorm: xBasisDxNorm,
+            xBasisDyNorm: xBasisDyNorm,
+            yBasisDxNorm: yBasisDxNorm,
+            yBasisDyNorm: yBasisDyNorm,
+            rmsResidualNorm: rmsResidual,
+            maxResidualNorm: maxResidual,
+            sampleCount: samples.count
+        )
+        return model.isUsable ? model : nil
+    }
+
+    var determinant: Double {
+        xBasisDxNorm * yBasisDyNorm - yBasisDxNorm * xBasisDyNorm
+    }
+
+    var xBasisLengthNorm: Double {
+        hypot(xBasisDxNorm, xBasisDyNorm)
+    }
+
+    var yBasisLengthNorm: Double {
+        hypot(yBasisDxNorm, yBasisDyNorm)
+    }
+
+    var isUsable: Bool {
+        abs(determinant) > 0.000_000_2
+            && xBasisLengthNorm > 0.000_2
+            && yBasisLengthNorm > 0.000_2
+            && rmsResidualNorm.isFinite
+            && maxResidualNorm.isFinite
+            && sampleCount >= 4
     }
 }
