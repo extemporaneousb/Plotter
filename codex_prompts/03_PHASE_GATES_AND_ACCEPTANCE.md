@@ -135,7 +135,8 @@ Required behavior:
 - camera absence is not fatal;
 - synthetic point calibration tests pass without a camera;
 - frame capture is optional;
-- binding mark observations save into `VisualPositionBinding`;
+- legacy ink-binding observations are deferred; current setup observations save visual-field,
+  green-cap, and relative motion-model evidence;
 - transform residuals are reported.
 
 Required tests:

@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from plotter_vision import __version__ as PLOTTER_VERSION
 from plotter_vision.calibration.paper import (
+    DEFAULT_FIELD_HEIGHT_MM,
+    DEFAULT_FIELD_WIDTH_MM,
     PaperCorner,
     PaperCornerObservation,
     PaperFrameRegistration,
@@ -49,6 +51,7 @@ from plotter_vision.calibration.probe_evidence import (
 )
 from plotter_vision.calibration.readiness import (
     DrawingSafeZone,
+    RelativeMotionModel,
     SafeZoneMarginsMM,
     VisualCapObservation,
     VisualReadinessState,
@@ -2125,11 +2128,10 @@ class PlotterBridge:
 
     def register_paper(self, request: PaperRegistrationRequest) -> PaperRegistrationResponse:
         try:
-            machine = self._load_machine_config()
-            paper_width_mm = request.paper_width_mm or machine.axes.x.travel_mm
-            paper_height_mm = request.paper_height_mm or machine.axes.y.travel_mm
+            paper_width_mm = request.paper_width_mm or DEFAULT_FIELD_WIDTH_MM
+            paper_height_mm = request.paper_height_mm or DEFAULT_FIELD_HEIGHT_MM
             if not request.corners:
-                raise ValueError("Provide four paper corner observations.")
+                raise ValueError("Provide four visual field corner observations.")
             corner_observations = [
                 PaperCornerObservation(
                     corner=corner.corner,
@@ -2157,8 +2159,8 @@ class PlotterBridge:
                     "rms_error_norm": registration.rms_error_norm,
                     "max_error_norm": registration.max_error_norm,
                     "corner_count": len(registration.corner_observations),
-                    "paper_width_mm": registration.paper_size_mm.width,
-                    "paper_height_mm": registration.paper_size_mm.height,
+                    "field_width_mm": registration.paper_size_mm.width,
+                    "field_height_mm": registration.paper_size_mm.height,
                 },
             )
             return self._paper_registration_response(registration)
@@ -4511,9 +4513,41 @@ class PlotterBridge:
             if cap_to_tip_model is None:
                 cap_to_tip_model = binding.cap_to_tip_model
 
+        if registration is not None:
+            return self._visual_field_safe_zone(registration)
+
         return self._drawing_safe_zone(
             machine=machine,
             cap_to_tip_model=cap_to_tip_model,
+        )
+
+    def _visual_field_safe_zone(
+        self,
+        registration: PaperFrameRegistration,
+        *,
+        inset_mm: float = 5.0,
+    ) -> DrawingSafeZone:
+        width = registration.paper_size_mm.width
+        height = registration.paper_size_mm.height
+        inset_x = min(inset_mm, max(0.0, width / 4.0))
+        inset_y = min(inset_mm, max(0.0, height / 4.0))
+        return DrawingSafeZone.from_frame(
+            drawing_frame=DrawingFrameMM(
+                origin_x_mm=0.0,
+                origin_y_mm=0.0,
+                width_mm=width,
+                height_mm=height,
+            ),
+            margins_mm=SafeZoneMarginsMM(
+                left=inset_x,
+                right=inset_x,
+                bottom=inset_y,
+                top=inset_y,
+            ),
+            extra_padding_mm=inset_mm,
+            mark_clearance_mm=0.0,
+            park_clearance_mm=0.0,
+            observation_clearance_mm=0.0,
         )
 
     def _load_or_create_visual_position_binding(
@@ -4621,13 +4655,9 @@ class PlotterBridge:
 
     def _visual_readiness_status_fields(self) -> tuple[bool, list[str]]:
         try:
-            registration = self._load_latest_paper_registration()
-            binding = self._load_latest_visual_position_binding()
-            ready = binding.is_valid_for(
-                paper_registration_id=registration.registration_id,
-                camera_id=registration.camera_id,
-            )
-            return (ready, list(binding.blockers))
+            state = self._load_latest_visual_readiness()
+            state = self._visual_state_with_latest_probe_evidence(state)
+            return (state.visual_ready_to_plot, list(state.blockers))
         except Exception:
             return (False, [])
 
@@ -4685,6 +4715,8 @@ class PlotterBridge:
             rms_residual_mm=summary.rms_residual_mm,
             p95_residual_mm=summary.p95_residual_mm,
             max_residual_mm=summary.max_residual_mm,
+            relative_motion_model=summary.relative_motion_model,
+            motion_model_blockers=summary.motion_model_blockers,
             latest_probe_run_id=run.run_id,
             latest_probe_sample_id=summary.latest_sample_id,
             latest_probe_run_file=str(self._visual_probe_run_path(run.run_id)),
@@ -4708,10 +4740,8 @@ class PlotterBridge:
             y=_clamp(raw_paper.y, 0.0, 1.0),
         )
         logical_mm = request.observed_logical_mm or LogicalPointMM(
-            x=machine.workspace.x_min
-            + raw_paper.x * (machine.workspace.x_max - machine.workspace.x_min),
-            y=machine.workspace.y_min
-            + raw_paper.y * (machine.workspace.y_max - machine.workspace.y_min),
+            x=raw_paper.x * registration.paper_size_mm.width,
+            y=raw_paper.y * registration.paper_size_mm.height,
         )
         return VisualCapObservation(
             source=request.source,
@@ -4803,6 +4833,8 @@ class PlotterBridge:
         latest_probe_sample_id: str | None = None,
         latest_probe_run_file: str | None = None,
         extra_probe_blockers: list[str] | None = None,
+        relative_motion_model: RelativeMotionModel | None = None,
+        motion_model_blockers: list[str] | None = None,
     ) -> VisualReadinessState:
         state = build_visual_readiness_state(
             paper_registered=cap is not None or bool(previous and previous.paper_registered),
@@ -4860,6 +4892,16 @@ class PlotterBridge:
                 max_residual_mm
                 if max_residual_mm is not None
                 else (previous.probe_max_residual_mm if previous is not None else None)
+            ),
+            relative_motion_model=(
+                relative_motion_model
+                if relative_motion_model is not None
+                else (previous.relative_motion_model if previous is not None else None)
+            ),
+            motion_model_blockers=(
+                motion_model_blockers
+                if motion_model_blockers is not None
+                else (previous.motion_model_blockers if previous is not None else None)
             ),
             latest_visual_probe_run_id=(
                 latest_probe_run_id

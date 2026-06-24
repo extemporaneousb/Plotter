@@ -77,10 +77,10 @@ struct CalibrationWizardView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CalibrationWizardStepRow(index: 1, title: "Fiducials", detail: fiducialDetail, status: fiducialStatus)
-            CalibrationWizardStepRow(index: 2, title: "Green Cap", detail: greenCapDetail, status: greenCapStatus)
-            CalibrationWizardStepRow(index: 3, title: "Motion Calibration", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-            CalibrationWizardStepRow(index: 4, title: "Drawing Calibration", detail: bindingDetail, status: bindingStatus)
+            CalibrationWizardStepRow(index: 1, title: "Define Drawing Field", detail: fiducialDetail, status: fiducialStatus)
+            CalibrationWizardStepRow(index: 2, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
+            CalibrationWizardStepRow(index: 3, title: "Run Motion Calibration", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+            CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
         }
     }
 
@@ -124,7 +124,7 @@ struct CalibrationWizardView: View {
             Label(capDetected ? "cap detected" : "cap not detected", systemImage: "circle.fill")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(capDetected ? .green.opacity(0.92) : .yellow.opacity(0.86))
-            Text(String(format: "FID %d/4  FIELD %@  CAP %@  LIVE %@",
+            Text(String(format: "CORNERS %d/4  FIELD %@  CAP %@  LIVE %@",
                         manualFiducialCount,
                         hasPaperLock ? "LOCK" : "--",
                         capStateLabel,

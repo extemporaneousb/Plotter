@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Thread
@@ -21,134 +20,138 @@ from plotter_vision.calibration.probe_evidence import VisualProbeRun
 from plotter_vision.config import MachineConfig
 
 
-def test_visual_workflow_routes_register_paper_observe_cap_and_report_blockers(
-    tmp_path: Path,
-) -> None:
+def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
         status_code, status = client.get("/calibration/workflow/status")
         assert status_code == 200
         assert status["status"] == "blocked"
-        assert any("Paper registration" in blocker for blocker in status["readiness"]["blockers"])
+        assert any("Visual field registration" in blocker for blocker in status["readiness"]["blockers"])
 
-        status_code, registration = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-        assert registration["status"] == "locked"
+        registration = _register_field(client)
+        assert registration["registration"]["paper_size_mm"] == {"width": 200.0, "height": 150.0}
+        observed = _observe_cap(client, x=100.0, y=75.0)
 
-        status_code, observed = client.post(
-            "/calibration/pen/observe",
-            _cap_observation_payload(paper_x=0.5, paper_y=0.5),
-        )
-
-        assert status_code == 200
         readiness = observed["readiness"]
         assert observed["status"] == "blocked"
         assert readiness["paper_registered"] is True
         assert readiness["cap_localized"] is True
         assert readiness["cap_inside_safe_zone"] is True
+        assert readiness["motion_model_valid"] is False
+        assert readiness["relative_motion_model"] is None
         assert readiness["visual_ready_to_plot"] is False
-        assert any("at least 2 observations" in blocker for blocker in readiness["blockers"])
-
-        status_code, status = client.get("/calibration/workflow/status")
-        assert status_code == 200
-        assert status["readiness"]["latest_cap_observation"]["paper_norm"] == {"x": 0.5, "y": 0.5}
+        assert any("Motion calibration" in blocker for blocker in readiness["blockers"])
 
 
-def test_visual_probe_preview_and_run_routes_are_removed(tmp_path: Path) -> None:
-    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
-
-    with _running_bridge(bridge) as client:
-        status_code, preview = client.post(
-            "/calibration/probe/preview",
-            {"request_id": "probe-preview"},
-        )
-        assert status_code == 404
-        assert preview["error"] == "not found"
-
-        status_code, run = client.post(
-            "/calibration/probe/run",
-            {"request_id": "probe-run"},
-        )
-        assert status_code == 404
-        assert run["error"] == "not found"
-        assert not (tmp_path / "transcripts" / "probe-run.jsonl").exists()
-
-
-def test_visual_probe_observe_persists_samples_and_updates_readiness(
+@pytest.mark.parametrize(
+    ("name", "matrix", "expected_inverse"),
+    [
+        ("aligned", ((1.0, 0.0), (0.0, 1.0)), ((1.0, 0.0), (0.0, 1.0))),
+        ("swapped", ((0.0, 1.0), (1.0, 0.0)), ((0.0, 1.0), (1.0, 0.0))),
+        ("sign_reversed", ((-1.0, 0.0), (0.0, -1.0)), ((-1.0, 0.0), (0.0, -1.0))),
+        ("rotated_skewed", ((0.8, -0.3), (0.4, 1.1)), ((1.1, 0.3), (-0.4, 0.8))),
+    ],
+)
+def test_probe_samples_solve_valid_relative_motion_models(
     tmp_path: Path,
+    name: str,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
+    expected_inverse: tuple[tuple[float, float], tuple[float, float]],
 ) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        for payload in _probe_sample_payloads(run_id="probe-run-durable"):
+        _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id=f"probe-run-{name}", matrix=matrix):
             status_code, response = client.post("/calibration/probe/observe", payload)
             assert status_code == 200
             assert response["status"] == "accepted"
 
-        run_path = tmp_path / "calibration" / "visual_probe_runs" / "probe-run-durable.json"
-        latest_path = tmp_path / "calibration" / "latest_visual_probe_run.json"
-        assert run_path.exists()
-        assert latest_path.exists()
-        run = VisualProbeRun.load_json(run_path)
-        assert len(run.samples) == 4
-        assert run.summary.accepted_sample_count == 4
-        assert run.summary.axes_represented == ["X", "Y"]
-        assert run.summary.rms_residual_mm == pytest.approx(0.0)
-
         status_code, status = client.get("/calibration/workflow/status")
         assert status_code == 200
-        readiness = status["readiness"]
-        assert readiness["probe_raw_sample_count"] == 4
-        assert readiness["probe_observation_count"] == 4
-        assert readiness["probe_axes_represented"] == ["X", "Y"]
-        assert readiness["latest_visual_probe_run_id"] == "probe-run-durable"
-        assert readiness["visual_ready_to_plot"] is True
+
+    readiness = status["readiness"]
+    model = readiness["relative_motion_model"]
+    assert status["status"] == "ready"
+    assert readiness["motion_model_valid"] is True
+    assert readiness["visual_ready_to_plot"] is True
+    assert readiness["probe_observation_count"] == 4
+    assert readiness["probe_axes_represented"] == ["X", "Y"]
+    assert readiness["motion_model_blockers"] == []
+    assert model["sample_count"] == 4
+    assert model["rms_residual_mm"] == pytest.approx(0.0, abs=1e-9)
+    _assert_matrix_close(model["machine_to_field_matrix"], matrix)
+    _assert_matrix_close(model["field_to_machine_matrix"], expected_inverse)
+
+    run_path = tmp_path / "calibration" / "visual_probe_runs" / f"probe-run-{name}.json"
+    run = VisualProbeRun.load_json(run_path)
+    assert run.summary.motion_model_valid is True
+    assert run.summary.relative_motion_model is not None
 
 
-def test_setup_reset_clears_latest_authority_but_preserves_history(tmp_path: Path) -> None:
+def test_singular_relative_motion_model_is_rejected(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
-        status_code, registration = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-        registration_id = registration["registration"]["registration_id"]
-        status_code, _ = client.post(
-            "/calibration/pen/observe",
-            _cap_observation_payload(paper_x=0.5, paper_y=0.5),
-        )
-        assert status_code == 200
-        status_code, _ = client.post(
-            "/calibration/probe/observe",
-            _probe_sample_payload(
-                run_id="probe-run-reset",
-                sample_id="probe-reset",
-                source="motion_probe",
-                axis="X",
-                command_x=25.0,
-                command_y=0.0,
-                before=(250.0, 100.0),
-                after=(275.0, 100.0),
-            ),
-        )
-        assert status_code == 200
-        status_code, preview = client.post(
-            "/calibration/binding/preview",
-            {"point_set": "five"},
-        )
-        assert status_code == 200
-        status_code, binding_status = client.get("/calibration/binding/status")
-        assert status_code == 200
-        binding_id = binding_status["binding"]["binding_id"]
+        _register_field_and_observe_cap(client)
+        singular = ((1.0, 2.0), (0.0, 0.0))
+        for payload in _probe_sample_payloads(run_id="probe-run-singular", matrix=singular):
+            status_code, response = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+            assert response["status"] == "accepted"
 
-        historical_paper = tmp_path / "calibration" / "paper" / f"{registration_id}.json"
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+
+    readiness = status["readiness"]
+    assert status["status"] == "blocked"
+    assert readiness["motion_model_valid"] is False
+    assert readiness["relative_motion_model"] is None
+    assert any("singular" in blocker for blocker in readiness["motion_model_blockers"])
+    assert any("singular" in blocker for blocker in readiness["blockers"])
+
+
+def test_binding_observations_are_not_required_for_motion_model_valid(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-no-binding"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        status_code, binding = client.get("/calibration/binding/status")
+        assert status_code == 200
+        assert binding["status"] == "missing"
+
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+
+    readiness = status["readiness"]
+    assert readiness["motion_model_valid"] is True
+    assert readiness["visual_ready_to_plot"] is True
+    assert all("binding" not in blocker.lower() for blocker in readiness["blockers"])
+
+
+def test_setup_reset_clears_latest_field_cap_and_motion_authority(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-reset"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert status["readiness"]["motion_model_valid"] is True
+
+        registration_id = registration["registration"]["registration_id"]
+        historical_field = tmp_path / "calibration" / "paper" / f"{registration_id}.json"
         historical_probe = tmp_path / "calibration" / "visual_probe_runs" / "probe-run-reset.json"
-        historical_binding = tmp_path / "calibration" / "visual_position_bindings" / f"{binding_id}.json"
-        assert historical_paper.exists()
+        assert historical_field.exists()
         assert historical_probe.exists()
-        assert historical_binding.exists()
-        assert preview["safe_zone"]["extra_padding_mm"] == pytest.approx(40.0)
 
         status_code, reset = client.post("/calibration/setup/reset", {})
         assert status_code == 200
@@ -157,308 +160,60 @@ def test_setup_reset_clears_latest_authority_but_preserves_history(tmp_path: Pat
         assert not (tmp_path / "calibration" / "latest_paper_registration.json").exists()
         assert not (tmp_path / "calibration" / "latest_visual_readiness.json").exists()
         assert not (tmp_path / "calibration" / "latest_visual_probe_run.json").exists()
-        assert not (tmp_path / "calibration" / "latest_visual_position_binding.json").exists()
-        assert historical_paper.exists()
+        assert historical_field.exists()
         assert historical_probe.exists()
-        assert historical_binding.exists()
 
         status_code, paper_status = client.get("/paper/status")
         assert status_code == 200
         assert paper_status["status"] == "missing"
-        status_code, binding_after_reset = client.get("/calibration/binding/status")
+        status_code, workflow = client.get("/calibration/workflow/status")
         assert status_code == 200
-        assert binding_after_reset["status"] == "missing"
+        assert workflow["readiness"]["paper_registered"] is False
+        assert workflow["readiness"]["motion_model_valid"] is False
 
 
-def test_manual_tool_estimate_route_is_removed(tmp_path: Path) -> None:
+def test_motion_model_valid_does_not_unlock_real_drawing(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(
+        tmp_path=tmp_path,
+        config_path=config_path,
+        dry_run=False,
+        arm_motion=True,
+        arm_pen=True,
+    )
+
+    with _running_bridge(bridge) as client:
+        _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-no-drawing"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        status_code, workflow = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert workflow["readiness"]["motion_model_valid"] is True
+
+        status_code, drawing = client.post(
+            "/draw/program",
+            _draw_program_payload(request_id="motion-model-is-not-drawing-authority"),
+        )
+
+    assert status_code == 400
+    assert drawing["status"] == "failed"
+    assert drawing["controller_transcript"] is None
+    assert "absolute drawing" in drawing["error"]
+
+
+def test_visual_probe_preview_and_run_routes_are_removed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
     with _running_bridge(bridge) as client:
-        status_code, _ = client.post("/paper/register", _paper_registration_payload())
-        assert status_code == 200
-
-        status_code, response = client.post(
-            "/calibration/tool/estimate",
-            {
-                "cap": {
-                    "paper_mm": {"x": 100.0, "y": 80.0},
-                    "observed_norm": {"x": 0.45, "y": 0.45},
-                },
-                "tip": {
-                    "paper_mm": {"x": 110.0, "y": 76.0},
-                    "observed_norm": {"x": 0.47, "y": 0.43},
-                },
-            },
-        )
-
+        status_code, preview = client.post("/calibration/probe/preview", {"request_id": "p"})
         assert status_code == 404
-        assert response["error"] == "not found"
-        assert not (tmp_path / "calibration" / "latest_visual_position_binding.json").exists()
+        assert preview["error"] == "not found"
 
-
-def test_persisted_visual_probe_samples_survive_bridge_reload(tmp_path: Path) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        for payload in _probe_sample_payloads(run_id="probe-run-reload"):
-            status_code, _ = client.post("/calibration/probe/observe", payload)
-            assert status_code == 200
-
-    reloaded = _bridge(tmp_path=tmp_path, config_path=config_path)
-    with _running_bridge(reloaded) as client:
-        status_code, status = client.get("/calibration/workflow/status")
-
-    assert status_code == 200
-    readiness = status["readiness"]
-    assert readiness["latest_visual_probe_run_id"] == "probe-run-reload"
-    assert readiness["probe_observation_count"] == 4
-    assert readiness["probe_rms_residual_mm"] == pytest.approx(0.0)
-
-
-def test_legacy_bootstrap_sample_decodes_without_bootstrap_readiness_path(
-    tmp_path: Path,
-) -> None:
-    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        status_code, response = client.post(
-            "/calibration/probe/observe",
-            _probe_sample_payload(
-                run_id="probe-run-bootstrap",
-                sample_id="boot-1",
-                source="x_min_bootstrap",
-                axis="X",
-                command_x=80.0,
-                command_y=0.0,
-                before=(20.0, 100.0),
-                after=(100.0, 100.0),
-            ),
-        )
-
-        assert status_code == 200
-        assert response["status"] == "accepted"
-        readiness = response["readiness"]
-        assert "probe_bootstrap_sample_count" not in readiness
-        assert readiness["probe_observation_count"] == 1
-        assert readiness["visual_ready_to_plot"] is False
-        assert any("at least 2 observations" in blocker for blocker in readiness["blockers"])
-
-
-def test_rejected_visual_probe_sample_persists_without_counting_as_readiness(
-    tmp_path: Path,
-) -> None:
-    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        status_code, response = client.post(
-            "/calibration/probe/observe",
-            _probe_sample_payload(
-                run_id="probe-run-rejected",
-                sample_id="reject-1",
-                source="center_target_residual",
-                axis=None,
-                command_x=6.0,
-                command_y=0.0,
-                before=(250.0, 100.0),
-                after=(251.0, 100.0),
-                predicted_dx=6.0,
-                predicted_dy=0.0,
-                residual=5.0,
-                residual_limit=3.5,
-                status="rejected",
-                rejection_reason="residual exceeded limit",
-            ),
-        )
-
-        assert status_code == 200
-        assert response["status"] == "rejected"
-        run = VisualProbeRun.load_json(
-            tmp_path / "calibration" / "visual_probe_runs" / "probe-run-rejected.json"
-        )
-        assert run.summary.raw_sample_count == 1
-        assert run.summary.accepted_sample_count == 0
-        assert run.summary.rejected_sample_count == 1
-        readiness = response["readiness"]
-        assert readiness["probe_raw_sample_count"] == 1
-        assert readiness["probe_observation_count"] == 0
-        assert readiness["probe_rejected_sample_count"] == 1
-        assert readiness["visual_ready_to_plot"] is False
-
-
-def test_durable_cap_probe_evidence_does_not_unlock_absolute_drawing(
-    tmp_path: Path,
-) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=config_path,
-        dry_run=False,
-        arm_motion=True,
-        arm_pen=True,
-        arm_homing=False,
-    )
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        for payload in _probe_sample_payloads(run_id="probe-run-no-unlock"):
-            status_code, _ = client.post("/calibration/probe/observe", payload)
-            assert status_code == 200
-
-        status_code, status = client.get("/calibration/workflow/status")
-        assert status_code == 200
-        assert status["readiness"]["visual_ready_to_plot"] is True
-
-        status_code, drawing = client.post(
-            "/draw/program",
-            _draw_program_payload(request_id="probe-evidence-draw"),
-        )
-
-        assert status_code == 400
-        assert drawing["status"] == "failed"
-        assert drawing["controller_transcript"] is None
-        assert "VisualPositionBinding" in drawing["error"]
-        machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
-        assert machine.homing_trusted is False
-        assert machine.axis_model_trusted is False
-
-
-def test_cap_only_visual_readiness_does_not_unlock_absolute_drawing(
-    tmp_path: Path,
-) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=config_path,
-        dry_run=False,
-        arm_motion=True,
-        arm_pen=True,
-        arm_homing=False,
-    )
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        status_code, trust = client.post(
-            "/machine/axis-model/trust",
-            {
-                "request_id": "visual-ready",
-                "sample_count": 4,
-                "command_distance_mm": 200.0,
-                "min_observed_distance_mm": 45.0,
-                "rms_residual_mm": 1.0,
-                "max_residual_mm": 2.0,
-                "samples": [
-                    _trust_sample("X", 200.0, 198.0, 1.0, 198.0),
-                    _trust_sample("X", -200.0, -197.0, -1.0, 197.0),
-                    _trust_sample("Y", 50.0, 1.0, 49.0, 49.0),
-                    _trust_sample("Y", -50.0, -1.0, -48.0, 48.0),
-                ],
-            },
-        )
-        assert status_code == 200
-        assert trust["status"] == "completed"
-
-        status_code, status = client.get("/calibration/workflow/status")
-        assert status_code == 200
-        assert status["status"] == "ready"
-        assert status["readiness"]["visual_ready_to_plot"] is True
-
-        status_code, binding_status = client.get("/calibration/binding/status")
-        assert status_code == 200
-        assert binding_status["status"] == "missing"
-
-        status_code, drawing = client.post(
-            "/draw/program",
-            _draw_program_payload(request_id="visual-draw"),
-        )
-
-        assert status_code == 400
-        assert drawing["status"] == "failed"
-        assert drawing["controller_transcript"] is None
-        assert "VisualPositionBinding" in drawing["error"]
-        machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
-        assert machine.homing_trusted is False
-        assert machine.axis_model_trusted is False
-
-
-def test_validated_visual_binding_allows_controlled_drawing_without_axis_trust(
-    tmp_path: Path,
-) -> None:
-    config_path = _write_machine_config(tmp_path)
-    bridge = _bridge(
-        tmp_path=tmp_path,
-        config_path=config_path,
-        dry_run=False,
-        arm_motion=True,
-        arm_pen=True,
-        arm_homing=False,
-    )
-
-    with _running_bridge(bridge) as client:
-        _register_and_observe_center_cap(client)
-        status_code, preview = client.post(
-            "/calibration/binding/preview",
-            {
-                "request_id": "binding-preview",
-                "mark_size_mm": 4.0,
-                "margin_mm": 25.0,
-            },
-        )
-        assert status_code == 200
-        assert preview["status"] == "ready"
-        assert preview["point_set"] == "five"
-        samples = preview["points"]
-        assert len(samples) == 5
-
-        learned_dx_mm = 1.5
-        learned_dy_mm = -2.0
-        for sample in samples:
-            paper_mm = sample["paper_mm"]
-            status_code, observed = client.post(
-                "/calibration/binding/observe",
-                {
-                    "command_id": "binding-preview",
-                    "point_id": sample["point_id"],
-                    "kind": "ink",
-                    "observed_paper_mm": {
-                        "x": paper_mm["x"] + learned_dx_mm,
-                        "y": paper_mm["y"] + learned_dy_mm,
-                    },
-                },
-            )
-            assert status_code == 200
-            assert observed["status"] in {"collecting", "blocked", "ready"}
-
-        status_code, binding_status = client.get("/calibration/binding/status")
-        assert status_code == 200
-        assert binding_status["status"] == "ready"
-        binding = binding_status["binding"]
-        assert binding["validation_status"] == "validated"
-        assert binding["residuals"]["observation_count"] >= 5
-        assert binding["residuals"]["rms_residual_mm"] <= 3.0
-        assert binding["cap_to_tip_model"]["source"] == "residual_solver"
-        assert binding["cap_to_tip_model"]["offset_x_mm"] == pytest.approx(learned_dx_mm)
-        assert binding["cap_to_tip_model"]["offset_y_mm"] == pytest.approx(learned_dy_mm)
-        assert binding["safe_zone"]["cap_to_tip_offset_x_mm"] == pytest.approx(learned_dx_mm)
-        assert binding["safe_zone"]["cap_to_tip_offset_y_mm"] == pytest.approx(learned_dy_mm)
-
-        status_code, drawing = client.post(
-            "/draw/program",
-            _draw_program_payload(request_id="visual-binding-draw"),
-        )
-
-        assert status_code == 200
-        assert drawing["status"] == "completed"
-        assert drawing["controller_transcript"] is not None
-        assert "$H" not in drawing["planned_commands"]
-        text = Path(drawing["controller_transcript"]).read_text(encoding="utf-8")
-        assert '"payload":"$H"' not in text
-        assert '"payload":"M3 S720"' in text
-        machine = MachineConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
-        assert machine.axis_model_trusted is False
+        status_code, run = client.post("/calibration/probe/run", {"request_id": "r"})
+        assert status_code == 404
+        assert run["error"] == "not found"
 
 
 class _BridgeClient:
@@ -531,20 +286,30 @@ def _bridge(
     )
 
 
-def _register_and_observe_center_cap(client: _BridgeClient) -> None:
-    status_code, _ = client.post("/paper/register", _paper_registration_payload())
+def _register_field_and_observe_cap(client: _BridgeClient) -> dict[str, Any]:
+    registration = _register_field(client)
+    _observe_cap(client, x=100.0, y=75.0)
+    return registration
+
+
+def _register_field(client: _BridgeClient) -> dict[str, Any]:
+    status_code, registration = client.post("/paper/register", _field_registration_payload())
     assert status_code == 200
-    status_code, _ = client.post(
+    assert registration["status"] == "locked"
+    return registration
+
+
+def _observe_cap(client: _BridgeClient, *, x: float, y: float) -> dict[str, Any]:
+    status_code, observed = client.post(
         "/calibration/pen/observe",
-        _cap_observation_payload(paper_x=0.5, paper_y=0.5),
+        _cap_observation_payload(field_x=x, field_y=y),
     )
     assert status_code == 200
+    return observed
 
 
-def _paper_registration_payload() -> dict[str, Any]:
+def _field_registration_payload() -> dict[str, Any]:
     return {
-        "paper_width_mm": 533.4,
-        "paper_height_mm": 215.9,
         "corners": [
             {"corner": "bottom_left", "observed_norm": {"x": 0.10, "y": 0.12}},
             {"corner": "bottom_right", "observed_norm": {"x": 0.88, "y": 0.10}},
@@ -554,68 +319,37 @@ def _paper_registration_payload() -> dict[str, Any]:
     }
 
 
-def _cap_observation_payload(
-    *,
-    paper_x: float,
-    paper_y: float,
-    logical_x: float | None = None,
-    logical_y: float | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "observed_norm": {"x": paper_x, "y": paper_y},
-        "observed_paper_norm": {"x": paper_x, "y": paper_y},
+def _cap_observation_payload(*, field_x: float, field_y: float) -> dict[str, Any]:
+    return {
+        "observed_norm": {"x": field_x / 200.0, "y": field_y / 150.0},
+        "observed_paper_norm": {"x": field_x / 200.0, "y": field_y / 150.0},
+        "observed_logical_mm": {"x": field_x, "y": field_y},
         "source": "operator_confirmed",
         "confidence": 0.95,
-        "safe_zone_inset_x_mm": 10.0,
-        "safe_zone_inset_y_mm": 10.0,
     }
-    if logical_x is not None and logical_y is not None:
-        payload["observed_logical_mm"] = {"x": logical_x, "y": logical_y}
-    return payload
 
 
-def _probe_sample_payloads(*, run_id: str) -> list[dict[str, Any]]:
+def _probe_sample_payloads(
+    *,
+    run_id: str,
+    matrix: tuple[tuple[float, float], tuple[float, float]] = ((1.0, 0.0), (0.0, 1.0)),
+) -> list[dict[str, Any]]:
+    commands = [
+        ("probe-x-pos", "X", 20.0, 0.0),
+        ("probe-x-neg", "X", -20.0, 0.0),
+        ("probe-y-pos", "Y", 0.0, 20.0),
+        ("probe-y-neg", "Y", 0.0, -20.0),
+    ]
     return [
         _probe_sample_payload(
             run_id=run_id,
-            sample_id="probe-x-pos",
-            source="motion_probe",
-            axis="X",
-            command_x=25.0,
-            command_y=0.0,
-            before=(250.0, 100.0),
-            after=(275.0, 100.0),
-        ),
-        _probe_sample_payload(
-            run_id=run_id,
-            sample_id="probe-x-neg",
-            source="motion_probe",
-            axis="X",
-            command_x=-25.0,
-            command_y=0.0,
-            before=(275.0, 100.0),
-            after=(250.0, 100.0),
-        ),
-        _probe_sample_payload(
-            run_id=run_id,
-            sample_id="probe-y-pos",
-            source="motion_probe",
-            axis="Y",
-            command_x=0.0,
-            command_y=25.0,
-            before=(250.0, 100.0),
-            after=(250.0, 125.0),
-        ),
-        _probe_sample_payload(
-            run_id=run_id,
-            sample_id="probe-y-neg",
-            source="motion_probe",
-            axis="Y",
-            command_x=0.0,
-            command_y=-25.0,
-            before=(250.0, 125.0),
-            after=(250.0, 100.0),
-        ),
+            sample_id=sample_id,
+            axis=axis,
+            command_x=command_x,
+            command_y=command_y,
+            matrix=matrix,
+        )
+        for sample_id, axis, command_x, command_y in commands
     ]
 
 
@@ -623,69 +357,47 @@ def _probe_sample_payload(
     *,
     run_id: str,
     sample_id: str,
-    source: str,
-    axis: str | None,
+    axis: str,
     command_x: float,
     command_y: float,
-    before: tuple[float, float],
-    after: tuple[float, float],
-    predicted_dx: float | None = None,
-    predicted_dy: float | None = None,
-    residual: float | None = None,
-    residual_limit: float | None = None,
-    status: str = "accepted",
-    rejection_reason: str | None = None,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    before = (100.0, 75.0)
+    observed_dx = matrix[0][0] * command_x + matrix[0][1] * command_y
+    observed_dy = matrix[1][0] * command_x + matrix[1][1] * command_y
+    after = (before[0] + observed_dx, before[1] + observed_dy)
+    return {
         "run_id": run_id,
         "sample_id": sample_id,
-        "source": source,
+        "source": "motion_probe",
         "axis": axis,
         "commanded_dx_mm": command_x,
         "commanded_dy_mm": command_y,
         "before": _probe_cap_snapshot(*before, frame=1),
         "after": _probe_cap_snapshot(*after, frame=2),
-        "status": status,
+        "status": "accepted",
         "camera_id": "plotter-camera",
         "camera_name": "Plotter Camera",
     }
-    if predicted_dx is not None:
-        payload["predicted_dx_mm"] = predicted_dx
-    if predicted_dy is not None:
-        payload["predicted_dy_mm"] = predicted_dy
-    if residual is not None:
-        payload["residual_mm"] = residual
-    if residual_limit is not None:
-        payload["residual_limit_mm"] = residual_limit
-    if rejection_reason is not None:
-        payload["rejection_reason"] = rejection_reason
-    return payload
 
 
 def _probe_cap_snapshot(x_mm: float, y_mm: float, *, frame: int) -> dict[str, Any]:
     return {
-        "camera_norm": {"x": x_mm / 533.4, "y": y_mm / 215.9},
-        "paper_norm": {"x": x_mm / 533.4, "y": y_mm / 215.9},
+        "camera_norm": {"x": x_mm / 200.0, "y": y_mm / 150.0},
+        "paper_norm": {"x": x_mm / 200.0, "y": y_mm / 150.0},
         "logical_mm": {"x": x_mm, "y": y_mm},
         "frame_id": frame,
         "confidence": 0.95,
     }
 
 
-def _trust_sample(
-    axis: str,
-    commanded_distance_mm: float,
-    observed_dx_mm: float,
-    observed_dy_mm: float,
-    observed_distance_mm: float,
-) -> dict[str, Any]:
-    return {
-        "axis": axis,
-        "commanded_distance_mm": commanded_distance_mm,
-        "observed_dx_mm": observed_dx_mm,
-        "observed_dy_mm": observed_dy_mm,
-        "observed_distance_mm": observed_distance_mm,
-    }
+def _assert_matrix_close(
+    actual: list[list[float]],
+    expected: tuple[tuple[float, float], tuple[float, float]],
+) -> None:
+    assert len(actual) == 2
+    for actual_row, expected_row in zip(actual, expected):
+        assert actual_row == pytest.approx(expected_row, abs=1e-6)
 
 
 def _draw_program_payload(*, request_id: str) -> dict[str, Any]:
@@ -726,21 +438,3 @@ def _write_machine_config(tmp_path: Path) -> Path:
     machine.pen.down_command = "M3 S720"
     machine.save_json(config_path)
     return config_path
-
-
-def _max_xy_command_distance(commands: list[str]) -> float:
-    return max((_xy_command_distance(command) for command in commands), default=0.0)
-
-
-def _xy_command_distance(command: str) -> float:
-    words = command.strip().split()
-    if not any(word in {"G0", "G00", "G1", "G01"} for word in words):
-        return 0.0
-    x = 0.0
-    y = 0.0
-    for word in words:
-        if word.startswith("X"):
-            x = float(word[1:])
-        elif word.startswith("Y"):
-            y = float(word[1:])
-    return math.hypot(x, y)

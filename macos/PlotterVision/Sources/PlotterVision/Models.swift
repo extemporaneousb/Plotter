@@ -145,15 +145,15 @@ struct ManualFiducialPoint: Identifiable, Equatable {
     var label: String {
         switch id {
         case 1:
-            return "FID-BL"
+            return "FIELD-BL"
         case 2:
-            return "FID-BR"
+            return "FIELD-BR"
         case 3:
-            return "FID-TR"
+            return "FIELD-TR"
         case 4:
-            return "FID-TL"
+            return "FIELD-TL"
         default:
-            return String(format: "FID-%02d", id)
+            return String(format: "FIELD-%02d", id)
         }
     }
 }
@@ -165,7 +165,7 @@ struct ConfirmedCapPoint: Identifiable, Equatable {
     var paperMm: PaperPointMmSnapshot?
 
     var label: String {
-        guard let paperMm else { return "CONF CAP PAPER ?" }
+        guard let paperMm else { return "CONF CAP FIELD ?" }
         return String(format: "CONF CAP %.1f,%.1f mm", paperMm.x, paperMm.y)
     }
 }

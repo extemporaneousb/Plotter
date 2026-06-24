@@ -10,6 +10,8 @@ from plotter_vision.calibration.vision_model import CameraPointNorm
 from plotter_vision.controller.base import utc_now_iso
 
 PaperCorner = Literal["bottom_left", "bottom_right", "top_right", "top_left"]
+DEFAULT_FIELD_WIDTH_MM = 200.0
+DEFAULT_FIELD_HEIGHT_MM = 150.0
 
 
 class PaperPointNorm(BaseModel):
@@ -113,13 +115,13 @@ def build_paper_frame_registration(
     paper_height_mm: float,
 ) -> PaperFrameRegistration:
     if len(corner_observations) < 4:
-        raise ValueError("At least four paper corner observations are required.")
+        raise ValueError("At least four visual field corner observations are required.")
     if paper_width_mm <= 0 or paper_height_mm <= 0:
-        raise ValueError("Paper width and height must be positive.")
+        raise ValueError("Visual field width and height must be positive.")
 
     corners = {observation.corner for observation in corner_observations}
     if len(corners) != len(corner_observations):
-        raise ValueError("Paper corner observations must not contain duplicate corners.")
+        raise ValueError("Visual field corner observations must not contain duplicate corners.")
 
     _validate_observed_corner_quad(corner_observations)
 
@@ -180,7 +182,7 @@ def _validate_observed_corner_quad(corner_observations: list[PaperCornerObservat
     points = [(by_corner[corner].x, by_corner[corner].y) for corner in required]
     area = abs(_signed_area(points))
     if area < 1e-4:
-        raise ValueError("Observed paper fiducials are degenerate; selected area is too small.")
+        raise ValueError("Observed visual field corners are degenerate; selected area is too small.")
     if _segments_intersect(points[0], points[1], points[2], points[3]) or _segments_intersect(
         points[1],
         points[2],
@@ -188,7 +190,7 @@ def _validate_observed_corner_quad(corner_observations: list[PaperCornerObservat
         points[0],
     ):
         raise ValueError(
-            "Observed paper fiducials form a crossed quadrilateral. "
+            "Observed visual field corners form a crossed quadrilateral. "
             "Click corners in BL, BR, TR, TL order."
         )
 
@@ -313,7 +315,7 @@ def _solve_linear(matrix: list[list[float]], rhs: list[float]) -> list[float]:
     for column in range(size):
         pivot_row = max(range(column, size), key=lambda row: abs(augmented[row][column]))
         if abs(augmented[pivot_row][column]) < 1e-12:
-            raise ValueError("Paper fiducial observations are degenerate; homography solve is singular.")
+            raise ValueError("Visual field corner observations are degenerate; homography solve is singular.")
         augmented[column], augmented[pivot_row] = augmented[pivot_row], augmented[column]
 
         pivot = augmented[column][column]

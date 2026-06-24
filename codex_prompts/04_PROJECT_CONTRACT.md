@@ -24,17 +24,17 @@
 ## Current architecture boundary
 
 - `plotter_vision.bridge` is the local machine-action boundary. It owns routing, safety validation,
-  planning, simulation, controller access, transcripts, and persisted calibration/binding artifacts.
+  planning, simulation, controller access, transcripts, and persisted calibration artifacts.
 - The macOS app is the operator and visual surface. It can select cameras, collect observations,
   render overlays, and call typed bridge endpoints. It must not own serial transport, raw G-code
   semantics, trust promotion, or persisted model authority.
-- Python owns calibration, paper registration, shape planning, simulation, residual solving,
-  persisted bindings, and trust flags.
+- Python owns visual-field registration, cap localization, relative motion-model calibration, shape
+  planning, simulation, residual solving, and trust flags.
 - Preview is separate from execution. Preview endpoints must force dry-run behavior, return simulated
   geometry only, never move hardware, and never write controller transcripts.
-- Obsolete compatibility paths should be removed when no external caller exists. Keep drawing and
-  verification surfaces named for their current bridge contract: capability checks, shape execution,
-  binding observations, and image-derived drawing.
+- Obsolete compatibility paths should be removed when no external caller exists. Keep setup surfaces
+  named for their current bridge contract: visual field registration, green-cap observation, relative
+  motion calibration, and validation.
 
 ## Canonical fixed-camera flow
 
@@ -42,28 +42,30 @@ The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
-3. Click or confirm paper fiducials and confirm the visual field. The bridge owns the internal field
-   registration artifact, but operator-facing setup treats it as a locked visual field.
+3. Define Drawing Field by clicking or adjusting the four visual field corners. The operator-facing
+   setup shows the `0,0` origin, `+X`/`+Y` directions, and physical field size in millimeters.
 4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-5. Run Motion Calibration to measure relative cap motion with bounded moves chosen from
-   current machine clearance; do not assume or reintroduce a fixed +X bootstrap or bridge-planned
-   adaptive-probe motion route.
-6. Run Drawing Calibration: preview binding marks from the safe drawable region, run watched binding
-   marks, post observations to `/calibration/binding/observe`, solve `/calibration/binding/solve`,
-   learn the cap-to-tip offset from mark residuals, and draw the ready frame around that same region.
-7. Treat the validated `VisualPositionBinding` as the current drawing unlock.
-8. Use Draw/Verify to preview capability checks, shape programs, or portrait/image-derived programs
-   through:
+5. Run Motion Calibration to measure relative cap motion with small relative machine moves. This path
+   does not require homing, `homing_trusted`, `axis_model_trusted`, or absolute machine-position
+   workspace clearance.
+6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
+   Success for this milestone means predictable green-cap motion in the user-defined visual drawing
+   field.
+7. Treat field registration, cap localization, and a valid relative motion model as the active setup
+   authority. Cap-to-tip offset, ink observations, and actual drawing are future work.
+8. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
+   programs through:
 
 ```text
 DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
   -> Executor -> Vision Observer -> Residual Solver -> Persisted Binding
 ```
 
-Cap-only motion is relative session evidence. Absolute drawing in the paper plane requires a visual
-position binding backed by field registration, cap localization, a learned cap-to-tip offset, ink
-observations, residuals, camera identity, and freshness. Swift observations are evidence; Python
-decides whether a binding or trust flag is valid.
+Cap-only motion is relative session evidence. For this milestone, the bridge is ready when the
+visual field is registered, the cap is localized in that field, and the learned 2x2 relative motion
+model is stable, invertible, and validated by observed cap movement. Machine axes may be swapped,
+rotated, skewed, or sign-reversed relative to the video field. Swift observations are evidence;
+Python decides whether the field, cap, and motion model are valid.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned

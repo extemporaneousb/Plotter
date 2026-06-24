@@ -30,28 +30,8 @@ struct SetupPanel: View {
                 reset: { workspace.requestSetupCommand(.reset) },
                 hide: { workspace.requestSetupCommand(.hide) }
             )
-            checkedOutDrawingSection
         }
         .frame(width: 430, alignment: .topLeading)
         .padding(14)
-    }
-
-    @ViewBuilder
-    private var checkedOutDrawingSection: some View {
-        if bridge.visualBindingValid {
-            VStack(alignment: .leading, spacing: 6) {
-                panelSectionTitle("Drawing Checkout")
-                Text("Binding validated. Drawing examples are intentionally removed until the next drawing surface is defined.")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
-            )
-        }
     }
 }

@@ -7,6 +7,7 @@ import pytest
 
 from plotter_vision.calibration.readiness import (
     DrawingSafeZone,
+    RelativeMotionModel,
     SafeZoneMarginsMM,
     VisualCapObservation,
     VisualReadinessState,
@@ -64,7 +65,9 @@ def test_visual_readiness_serialization_round_trip(tmp_path: Path) -> None:
         safe_zone_evaluation=evaluation,
         probe_observation_count=2,
         probe_rms_residual_mm=1.2,
+        probe_p95_residual_mm=2.0,
         probe_max_residual_mm=2.4,
+        relative_motion_model=_motion_model(rms=1.2, p95=2.0, max_residual=2.4),
     )
 
     path = tmp_path / "visual_readiness.json"
@@ -88,7 +91,7 @@ def test_visual_readiness_reports_blockers_without_homing_or_axis_trust() -> Non
     assert readiness.paper_registered is False
     assert readiness.cap_localized is False
     assert readiness.cap_inside_safe_zone is False
-    assert any("Paper registration" in blocker for blocker in readiness.blockers)
+    assert any("Visual field registration" in blocker for blocker in readiness.blockers)
     assert any("Green cap/carriage marker is not localized" in blocker for blocker in readiness.blockers)
     assert any("at least 2 observations" in blocker for blocker in readiness.blockers)
     assert "homing_trusted" not in readiness.model_dump()
@@ -108,6 +111,7 @@ def test_visual_readiness_blocks_high_probe_residuals() -> None:
         probe_rms_residual_mm=11.1,
         probe_p95_residual_mm=21.0,
         probe_max_residual_mm=21.0,
+        relative_motion_model=_motion_model(rms=11.1, p95=21.0, max_residual=21.0),
     )
 
     assert readiness.visual_ready_to_plot is False
@@ -128,6 +132,7 @@ def test_visual_readiness_tolerates_single_probe_residual_outlier() -> None:
         probe_rms_residual_mm=3.2,
         probe_p95_residual_mm=5.8,
         probe_max_residual_mm=9.1,
+        relative_motion_model=_motion_model(rms=3.2, p95=5.8, max_residual=9.1),
     )
 
     assert readiness.visual_ready_to_plot is True
@@ -147,6 +152,7 @@ def test_visual_readiness_blocks_hard_probe_residual_outlier() -> None:
         probe_rms_residual_mm=3.2,
         probe_p95_residual_mm=5.8,
         probe_max_residual_mm=45.0,
+        relative_motion_model=_motion_model(rms=3.2, p95=5.8, max_residual=45.0),
     )
 
     assert readiness.visual_ready_to_plot is False
@@ -211,6 +217,18 @@ def _cap(
         camera_name="Fixed Camera",
         confidence=0.94,
         source="operator_confirmed",
+    )
+
+
+def _motion_model(*, rms: float, p95: float, max_residual: float) -> RelativeMotionModel:
+    return RelativeMotionModel(
+        machine_to_field_matrix=((1.0, 0.0), (0.0, 1.0)),
+        field_to_machine_matrix=((1.0, 0.0), (0.0, 1.0)),
+        determinant=1.0,
+        sample_count=4,
+        rms_residual_mm=rms,
+        p95_residual_mm=p95,
+        max_residual_mm=max_residual,
     )
 
 

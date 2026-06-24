@@ -116,7 +116,7 @@ struct ManualFiducialOverlay: View {
             guard !points.isEmpty || isActive else { return }
 
             if isActive {
-                let label = Text("CLICK FIDUCIALS \(min(points.count, 4))/4")
+                let label = Text("CLICK FIELD CORNERS \(min(points.count, 4))/4")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.yellow.opacity(0.95))
                 context.draw(label, at: CGPoint(x: size.width - 12, y: 14), anchor: .topTrailing)

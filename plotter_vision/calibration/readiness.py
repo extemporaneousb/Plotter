@@ -33,6 +33,56 @@ DEFAULT_MAX_PROBE_HARD_RESIDUAL_MM = 40.0
 DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM = DEFAULT_MAX_PROBE_P95_RESIDUAL_MM
 
 
+class RelativeMotionModel(BaseModel):
+    """2x2 relative machine-motion to visual-field-motion model."""
+
+    schema_version: int = 1
+    artifact_type: Literal["relative_motion_model"] = "relative_motion_model"
+    machine_to_field_matrix: tuple[tuple[float, float], tuple[float, float]]
+    field_to_machine_matrix: tuple[tuple[float, float], tuple[float, float]]
+    determinant: float
+    sample_count: int
+    rms_residual_mm: float
+    p95_residual_mm: float
+    max_residual_mm: float
+
+    @field_validator("sample_count")
+    @classmethod
+    def _validate_sample_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("relative motion model sample_count must be non-negative.")
+        return value
+
+    @field_validator("determinant", "rms_residual_mm", "p95_residual_mm", "max_residual_mm")
+    @classmethod
+    def _validate_scalar(cls, value: float) -> float:
+        return _finite(value, label="relative motion model value")
+
+    @model_validator(mode="after")
+    def _validate_matrix_shape(self) -> RelativeMotionModel:
+        _validate_2x2_matrix(self.machine_to_field_matrix, label="machine_to_field_matrix")
+        _validate_2x2_matrix(self.field_to_machine_matrix, label="field_to_machine_matrix")
+        if abs(self.determinant) < 1e-9:
+            raise ValueError("relative motion model determinant is singular.")
+        if self.rms_residual_mm < 0.0 or self.p95_residual_mm < 0.0 or self.max_residual_mm < 0.0:
+            raise ValueError("relative motion model residuals must be non-negative.")
+        return self
+
+    def machine_delta_to_field_delta(self, dx_mm: float, dy_mm: float) -> tuple[float, float]:
+        a = self.machine_to_field_matrix
+        return (
+            a[0][0] * dx_mm + a[0][1] * dy_mm,
+            a[1][0] * dx_mm + a[1][1] * dy_mm,
+        )
+
+    def field_delta_to_machine_delta(self, dx_mm: float, dy_mm: float) -> tuple[float, float]:
+        inverse = self.field_to_machine_matrix
+        return (
+            inverse[0][0] * dx_mm + inverse[0][1] * dy_mm,
+            inverse[1][0] * dx_mm + inverse[1][1] * dy_mm,
+        )
+
+
 class VisualCapObservation(BaseModel):
     """Camera observation of the green cap/carriage marker used for visual readiness."""
 
@@ -231,6 +281,9 @@ class VisualReadinessState(BaseModel):
     probe_rms_residual_mm: float | None = None
     probe_p95_residual_mm: float | None = None
     probe_max_residual_mm: float | None = None
+    motion_model_valid: bool = False
+    relative_motion_model: RelativeMotionModel | None = None
+    motion_model_blockers: list[str] = Field(default_factory=list)
     visual_ready_to_plot: bool = False
     blockers: list[str] = Field(default_factory=list)
 
@@ -264,9 +317,16 @@ class VisualReadinessState(BaseModel):
         if self.visual_ready_to_plot and self.blockers:
             raise ValueError("visual_ready_to_plot cannot be true when blockers are present.")
         if self.visual_ready_to_plot and not (
-            self.paper_registered and self.cap_localized and self.cap_inside_safe_zone
+            self.paper_registered
+            and self.cap_localized
+            and self.cap_inside_safe_zone
+            and self.motion_model_valid
         ):
-            raise ValueError("visual_ready_to_plot requires paper, cap, and safe-zone readiness.")
+            raise ValueError(
+                "visual_ready_to_plot requires field, cap, safe-zone, and motion-model readiness."
+            )
+        if self.motion_model_valid and self.relative_motion_model is None:
+            raise ValueError("motion_model_valid requires relative_motion_model.")
         return self
 
     def save_json(self, path: Path) -> None:
@@ -294,6 +354,8 @@ class VisualReadinessState(BaseModel):
             probe_rms_residual_mm=self.probe_rms_residual_mm,
             probe_p95_residual_mm=self.probe_p95_residual_mm,
             probe_max_residual_mm=self.probe_max_residual_mm,
+            relative_motion_model=self.relative_motion_model,
+            motion_model_blockers=self.motion_model_blockers,
             latest_visual_probe_run_id=self.latest_visual_probe_run_id,
             latest_visual_probe_sample_id=self.latest_visual_probe_sample_id,
             latest_visual_probe_run_file=self.latest_visual_probe_run_file,
@@ -301,6 +363,9 @@ class VisualReadinessState(BaseModel):
         self.updated_at = utc_now_iso()
         self.cap_localized = updated.cap_localized
         self.cap_inside_safe_zone = updated.cap_inside_safe_zone
+        self.motion_model_valid = updated.motion_model_valid
+        self.relative_motion_model = updated.relative_motion_model
+        self.motion_model_blockers = updated.motion_model_blockers
         self.visual_ready_to_plot = updated.visual_ready_to_plot
         self.blockers = updated.blockers
         self.safe_zone_evaluation = check
@@ -380,6 +445,8 @@ def build_visual_readiness_state(
     probe_rms_residual_mm: float | None = None,
     probe_p95_residual_mm: float | None = None,
     probe_max_residual_mm: float | None = None,
+    relative_motion_model: RelativeMotionModel | None = None,
+    motion_model_blockers: list[str] | None = None,
     latest_visual_probe_run_id: str | None = None,
     latest_visual_probe_sample_id: str | None = None,
     latest_visual_probe_run_file: str | None = None,
@@ -407,33 +474,34 @@ def build_visual_readiness_state(
     )
 
     blockers: list[str] = []
+    motion_blockers = list(motion_model_blockers or [])
     cap_localized = cap_observation is not None
     cap_inside_safe_zone = bool(safe_zone_evaluation and safe_zone_evaluation.inside)
 
     if not paper_registered:
-        blockers.append("Paper registration is required before visual plotting.")
+        blockers.append("Visual field registration is required before motion validation.")
     if not cap_localized:
         blockers.append("Green cap/carriage marker is not localized.")
     if cap_localized and safe_zone_evaluation is None:
-        blockers.append("Green cap/carriage marker has not been checked against the safe zone.")
+        blockers.append("Green cap/carriage marker has not been checked inside the visual field.")
     elif safe_zone_evaluation is not None and not safe_zone_evaluation.inside:
         blockers.extend(reason.message for reason in safe_zone_evaluation.abort_reasons)
 
     if probe_observation_count < min_probe_observation_count:
-        blockers.append(
-            "Visual probe needs at least "
+        motion_blockers.append(
+            "Motion calibration needs at least "
             f"{min_probe_observation_count} observations; got {probe_observation_count}."
         )
     if probe_observation_count >= min_probe_observation_count:
-        if probe_axes_represented is not None and not {"X", "Y"}.issubset(
-            set(probe_axes_represented)
-        ):
-            blockers.append("Visual probe needs accepted current samples spanning X and Y axes.")
+        if relative_motion_model is None:
+            motion_blockers.append(
+                "Motion calibration required: valid relative motion model has not been learned."
+            )
         if probe_rms_residual_mm is None:
-            blockers.append("Visual probe RMS residual is missing.")
+            motion_blockers.append("Motion calibration RMS residual is missing.")
         elif probe_rms_residual_mm > max_probe_rms_residual_mm:
-            blockers.append(
-                "Visual probe RMS residual "
+            motion_blockers.append(
+                "Motion calibration RMS residual "
                 f"{probe_rms_residual_mm:.3f} mm exceeds {max_probe_rms_residual_mm:.3f} mm."
             )
         robust_residual_mm = (
@@ -442,18 +510,26 @@ def build_visual_readiness_state(
             else probe_max_residual_mm
         )
         if robust_residual_mm is None:
-            blockers.append("Visual probe p95 residual is missing.")
+            motion_blockers.append("Motion calibration p95 residual is missing.")
         elif robust_residual_mm > max_probe_p95_residual_mm:
             label = "p95" if probe_p95_residual_mm is not None else "max"
-            blockers.append(
-                f"Visual probe {label} residual "
+            motion_blockers.append(
+                f"Motion calibration {label} residual "
                 f"{robust_residual_mm:.3f} mm exceeds {max_probe_p95_residual_mm:.3f} mm."
             )
         if probe_max_residual_mm is not None and probe_max_residual_mm > max_probe_hard_residual_mm:
-            blockers.append(
-                "Visual probe hard max residual "
+            motion_blockers.append(
+                "Motion calibration hard max residual "
                 f"{probe_max_residual_mm:.3f} mm exceeds {max_probe_hard_residual_mm:.3f} mm."
             )
+    if relative_motion_model is None and not motion_blockers:
+        motion_blockers.append(
+            "Motion calibration required: valid relative motion model has not been learned."
+        )
+
+    motion_blockers = list(dict.fromkeys(motion_blockers))
+    motion_model_valid = relative_motion_model is not None and not motion_blockers
+    blockers.extend(motion_blockers)
 
     return VisualReadinessState(
         paper_registered=paper_registered,
@@ -479,6 +555,9 @@ def build_visual_readiness_state(
         probe_rms_residual_mm=probe_rms_residual_mm,
         probe_p95_residual_mm=probe_p95_residual_mm,
         probe_max_residual_mm=probe_max_residual_mm,
+        motion_model_valid=motion_model_valid,
+        relative_motion_model=relative_motion_model if motion_model_valid else None,
+        motion_model_blockers=motion_blockers,
         visual_ready_to_plot=not blockers,
         blockers=blockers,
     )
@@ -515,6 +594,18 @@ def _append_range_reason(
                 ),
             )
         )
+
+
+def _validate_2x2_matrix(
+    matrix: tuple[tuple[float, float], tuple[float, float]],
+    *,
+    label: str,
+) -> None:
+    if len(matrix) != 2 or any(len(row) != 2 for row in matrix):
+        raise ValueError(f"{label} must be 2x2.")
+    for row in matrix:
+        for value in row:
+            _finite(value, label=label)
 
 
 def _finite(value: float, *, label: str) -> float:

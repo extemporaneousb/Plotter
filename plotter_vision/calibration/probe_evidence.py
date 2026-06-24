@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from plotter_vision.calibration.readiness import ProbeAxis
+from plotter_vision.calibration.readiness import ProbeAxis, RelativeMotionModel
 from plotter_vision.calibration.vision_model import (
     CameraPointNorm,
     LogicalPointMM,
@@ -131,6 +131,9 @@ class VisualProbeSummary(BaseModel):
     rms_residual_mm: float | None = None
     p95_residual_mm: float | None = None
     max_residual_mm: float | None = None
+    motion_model_valid: bool = False
+    relative_motion_model: RelativeMotionModel | None = None
+    motion_model_blockers: list[str] = Field(default_factory=list)
     latest_sample_id: str | None = None
     latest_observed_at: str | None = None
     blockers: list[str] = Field(default_factory=list)
@@ -227,14 +230,17 @@ def summarize_visual_probe_samples(
     accepted = [sample for sample in current_samples if sample.status == "accepted"]
     rejected = [sample for sample in current_samples if sample.status == "rejected"]
     axes = sorted({sample.axis for sample in accepted if sample.axis is not None})
-    rms, p95_residual, max_residual = _motion_residual_summary(accepted)
+    motion_model, motion_model_blockers = solve_relative_motion_model(accepted)
+    rms, p95_residual, max_residual = _motion_residual_summary(
+        accepted,
+        motion_model=motion_model,
+    )
     latest_sample = max(samples, key=lambda sample: sample.observed_at, default=None)
 
     blockers: list[str] = []
     if stale_count:
-        blockers.append(f"{stale_count} visual probe samples do not match current paper/camera.")
-    if accepted and not {"X", "Y"}.issubset(set(axes)):
-        blockers.append("Visual probe needs accepted current samples spanning X and Y axes.")
+        blockers.append(f"{stale_count} visual probe samples do not match current field/camera.")
+    blockers.extend(motion_model_blockers)
 
     return VisualProbeSummary(
         raw_sample_count=raw_count,
@@ -255,6 +261,9 @@ def summarize_visual_probe_samples(
         rms_residual_mm=rms,
         p95_residual_mm=p95_residual,
         max_residual_mm=max_residual,
+        motion_model_valid=motion_model is not None and not motion_model_blockers,
+        relative_motion_model=motion_model,
+        motion_model_blockers=motion_model_blockers,
         latest_sample_id=latest_sample.sample_id if latest_sample is not None else None,
         latest_observed_at=latest_sample.observed_at if latest_sample is not None else None,
         blockers=blockers,
@@ -277,11 +286,84 @@ def _sample_matches_current(
     return True
 
 
+def solve_relative_motion_model(
+    samples: list[VisualProbeSample],
+) -> tuple[RelativeMotionModel | None, list[str]]:
+    if len(samples) < 2:
+        return (
+            None,
+            [f"Motion calibration needs at least 2 independent samples; got {len(samples)}."],
+        )
+    sxx = sxy = syy = 0.0
+    tx = ty = ux = uy = 0.0
+    for sample in samples:
+        x = sample.commanded_dx_mm
+        y = sample.commanded_dy_mm
+        sxx += x * x
+        sxy += x * y
+        syy += y * y
+        tx += x * sample.observed_dx_mm
+        ty += y * sample.observed_dx_mm
+        ux += x * sample.observed_dy_mm
+        uy += y * sample.observed_dy_mm
+    command_determinant = sxx * syy - sxy * sxy
+    if abs(command_determinant) <= 1.0:
+        return (
+            None,
+            ["Motion calibration samples do not span independent machine X/Y movement."],
+        )
+
+    x_basis_dx = (tx * syy - ty * sxy) / command_determinant
+    y_basis_dx = (sxx * ty - sxy * tx) / command_determinant
+    x_basis_dy = (ux * syy - uy * sxy) / command_determinant
+    y_basis_dy = (sxx * uy - sxy * ux) / command_determinant
+    model_determinant = x_basis_dx * y_basis_dy - y_basis_dx * x_basis_dy
+    if abs(model_determinant) <= 0.05:
+        return (
+            None,
+            ["Motion calibration matrix is singular or near-singular."],
+        )
+
+    field_to_machine = (
+        (y_basis_dy / model_determinant, -y_basis_dx / model_determinant),
+        (-x_basis_dy / model_determinant, x_basis_dx / model_determinant),
+    )
+    machine_to_field = (
+        (x_basis_dx, y_basis_dx),
+        (x_basis_dy, y_basis_dy),
+    )
+    residuals = _relative_motion_residuals(
+        samples=samples,
+        machine_to_field=machine_to_field,
+    )
+    rms, p95_residual, max_residual = _residual_stats(residuals)
+    return (
+        RelativeMotionModel(
+            machine_to_field_matrix=machine_to_field,
+            field_to_machine_matrix=field_to_machine,
+            determinant=model_determinant,
+            sample_count=len(samples),
+            rms_residual_mm=rms,
+            p95_residual_mm=p95_residual,
+            max_residual_mm=max_residual,
+        ),
+        [],
+    )
+
+
 def _motion_residual_summary(
     samples: list[VisualProbeSample],
+    *,
+    motion_model: RelativeMotionModel | None,
 ) -> tuple[float | None, float | None, float | None]:
     if not samples:
         return (None, None, None)
+    if motion_model is not None:
+        return (
+            motion_model.rms_residual_mm,
+            motion_model.p95_residual_mm,
+            motion_model.max_residual_mm,
+        )
     explicit_residuals = [sample.residual_mm for sample in samples if sample.residual_mm is not None]
     if len(explicit_residuals) == len(samples):
         return _residual_stats(explicit_residuals)
@@ -319,12 +401,32 @@ def _least_squares_motion_residuals(samples: list[VisualProbeSample]) -> list[fl
     if abs(basis_determinant) <= 0.05:
         return None
 
+    return _relative_motion_residuals(
+        samples=samples,
+        machine_to_field=(
+            (x_basis_dx, y_basis_dx),
+            (x_basis_dy, y_basis_dy),
+        ),
+    )
+
+
+def _relative_motion_residuals(
+    *,
+    samples: list[VisualProbeSample],
+    machine_to_field: tuple[tuple[float, float], tuple[float, float]],
+) -> list[float]:
     return [
         math.hypot(
             sample.observed_dx_mm
-            - (x_basis_dx * sample.commanded_dx_mm + y_basis_dx * sample.commanded_dy_mm),
+            - (
+                machine_to_field[0][0] * sample.commanded_dx_mm
+                + machine_to_field[0][1] * sample.commanded_dy_mm
+            ),
             sample.observed_dy_mm
-            - (x_basis_dy * sample.commanded_dx_mm + y_basis_dy * sample.commanded_dy_mm),
+            - (
+                machine_to_field[1][0] * sample.commanded_dx_mm
+                + machine_to_field[1][1] * sample.commanded_dy_mm
+            ),
         )
         for sample in samples
     ]

@@ -65,7 +65,7 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "FaceVideoPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "CalibrationWizardView(" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
-    assert "Drawing examples are intentionally removed" in setup_panel
+    assert "Drawing Checkout" not in setup_panel
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
     assert "PortraitPanel(" in face_panel
@@ -274,60 +274,65 @@ def test_bridge_contract_requires_api_3_and_gates_build_mismatch() -> None:
     assert '"can_run_visual_relative_motion": canRunLiveRelativeMotionCommand' in model
 
 
-def test_wizard_drives_visual_position_binding_loop() -> None:
+def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
-    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
 
-    assert "Run Drawing Calibration" in content
-    assert "runWizardDrawingCalibration()" in content
-    assert "recordVisualBindingInkObservation" in content
-    assert "observeVisualBindingPoint" in content
-    assert "solveVisualBinding" in content
-    assert "visualBindingValid" in content
-    assert "BridgeVisualBindingObservationRequest" in client
-    assert 'post(path: "calibration/binding/observe"' in client
-    assert 'post(path: "calibration/binding/solve"' in client
+    assert "CalibrationWizardView(" in setup_panel
+    assert "Visual Field Setup" in wizard
+    assert 'title: "Define Drawing Field"' in wizard
+    assert 'title: "Confirm Green Cap"' in wizard
+    assert 'title: "Run Motion Calibration"' in wizard
+    assert 'title: "Validate Motion"' in wizard
+    assert "Start Field Corners" in content
+    assert "Confirm Green Cap" in content
+    assert "Run Motion Calibration" in content
+    assert "Validate Motion" in content
+    assert "runFrameLearning()" in content
+    assert "runWizardMotionValidation" in content
+    assert "approachVisualTarget(target, label: \"VALIDATE\", targetIndex: 1)" in content
+    assert "bridge.canRunSetupRelativeMotionCommand" in content
+    assert "private func setupRelativeMotionBlockReason" in model
+    setup_gate = model.split("private func setupRelativeMotionBlockReason", 1)[1].split(
+        "private func blockLiveRelativeMotionCommand",
+        1,
+    )[0]
+    assert "machineHomingTrusted" not in setup_gate
+    assert "machineAxisModelTrusted" not in setup_gate
+    assert "boundedMachineTravelDistance" not in content
+    assert "visualMachineCalibrationBoundedDistance" not in content
+    assert "visualMachineCalibrationAxesHaveTravel" not in content
 
 
-def test_visual_binding_loop_retries_observably_and_draws_bounds_frame() -> None:
+def test_old_binding_runner_is_not_active_setup() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
-    runner = _read(SWIFT_DIR / "VisualBindingMarkRunner.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
-    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
-    models = _read(SWIFT_DIR / "Models.swift")
 
-    assert "visualBindingMaxMarkAttempts = 4" in runner
-    assert "visualBindingParkOffsetsMm = [32.0, -32.0, 44.0, -44.0]" in runner
-    assert "visual_binding_mark_attempt" in runner
-    assert "visualBindingMarkClearance(" in runner
-    assert "clearance_failed" in runner
-    assert "clearance_blocker" in runner
-    assert "visual_binding_incomplete" in content
-    assert "BIND INCOMPLETE" in content
-    assert "solveVisualBinding" in content
-    assert content.find("guard visibleCount >= requiredObservations") < content.find("solveVisualBinding")
-    assert "drawVisualBindingBoundsFrame(points: targets)" in content
-    assert "VIS READY" in content
-    assert "waitForFreshGreenCapPaperObservation" in content.split("func parkAwayFromMark", 1)[1]
-    assert "visualMotionTravelFeedMmMin = 1200.0" in runner
-    assert "maximumCommandCapMm = 30.0" in content
-
-    assert "horizontalDarkFraction" in models
-    assert "verticalDarkFraction" in models
-    assert "crossDarkFraction" in models
-    assert "strokeScore" in models
-    assert "inHorizontalBand" in camera_model
-    assert "inVerticalBand" in camera_model
-
-    assert "BridgeDrawProgramRequest" in client
-    assert 'post(path: "draw/program"' in client
+    assert not (SWIFT_DIR / "VisualBindingMarkRunner.swift").exists()
+    active_setup = content.split("private var wizardFiducialStatus", 1)[1].split(
+        "private var topStatusLights",
+        1,
+    )[0]
+    stale_terms = [
+        "Run Drawing Calibration",
+        "runWizardDrawingCalibration",
+        "recordVisualBindingInkObservation",
+        "runVisualRelativeFivePointTest",
+        "previewBindingMarks",
+        "solveVisualBinding",
+        "observeVisualBindingPoint",
+        "drawVisualBindingBoundsFrame",
+        "VisualPositionBinding",
+        "binding mark",
+    ]
+    for term in stale_terms:
+        assert term not in active_setup
+    assert 'post(path: "calibration/binding/observe"' in client
+    assert 'post(path: "calibration/binding/solve"' in client
     assert "func drawVisualBindingBoundsFrame" in model
-    assert '"visual_binding_bounds_frame_started"' in model
-    assert '"visual_binding_bounds_frame_completed"' in model
-    assert "shapeDrawFeedMmMin = 240.0" in model
-    assert "machineMaxFeedMmMin = 1200.0" in model
-    assert "manualFeedMmMin = 1200.0" in model
 
 
 def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
@@ -355,11 +360,11 @@ def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
         "private func startCalibrationWizard",
         1,
     )[0]
-    assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Fiducial Clicks")
+    assert primary_title.find("if !bridge.hasPaperLock") < primary_title.find("Start Field Corners")
     assert primary_action.find("if !bridge.hasPaperLock") < primary_action.find("startCalibrationWizard()")
 
 
-def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click() -> None:
+def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
@@ -367,13 +372,15 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
-    assert 'title: "Fiducials"' in wizard
-    assert 'title: "Green Cap"' in wizard
-    assert 'title: "Motion Calibration"' in wizard
-    assert 'title: "Drawing Calibration"' in wizard
-    assert 'title: "Visual Field"' not in wizard
+    assert 'title: "Define Drawing Field"' in wizard
+    assert 'title: "Confirm Green Cap"' in wizard
+    assert 'title: "Run Motion Calibration"' in wizard
+    assert 'title: "Validate Motion"' in wizard
+    assert 'title: "Fiducials"' not in wizard
+    assert 'title: "Drawing Calibration"' not in wizard
     assert 'title: "Tool"' not in wizard
     assert "Draw/Verify" not in wizard
+    assert "Paper Homography" not in wizard
     assert "Click Pen Tip" not in wizard
     assert "Move Field" not in wizard
     assert "onSelect" not in support
@@ -387,10 +394,10 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     assert "Click Green Cap" in content
     assert "Confirm Green Cap" in content
     assert "Run Motion Calibration" in content
-    assert "Run Drawing Calibration" in content
-    assert "runWizardDrawingCalibration()" in content
-    assert "previewBindingMarks(pointSet: \"five\")" in content
-    assert "runVisualRelativeFivePointTest()" in content
+    assert "Validate Motion" in content
+    assert "Run Drawing Calibration" not in content
+    assert "runWizardDrawingCalibration" not in content
+    assert "runVisualRelativeFivePointTest" not in content
     assert "pen tip not confirmed" not in content
     assert "estimateToolOffset(" not in content + model
     assert "BridgeToolEstimateRequest" not in client
@@ -401,16 +408,24 @@ def test_visual_field_setup_uses_four_stage_binding_workflow_without_tip_click()
     assert "@Published var bindingExtraPaddingMm = 40.0" in model
     assert "learnedCapToTipModel" in model
     assert "toolCapToTipModel" not in content + model
-    assert "Need binding mark observations" in model
 
 
-def test_visual_machine_setup_uses_clearance_aware_motion() -> None:
+def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
-    assert "visualMachineCalibrationProbeDistances" in content
-    assert "visualMachineCalibrationBoundedDistance" in content
-    assert "No safe X/Y calibration travel from current machine position" in content
+    assert "let probeCommands: [(axis: String, distance: Double)]" in content
+    assert "bridge.learningJog(" in content
+    assert "visualMachineCalibrationBoundedDistance" not in content
+    assert "visualMachineCalibrationAxesHaveTravel" not in content
+    setup_gate = model.split("private func setupRelativeMotionBlockReason", 1)[1].split(
+        "private func blockLiveRelativeMotionCommand",
+        1,
+    )[0]
+    assert "machineHomingTrusted" not in setup_gate
+    assert "machineAxisModelTrusted" not in setup_gate
+    assert "boundedMachineTravelDistance" not in setup_gate
+    assert "availableMachineTravelMm" not in setup_gate
     assert "boundedMachineTravelDistance" in model
     assert "availableMachineTravelMm" in model
     assert "visualCapReacquireCommands" in content
@@ -452,7 +467,7 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "Zoom Out" not in plotter_panel
     assert "Reset FOV" not in plotter_panel
     assert "togglePlotterFocusMode()" in viewport_intent
-    assert "focusPlotterVideoOnPaper(source: \"wizard_fiducials_solved\")" in content
+    assert "focusPlotterVideoOnPaper(source: \"wizard_field_solved\")" in content
     assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" in content
 
     assert "func captureOutput(" in camera_model
@@ -483,7 +498,7 @@ def test_visual_move_intent_is_projected_on_video() -> None:
     assert "visualMoveIntent: visualMoveIntent" in content
     assert '"visual_move_intent_set"' in viewport_intent
     assert '"visual_move_intent_cleared"' in viewport_intent
-    assert "CAL-BAND" in content
+    assert "setVisualMoveIntent(" in content
     assert "MOVE \\(label)" in content
     assert "drawVisualMoveIntent" in overlay
     assert "drawArrowHead" in overlay

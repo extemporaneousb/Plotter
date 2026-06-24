@@ -21,7 +21,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var armPen = false
     @Published var armHoming = false
     @Published var armUnlock = false
-    @Published var paperTransformStatus = "PAPER --"
+    @Published var paperTransformStatus = "FIELD --"
     @Published var paperRegistrationSnapshot: PaperRegistrationSnapshot?
     @Published var isCalibrating = false
     @Published var machineState = "--"
@@ -88,6 +88,14 @@ final class PlotterBridgeModel: ObservableObject {
     private var animationTask: Task<Void, Never>?
     private var isRefreshingMachineStatus = false
     private var lastDiagnosticsHealthSummary = ""
+
+    var visualFieldWidthMm: Double {
+        paperRegistrationSnapshot?.paperSizeMm.width ?? 200.0
+    }
+
+    var visualFieldHeightMm: Double {
+        paperRegistrationSnapshot?.paperSizeMm.height ?? 150.0
+    }
     private var lastDiagnosticsMachineSummary = ""
     private var lastDiagnosticsPaperSummary = ""
 
@@ -101,6 +109,10 @@ final class PlotterBridgeModel: ObservableObject {
 
     var canRunLiveRelativeMotionCommand: Bool {
         liveRelativeMotionBlockReason() == nil
+    }
+
+    var canRunSetupRelativeMotionCommand: Bool {
+        setupRelativeMotionBlockReason() == nil
     }
 
     var fastTravelFeedMmMin: Double {
@@ -180,7 +192,7 @@ final class PlotterBridgeModel: ObservableObject {
         adaptiveProbeStatus = "PROBE --"
         visualCenterDotStatus = "VIS --"
         visualBindingStatus = "BIND --"
-        visualBindingDetail = "Run motion probe, preview binding marks, then collect ink observations"
+        visualBindingDetail = "Run motion calibration, then validate relative cap motion"
         visualBindingObservationCount = 0
         visualBindingValid = false
         diagnosticsEvent(
@@ -202,7 +214,7 @@ final class PlotterBridgeModel: ObservableObject {
         do {
             let response = try await client.resetCalibrationSetup(BridgeSetupResetRequest())
             paperRegistrationSnapshot = nil
-            paperTransformStatus = "PAPER --"
+            paperTransformStatus = "FIELD --"
             learnedCapToTipModel = nil
             drawableSafeZone = nil
             _ = resetVisualCalibrationSession(prefix: "swift-reset")
@@ -469,11 +481,34 @@ final class PlotterBridgeModel: ObservableObject {
         return nil
     }
 
+    private func setupRelativeMotionBlockReason(allowBusy: Bool = false) -> String? {
+        if let blockReason = liveMachineCommandBlockReason(allowBusy: allowBusy) {
+            return blockReason
+        }
+        if !hasPaperLock { return "Setup motion blocked: drawing field missing" }
+        return nil
+    }
+
     private func blockLiveRelativeMotionCommand(
         event: String,
         details: [String: Any] = [:]
     ) {
         let reason = liveRelativeMotionBlockReason(allowBusy: false) ?? motionGateMessage
+        shortStatus = isOnline ? "BLOCK" : "OFF"
+        statusText = reason
+        machineStatus = reason
+        var payload = details
+        payload["reason"] = reason
+        payload["build_mismatch"] = hasLifecycleBuildMismatch
+        payload["api_mismatch"] = hasBridgeApiMismatch
+        diagnosticsEvent(event, payload, snapshot: true)
+    }
+
+    private func blockSetupRelativeMotionCommand(
+        event: String,
+        details: [String: Any] = [:]
+    ) {
+        let reason = setupRelativeMotionBlockReason(allowBusy: false) ?? motionGateMessage
         shortStatus = isOnline ? "BLOCK" : "OFF"
         statusText = reason
         machineStatus = reason
@@ -873,7 +908,7 @@ final class PlotterBridgeModel: ObservableObject {
             isOnline = false
             shortStatus = "OFF"
             statusText = "Bridge offline"
-            paperTransformStatus = "PAPER --"
+            paperTransformStatus = "FIELD --"
             paperRegistrationSnapshot = nil
             machineHomingTrusted = false
             machineAxisModelTrusted = false
@@ -894,7 +929,7 @@ final class PlotterBridgeModel: ObservableObject {
             applyPaperRegistrationStatus(response)
             recordPaperIfChanged()
         } catch {
-            paperTransformStatus = "PAPER ?"
+            paperTransformStatus = "FIELD ?"
             diagnosticsEvent("paper_status_failed", errorPayload(error), snapshot: true)
         }
     }
@@ -1822,8 +1857,8 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func learningJog(axis: String, distanceMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
-        guard canRunLiveRelativeMotionCommand else {
-            blockLiveRelativeMotionCommand(
+        guard canRunSetupRelativeMotionCommand else {
+            blockSetupRelativeMotionCommand(
                 event: "learning_jog_blocked",
                 details: ["axis": axis, "distance_mm": distanceMm]
             )
@@ -2359,13 +2394,13 @@ final class PlotterBridgeModel: ObservableObject {
     ) async -> PaperRegistrationResponse? {
         guard !isCalibrating else { return nil }
         guard isOnline else {
-            paperTransformStatus = "PAPER OFF"
+            paperTransformStatus = "FIELD OFF"
             statusText = "Bridge offline"
             return nil
         }
         guard fiducials.count >= 4 else {
-            paperTransformStatus = "PAPER NEED 4"
-            statusText = "Need four manual fiducials"
+            paperTransformStatus = "FIELD NEED 4"
+            statusText = "Need four drawing field corners"
             return nil
         }
 
@@ -2373,7 +2408,7 @@ final class PlotterBridgeModel: ObservableObject {
         let cornerNames = ["bottom_left", "bottom_right", "top_right", "top_left"]
         isCalibrating = true
         activeAction = "paper"
-        paperTransformStatus = "PAPER SOLVE"
+        paperTransformStatus = "FIELD SOLVE"
         statusText = "Locking visual field"
         diagnosticsEvent(
             "paper_registration_started",
@@ -2405,7 +2440,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             isOnline = true
             if let registration = response.registration {
-                statusText = "Paper \(registration.registrationId) locked"
+                statusText = "Field \(registration.registrationId) locked"
             } else {
                 statusText = response.error ?? response.status
             }
@@ -2423,7 +2458,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             return response
         } catch {
-            paperTransformStatus = "PAPER ERR"
+            paperTransformStatus = "FIELD ERR"
             statusText = error.localizedDescription
             diagnosticsEvent("paper_registration_failed", errorPayload(error), snapshot: true)
             return nil
@@ -2441,7 +2476,7 @@ final class PlotterBridgeModel: ObservableObject {
         if !hasPaperLock {
             await refreshPaperStatus()
             if !hasPaperLock {
-                bindingMarkPreviewStatus = "BIND NEED PAPER"
+                bindingMarkPreviewStatus = "BIND NEED FIELD"
                 statusText = "Visual field required"
                 diagnosticsEvent("binding_mark_preview_blocked", ["point_set": pointSet, "reason": "visual_field_required"], snapshot: true)
                 return nil
@@ -2661,7 +2696,7 @@ final class PlotterBridgeModel: ObservableObject {
         if let registration = response.registration {
             paperRegistrationSnapshot = registration
             paperTransformStatus = String(
-                format: "PAPER LOCK rms %.5f max %.5f",
+                format: "FIELD LOCK rms %.5f max %.5f",
                 registration.rmsErrorNorm,
                 registration.maxErrorNorm
             )
@@ -2669,11 +2704,11 @@ final class PlotterBridgeModel: ObservableObject {
         }
         paperRegistrationSnapshot = nil
         if response.status == "missing" {
-            paperTransformStatus = "PAPER --"
+            paperTransformStatus = "FIELD --"
         } else if response.status == "failed" {
-            paperTransformStatus = "PAPER ERR"
+            paperTransformStatus = "FIELD ERR"
         } else {
-            paperTransformStatus = "PAPER \(response.status.uppercased())"
+            paperTransformStatus = "FIELD \(response.status.uppercased())"
         }
     }
 

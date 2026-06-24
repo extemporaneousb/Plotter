@@ -30,7 +30,7 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
                 "lifecycle_label": "Hardware Standby",
                 "bridge": {"status_text": "Hardware Standby ready"},
                 "machine": {"state": "DryRun", "pins": "-"},
-                "paper": {"status": "PAPER --"},
+                "paper": {"status": "FIELD --"},
                 "gates": {"motion": "Motion blocked: dry-run bridge"},
                 "ui": {
                     "workspace": {
@@ -114,7 +114,7 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
                 "payload": {
                     "lifecycle_label": "Preview Bridge",
                     "machine": {"state": "DryRun"},
-                    "paper": {"status": "PAPER --"},
+                    "paper": {"status": "FIELD --"},
                     "ui": {
                         "workspace": {
                             "plotter_camera_visible": True,

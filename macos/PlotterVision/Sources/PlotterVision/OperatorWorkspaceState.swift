@@ -136,7 +136,7 @@ struct SetupPanelSnapshot: Equatable {
         greenCapStatus: .pending,
         visualCalibrationDetail: "No motion calibration",
         visualCalibrationStatus: .pending,
-        bindingDetail: "No binding observations",
+        bindingDetail: "No motion validation",
         bindingStatus: .pending,
         primaryActionTitle: "Start Setup",
         primaryActionEnabled: true,

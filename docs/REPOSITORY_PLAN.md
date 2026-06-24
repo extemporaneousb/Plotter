@@ -56,12 +56,15 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
   publishes current controller/runtime state, and routes every machine action through the Python
   safety and controller layers.
 - `plotter_vision.machine` owns safety validation, machine configuration, homing/pen/settings
-  guards, and trust flags such as `homing_trusted` and `axis_model_trusted`.
+  guards, and trust flags such as `homing_trusted` and `axis_model_trusted`. Those flags are
+  diagnostics for Visual Field Setup, not setup authority.
+- `plotter_vision.calibration` owns the active Visual Field Setup contract: user-defined field
+  registration, green-cap localization, and the learned 2x2 relative motion model from
+  machine-relative millimeters into field millimeters.
 - `plotter_vision.motion` and `plotter_vision.bridge.planner` own G-code planning and simulation.
   Preview routes must stay dry-run even when the bridge is connected to live hardware.
-- `plotter_vision.calibration` and `plotter_vision.drawing` own geometry artifacts and paper-space
-  drawing contracts. Camera-space overlays should be treated as views over these artifacts, not as
-  independent motion authority.
+- `plotter_vision.drawing` owns future drawing contracts. Camera-space overlays should be treated as
+  views over explicit field/model artifacts, not as independent motion authority.
 - Codex and other agents observe the running system through read-only diagnostics: bridge endpoints,
   append-only JSONL logs, controller transcripts, app state artifacts, and the merged
   `/codex/snapshot`. Agents must not get a hidden command channel inside the app.
@@ -72,17 +75,19 @@ The fixed-camera workflow is:
 
 1. Start the app.
 2. Open Setup. The Setup button opens or closes a separate setup window.
-3. Click or confirm paper fiducials, then confirm the visual field. If the bridge already has a
-   locked visual field after restart and the visible grid still aligns, use Confirm Setup to reuse
-   that registration without re-clicking fiducials.
+3. Define Drawing Field by clicking or adjusting the four visual field corners. If the bridge
+   already has a locked field after restart and the rendered grid still aligns, use Confirm Setup to
+   reuse that registration without re-clicking corners.
 4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-5. Run or rerun Motion Calibration from the current cap location. Calibration samples bounded
-   X/Y cap motion using current machine clearance rather than a fixed positive-X bootstrap.
-6. Run Drawing Calibration. The app previews expected binding marks inside the safe drawable region,
-   draws the watched visual-relative marks, collects ink observations, posts them through
-   `/calibration/binding/observe`, solves `/calibration/binding/solve`, learns the cap-to-tip offset
-   from mark residuals, and draws the ready frame around the same region.
-7. Use the validated `VisualPositionBinding` as the drawing unlock.
+5. Run Motion Calibration from the current cap location. Calibration samples small relative
+   machine-axis moves without requiring homing, axis-model trust, absolute `MPos` clearance, or
+   machine workspace proof.
+6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
+   swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
+   remains stable, invertible, and validated by observed cap motion.
+7. Treat field registration, cap localization, and a valid relative motion model as the setup
+   authority for this milestone. Cap-to-tip offset, ink observations, and real drawing remain future
+   work.
 8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
    are currently backend tests only and are not exposed in the operator UI.
 
@@ -111,9 +116,9 @@ and transforms:
 | Space | Owner | Purpose |
 | --- | --- | --- |
 | Camera image space | Swift observes; Python persists evidence | Raw points, contours, cap detections, and ink marks. |
-| Paper space | Python bridge/calibration | The registered paper plane from bridge-owned homography. |
-| Observed logical millimeters | Python calibration/readiness | Observations in the logical drawing frame. |
-| Drawing/logical millimeters | Python drawing/planning | Shape-language coordinates used by `plotter_vision.drawing`. |
+| Visual field space | Python bridge/calibration | User-defined drawing field from clicked camera corners and known physical dimensions. |
+| Observed field millimeters | Python calibration/readiness | Green-cap observations and residuals in the active field frame. |
+| Drawing/logical millimeters | Python drawing/planning | Future shape-language coordinates used by `plotter_vision.drawing`. |
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation/FOV zoom and overlay rendering only; it is not motion authority. |
 
@@ -125,21 +130,27 @@ Current plotter segmentation and motion detection run in `CameraModel` against t
 Restricting processing to a region of interest would be an explicit Swift observation change, not a
 side effect of operator zoom.
 
-Cap-marker evidence is session evidence. Motion Calibration measures relative carriage
-motion in the registered paper plane; cap-only motion is not enough to set durable
-`axis_model_trusted` or unlock absolute drawing. Drawing unlocks should use a persisted visual
-position binding backed by field registration, cap localization, a learned cap-to-tip offset, ink
-observations, residuals, camera identity, and freshness.
+Cap-marker evidence is session evidence. Motion Calibration measures relative carriage motion in the
+registered visual field; cap-only visibility is not enough, and the accepted probe observations must
+solve a stable invertible 2x2 matrix:
+
+```text
+field_delta_mm = A * machine_relative_delta_mm
+machine_relative_delta_mm = inverse(A) * desired_field_delta_mm
+```
+
+This milestone stops after predictable green-cap motion. Cap-to-tip offset, ink observations,
+absolute drawing proof, and trust promotion are explicitly out of scope.
 
 Motion-probe evidence must not remain only in Swift state. The canonical persistence path is
 `/calibration/probe/observe`, which stores each commanded move, before/after cap observation,
-observed delta, residual, camera identity, paper registration id, transcript pointer, and timestamp.
+observed delta, residual, camera identity, field registration id, transcript pointer, and timestamp.
 The bridge does not expose a separate adaptive-probe preview/run motion route; Motion Calibration
-chooses bounded motion in the app from live machine clearance and submits the evidence.
+chooses small relative moves in the app from the confirmed cap position and submits the evidence.
 
-Only Python may promote persisted bindings or trust flags. Swift can collect and display evidence,
-but it does not decide that `axis_model_trusted`, `homing_trusted`, or
-`VisualPositionBinding.validation_status` is valid.
+Only Python may promote persisted setup state or trust flags. Swift can collect and display evidence,
+but it does not decide that field registration, cap localization, or motion-model validation is
+valid.
 
 ## Staged Task List
 
@@ -175,13 +186,14 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: implemented around the Setup window plus Motion and Drawing Calibration. Field
-registration, cap/probe evidence, binding observations, and binding solving are owned by the bridge;
-the Swift app is the operator surface.
+Status: implemented around the Setup window plus non-homed Visual Field Setup. Field registration,
+cap/probe evidence, and relative motion-model validation are owned by the bridge; the Swift app is
+the operator surface.
 
 - Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
   artifact JSON.
-- Keep paper registration, visual position binding, and durable machine-axis trust separate.
+- Keep field registration, cap localization, relative motion-model evidence, and durable
+  machine-axis trust separate.
 - Keep pen command trial workflow behind explicit commands and confirmation.
 
 ### Phase 4 — Local UI/API

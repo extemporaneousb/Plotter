@@ -67,9 +67,10 @@ Current implementation:
   raster checks,
 - the optional shaded face route remains available through `POST /draw/face`, but hatch expansion is
   not the baseline portrait representation,
-- capabilities tests, image contours, binding marks, and shape execution all run through the
-  same drawing program, planner, simulator, video projector, binding, residual, and execution
-  infrastructure.
+- capabilities tests, image contours, and future shape execution all run through the same drawing
+  program, planner, simulator, video projector, residual, and execution infrastructure. Current
+  Visual Field Setup stops at field registration, green-cap localization, and relative motion-model
+  validation.
 
 For the geometry transform, the camera-paper registration is a homography. The machine-paper model
 can start as affine and should move to homography only if residuals show real perspective or
@@ -78,7 +79,8 @@ values, but camera pose remains session-specific and must be refreshed after cam
 
 ## Safety Boundary
 
-The macOS app can select cameras, show manual wizard fiducial clicks, and send typed observations or drawing programs.
+The macOS app can select cameras, show manual visual-field corner clicks, and send typed observations
+or drawing programs.
 It must not send raw G-code. Bridge endpoints own:
 
 - workspace validation,
@@ -87,9 +89,10 @@ It must not send raw G-code. Bridge endpoints own:
 - simulation/preview,
 - real motion arming checks,
 - controller transcripts and event logs,
-- residual solving and persisted visual position binding.
+- residual solving and persisted future drawing evidence.
 
 Preview routes must force dry-run behavior, return simulated/projected geometry only, avoid
 controller transcripts, and never move hardware. Preview success is not execution readiness;
-execution readiness comes from `axis_model_trusted=true` or a current validated
-`VisualPositionBinding` plus the bridge's safety gates.
+execution readiness for future drawing comes from a bridge-owned drawing contract plus the bridge's
+safety gates. Current Visual Field Setup readiness comes from field registration, cap localization,
+and a valid relative motion model, without requiring machine-axis trust.

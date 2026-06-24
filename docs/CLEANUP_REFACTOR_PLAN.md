@@ -48,7 +48,8 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
   extensions without changing public behavior.
 - Split `ContentView.swift` into camera panes, window panels, calibration wizard, image preview, and
   visual-motion coordinator.
-- Replace string-parsed Swift status gates with typed paper, binding-mark, and machine status state.
+- Replace string-parsed Swift status gates with typed visual-field, cap, motion-model, and machine
+  status state.
 - Centralize camera/viewport coordinate mapping so click layers and overlays use one transform.
 - Consolidate duplicate paper point models across calibration, drawing, and bridge code with
   compatibility aliases for persisted schemas.
@@ -57,13 +58,13 @@ a feature roadmap; it is a maintenance path for making the existing goal visible
 
 ## Higher-Risk Refactors
 
-- Extend the typed overlay/projection model with richer operator selection tools for observed
-  binding marks.
+- Extend the typed overlay/projection model with richer operator selection tools for future observed
+  ink evidence.
 - Move visual relative motion and center-dot learning out of `ContentView` into a dedicated state
   machine or actor.
 - Generate or share bridge DTO contracts from Python/Pydantic instead of manually maintaining Swift
   DTOs.
-- Replace `http.server` with FastAPI/ASGI only after preserving the current local binding behavior,
+- Replace `http.server` with FastAPI/ASGI only after preserving current Visual Field Setup behavior,
   dry-run/live gate semantics, and Swift client compatibility.
 - Unify all preview and execution planning behind:
 
@@ -74,17 +75,17 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 ## Acceptance Criteria For The Next Architecture Pass
 
-- The main operator path is app launch, Setup, paper fiducials or Confirm Setup against
-  an already locked visual field, green cap confirmation, Motion Calibration, Drawing Calibration,
-  persisted binding, then drawing.
+- The main operator path is app launch, Setup, Define Drawing Field or Confirm Setup against an
+  already locked visual field, Confirm Green Cap, Run Motion Calibration, and Validate Motion.
 - Plotter-camera FOV zoom remains persisted Swift display state. Current segmentation and motion
   detection continue to run app-side on the full camera frame unless a separate ROI feature is added.
-- Python remains the only authority that can promote a persisted binding or trust flag. Swift may
-  send observations and render overlays, but it does not own trust decisions.
+- Python remains the only authority that can promote persisted setup evidence or trust flags. Swift
+  may send observations and render overlays, but it does not own trust decisions.
 - Preview routes force dry-run behavior, return simulated geometry only, never move hardware, and do
   not write controller transcripts. Preview success is evidence, not execution readiness.
-- Cap-only motion is relative session evidence. Absolute paper-plane drawing requires visual
-  position binding from cap localization plus ink observations and residual thresholds.
+- Cap-only motion is relative session evidence. Current setup readiness requires visual-field
+  registration, cap localization, and a valid relative motion model; cap-to-tip and ink drawing are
+  future work.
 - Capability checks and portrait/image-to-shape both produce `DrawingProgram` data and use the same
   planner, simulator, video projection, execution, observation, and residual path.
 - Generic SVG/vector import remains deferred until the control, calibration, simulation, and residual

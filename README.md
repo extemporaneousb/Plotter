@@ -14,20 +14,22 @@ The active system has three canonical surfaces:
 
 - `plotterctl`: the root CLI for passive probes, guarded setup operations, and launching the bridge.
 - `plotter_vision.bridge`: the local HTTP bridge that owns machine actions, dry-run/live gates,
-  visual-field registration, durable probe observations, binding solves, and drawing execution.
+  visual-field registration, cap observations, relative motion calibration, and guarded movement.
 - the native operator app in `macos/PlotterVision`: the bridge client and visual surface,
   not a serial controller owner.
 
 Authority stays deliberately narrow: Python owns calibration, bridge routing, safety gates, model
-persistence, shape planning, simulation, residual solving, persisted bindings, and execution
-routing. Swift owns operator interaction, camera observation display, overlay rendering, and typed
-bridge calls.
+persistence, shape planning, simulation, residual solving, and execution routing. Swift owns
+operator interaction, camera observation display, overlay rendering, and typed bridge calls.
 
 Implemented vertical slices now include:
 
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
-- visual field setup from operator-clicked manual fiducials, with bridge-owned registration artifacts;
+- Visual Field Setup from operator-clicked drawing-field corners, with bridge-owned registration
+  artifacts;
+- non-homed relative motion calibration that maps machine-relative X/Y moves into visual-field
+  millimeters;
 - preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible;
 - a windowed operator UI with independent plotter/face camera toggles, Setup, Plotter Video, and
@@ -39,26 +41,23 @@ The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Setup. The Setup button opens or closes a separate setup window.
-3. Confirm or click the paper fiducials. If the bridge already reports a locked visual field after
-   restart and the rendered grid still aligns with the physical setup, use Confirm Setup to reuse
-   that registration without re-clicking fiducials.
+3. Define Drawing Field by clicking or adjusting the four visual field corners in the plotter-camera
+   view. The operator must understand the displayed `0,0` origin and `+X`/`+Y` directions.
 4. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-   Setup reset clears the latest field/probe/binding authority while preserving historical evidence
-   files.
-5. Run or rerun Motion Calibration from the current cap location. The app samples bounded
-   X/Y carriage motion using live machine clearance instead of assuming a fixed +X bootstrap.
-6. Run Drawing Calibration. The app previews expected binding marks from the computed safe drawable
-   region, draws the watched visual-relative marks, collects ink observations, posts them to
-   `/calibration/binding/observe`, solves `/calibration/binding/solve`, learns the cap-to-tip offset
-   from mark residuals, and draws the ready frame around that same region.
-7. Treat the validated `VisualPositionBinding` status as the drawing unlock. Capability checks and
-   drawing programs still require bridge preview before execution.
-8. Persist the learned parameters as future initialization values for the coordinate system and
-   shape-language parametrization.
-9. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
+   Setup reset clears the latest field, cap, and motion-model authority while preserving historical
+   evidence files.
+5. Run Motion Calibration from the confirmed cap location. The app sends small relative machine
+   moves without requiring homing, axis-model trust, or absolute machine-position clearance. The
+   bridge records observed green-cap movement in visual-field millimeters.
+6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
+   relative model. Success for this milestone means the green cap can be moved predictably inside the
+   user-defined field.
+7. Persist the field registration, cap observation, and relative motion model as the current setup
+   authority. Cap-to-tip offset, ink observations, and actual drawing execution are future work.
+8. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
    currently removed from the operator UI until the next real drawing surface is defined.
 
-Both drawing lanes must run through the same bridge-owned pipeline before real motion:
+Future drawing lanes must run through the same bridge-owned pipeline before real ink motion:
 
 ```text
 DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
@@ -75,24 +74,23 @@ segmentation and motion detection run in `CameraModel` on the full camera frame;
 ROI would be a separate app-side observation change and must keep Python-owned safety and calibration
 authority intact.
 
-## Calibration And Drawing Evidence
+## Calibration Evidence
 
 The operator sequence should stay explicit:
 
 | Step | Action | Evidence recorded | Does not prove |
 | --- | --- | --- | --- |
-| 1 | Visual field setup | Fiducial corners, paper registration id, reprojection error | Machine axes or pen position. |
-| 2 | Cap marker confirmation | Camera-space cap point mapped into paper/logical mm | Drawing authority. |
-| 3 | Motion calibration | Probe events, cap observations, Swift motion samples, readiness summaries | Durable absolute drawing trust by itself. |
-| 4 | Drawing calibration | Projected binding targets, watched relative moves, residual checks, ink visibility, learned cap-to-tip offset | Arbitrary shape correctness. |
-| 5 | Capabilities suite | `center_crosshair`, `line_length`, `square_closure`, `triangle`, then `multi_shape_coordinate_sheet` through the shared drawing pipeline | Portrait or image ingestion quality. |
-| 6 | Shape or portrait drawing | `DrawingProgram` preview, simulation, projected overlay, execution transcript, residual observations | A future run if camera/paper/controller state is stale. |
+| 1 | Define Drawing Field | Visual-field corners, field registration id, field size in millimeters, reprojection error | Machine axes, pen position, or cap location. |
+| 2 | Confirm Green Cap | Camera-space cap point mapped into visual-field millimeters | Relative motion model or drawing authority. |
+| 3 | Run Motion Calibration | Commanded relative machine moves, before/after cap observations, observed visual-field deltas, residuals | Cap-to-tip offset, ink position, or durable absolute workspace proof. |
+| 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
+| 5 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
 
-Swift may collect and display probe samples, center-mark residuals, and operator events, but Python
-must own durable readiness, `VisualPositionBinding`, trust promotion, planning, persistence, and
-execution routing. Motion Calibration persists raw before/after cap observations and
-commanded moves through `/calibration/probe/observe`; the bridge no longer exposes a separate
-preview/run adaptive-probe motion route.
+Swift may collect and display probe samples, residuals, and operator events, but Python owns durable
+setup readiness, motion-model validation, planning, persistence, and execution routing. Motion
+Calibration persists raw before/after cap observations and commanded moves through
+`/calibration/probe/observe`; the bridge does not require homing, `homing_trusted`,
+`axis_model_trusted`, or absolute `MPos` workspace bounds for Visual Field Setup.
 
 The original passive probe remains the safest first hardware contact:
 
@@ -257,13 +255,16 @@ The canonical bridge surfaces for agents are:
   path, and workspace dimensions.
 - `GET /machine/status`: controller connection, alarm/busy state, pins, mode, arming state, and
   latest known machine position.
-- `GET /paper/status`: paper registration and homography state.
+- `GET /paper/status`: visual-field registration state. The route name is historical; active setup
+  treats the artifact as the user-defined drawing field.
+- `GET /calibration/workflow/status`: Visual Field Setup state, including field registration, cap
+  localization, relative motion-model validity, and current blockers.
 - `GET /codex/events`: recent normalized app, bridge, and controller-adjacent events using the shared
   agent event envelope.
 - `GET /codex/snapshot`: the first read for debugging current state. It includes app/bridge build
-  identity, bridge online state, machine alarm/busy state, paper registration, binding trust,
-  active workflow, latest visible error, exact blockers, recent trace summaries, and debug-bundle
-  hints.
+  identity, bridge online state, machine alarm/busy state, field registration, motion-calibration
+  state, active workflow, latest visible error, exact blockers, recent trace summaries, and
+  debug-bundle hints.
 - `artifacts/bridge_events.jsonl`: append-only bridge event history.
 - `artifacts/bridge_transcripts/*.jsonl`: controller command transcripts for status and action
   requests.
@@ -289,9 +290,9 @@ curl -fsS http://127.0.0.1:8765/health \
 curl -fsS http://127.0.0.1:8765/machine/status \
   | jq '{status, state, is_alarm, is_busy, pins, dry_run, arm_motion, arm_pen, homing_trusted, axis_model_trusted}'
 curl -fsS http://127.0.0.1:8765/paper/status \
-  | jq '{status, dry_run, registration_file, has_registration: (.registration != null)}'
-curl -fsS http://127.0.0.1:8765/calibration/binding/status \
-  | jq '{status, binding_file, validation: .binding.validation_status, blockers: .binding.blockers}'
+  | jq '{status, dry_run, registration_file, has_field: (.registration != null)}'
+curl -fsS http://127.0.0.1:8765/calibration/workflow/status \
+  | jq '{field_registered, cap_localized, motion_model_valid, blockers}'
 curl -fsS http://127.0.0.1:8765/codex/events | jq '.events[-10:]'
 tail -n 20 artifacts/bridge_events.jsonl | jq -c .
 ```
@@ -308,9 +309,9 @@ make debug-snapshot
 
 Interpretation rules:
 
-- `dry_run: false` only means the bridge can send real commands; it does not imply drawing readiness.
-  Check arming flags, alarm state, `axis_model_trusted`, paper registration, visual binding status,
-  and preview simulation before any live operation.
+- `dry_run: false` only means the bridge can send real commands; it does not imply setup readiness.
+  For Visual Field Setup, check arming flags, alarm/busy state, field registration, cap visibility,
+  and relative motion-model validity before any movement.
 - A stale or mismatched app/bridge build id means relaunch the dry-run bridge/app from the current
   checkout before debugging UI behavior.
 - `/codex/events` is the canonical recent event stream; JSONL event logs and transcript files are
@@ -319,29 +320,26 @@ Interpretation rules:
   emits controller commands, it belongs behind an existing typed bridge action with explicit safety
   gates.
 
-In the app, use Setup as the only setup path: manually clicked paper fiducials establish
-the field, green cap confirmation starts Motion Calibration, and Drawing Calibration learns the
-cap-to-tip offset from watched binding marks. Binding ink marks are placed inside the
-bridge-computed safe drawable region and validate the durable `VisualPositionBinding`.
-Bridge previews simulate the exact command stream and project the expected path into the camera view
-before any real drawing action is enabled. If simulated or observed geometry fails its gate, the
-bridge returns a failed response and does not send the command stream. After binding validation, the
-current operator surface exposes portrait drawing through Face Video. Capability-check examples remain
-available as backend bridge tests, but their old macOS Draw/Verify menu has been removed.
+In the app, use Setup as the only setup path: field-corner clicks define the drawing field, green cap
+confirmation starts Motion Calibration, and Validate Motion proves that the cap can be sent to
+visual-field targets by applying the inverse relative motion model. Bridge previews for future
+drawing work still simulate command streams before execution. Capability-check examples remain
+available as backend bridge tests, but the current operator setup flow stops at predictable cap
+motion.
 Stop the background preview bridge with:
 
 ```bash
 make bridge-stop
 ```
 
-The machine model treats the drawing workspace as logical plotter coordinates: `X0 Y0` is the
-corner opposite the homing switches, while the controller's `G53` machine coordinates are negative
-because this machine homes X/Y at the max-switch corner. The fixed-camera workflow adds a
-session-local visual position binding on top of that model. A cap-only visual probe is relative
-motion evidence; it does not make `axis_model_trusted=true` by itself. Absolute drawing in the paper
-plane requires durable `axis_model_trusted=true` or a current validated visual position binding from
-ink observations with residuals. Restart the bridge after model changes so the running
-process picks up the current transform.
+The Visual Field Setup model treats the drawing field as operator-defined visual coordinates with a
+known physical width and height, defaulting to 200 mm by 150 mm unless configuration provides a
+better editable value. The controller's `G53` machine coordinates may still be displayed as
+diagnostics, but homing state, `axis_model_trusted`, and absolute machine workspace bounds are not
+Visual Field Setup authority. The learned 2x2 relative model may swap axes, reverse signs, rotate, or
+skew machine motion relative to the video field as long as it is stable, invertible, and validated by
+observed cap motion. Restart the bridge after model changes so the running process picks up the
+current transform.
 
 Real motion is still gated:
 
