@@ -63,6 +63,8 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "SetupPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "PlotterVideoPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "FaceVideoPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert '"machine_video_agreement_estimate_present": machineVideoAgreementModel != nil' in workspace
+    assert "machine_video_agreement_valid" not in workspace
     assert "CalibrationWizardView(" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
     assert "Drawing Checkout" not in setup_panel

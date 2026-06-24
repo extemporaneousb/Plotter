@@ -107,7 +107,7 @@ final class OperatorWorkspaceState: ObservableObject {
                 "manual_cap_mode": manualPenMode,
                 "cap_color_pick_mode": manualCapColorMode,
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
-                "machine_video_agreement_valid": machineVideoAgreementModel?.isUsable == true,
+                "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
                 "operator_log_entries": operatorLog.count
             ]
         ]
