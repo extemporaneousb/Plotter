@@ -82,14 +82,14 @@ The fixed-camera workflow is:
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
 4. Run Machine-Video Agreement from the current cap location before drawing any field box or grid.
    Calibration measures cap jitter, runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to create the
-   first empirical 2x2 estimate, then uses the online estimate to choose later X/Y/diagonal vectors
-   without requiring homing, axis-model trust, absolute `MPos` clearance, a preexisting field lock, or
-   machine workspace proof. The loop distinguishes online estimate accepted from final field
-   precision converged.
-5. Define Drawing Field from the accepted online camera/video basis. The seeded field uses the learned
-   2x2 transform to place a provisional 200 mm x 150 mm frame with the longer dimension on visual `+X`.
-   The active setup UI does not expose a manual field-corner or stored-field reuse branch; reset and
-   rerun Machine-Video Agreement if the seeded frame is wrong.
+   first empirical 2x2 estimate, then uses every later solved estimate to choose subsequent
+   X/Y/diagonal vectors without requiring homing, axis-model trust, absolute `MPos` clearance, a
+   preexisting field lock, or machine workspace proof. Update magnitude is the convergence signal;
+   residuals and field-corner precision are diagnostics.
+5. Define Drawing Field from the current camera/video basis. The seeded field uses the learned 2x2
+   transform to place a provisional 200 mm x 150 mm frame with the longer dimension on visual `+X`.
+   The active setup UI does not expose a manual field-corner, stored-field reuse branch, or separate
+   accepted-estimate gate; reset and rerun Machine-Video Agreement if the seeded frame is wrong.
 6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
    swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.

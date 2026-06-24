@@ -50,14 +50,13 @@ The normal development target is the fixed-camera drawing loop:
 4. Run the machine-video agreement probe before drawing any field box or grid. The app first measures
    cap jitter, then sends adaptive relative machine vectors on X, Y, and diagonals without requiring
    homing, axis-model trust, absolute machine-position clearance, or a preexisting visual field. The
-   loop publishes the current usable 2x2 estimate as online state, uses that estimate to prioritize
-   later minibatches, keeps refining field precision, and accepts swapped, rotated, skewed, or
-   sign-reversed axes when the matrix is stable.
-5. Define Drawing Field from the accepted online 2x2 machine-video transform. The app places a
+   loop publishes each solved 2x2 estimate as the current online state, uses the latest estimate to
+   prioritize later minibatches, and tracks the relative update magnitude as the convergence signal.
+   Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the learned matrix.
+5. Define Drawing Field from the current 2x2 machine-video transform. The app places a
    provisional 200 mm x 150 mm field by projecting the learned machine `+X` and `+Y` basis vectors,
-   with the larger declared dimension on `+X`. Strict corner precision remains visible as a quality
-   metric, but a stable online estimate is not discarded merely because the far field corner has not
-   reached the final precision target. There is no manual field-corner setup branch in the active
+   with the larger declared dimension on `+X`. Residuals and field-corner precision remain visible
+   diagnostics, but they do not create a second accepted-estimate gate. There is no manual field-corner setup branch in the active
    setup flow; reset and rerun Machine-Video Agreement if the frame is wrong.
 6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
    relative model. Success for this milestone means the green cap can be moved predictably inside the

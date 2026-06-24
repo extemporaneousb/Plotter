@@ -313,7 +313,8 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "machineVideoAgreementProbeVectors" in content
     assert "runMachineVideoAgreementVectorJog" in content
     assert "machineVideoAgreementMaxSamples" in content
-    assert "isPrecisionConverged" in content + _read(SWIFT_DIR / "Models.swift")
+    assert "func relativeUpdateMagnitude(from previous:" in _read(SWIFT_DIR / "Models.swift")
+    assert "model_update_norm" in content
     assert "fieldCornerPrecisionMm" in content + _read(SWIFT_DIR / "Models.swift")
     assert "seedAndLockFieldFromMachineVideoAgreement" in content
     assert "currentGreenCapCameraObservation" in content
@@ -395,7 +396,7 @@ def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse(
     assert "Stored visual field in use" not in content
     assert "FIELD run machine-video agreement before drawing field box" in content
     assert "FIELD 200x150 locked from machine-video agreement" in content
-    assert "200x150 field registered from agreement" in content
+    assert "200x150 field registered from current estimate" in content
 
 
 def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
@@ -498,7 +499,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         1,
     )[0]
     assert "workspace.setupWindowActive" in overlay_gate
-    assert "machineVideoAgreementModel?.isOnlineEstimateUsable != true" in overlay_gate
+    assert "machineVideoAgreementModel == nil" in overlay_gate
+    assert "isOnlineEstimateUsable" not in overlay_gate
     assert "return nil" in overlay_gate
     assert "paperTransform: visualFieldOverlayTransform" in content
 
@@ -508,11 +510,22 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     )[0]
     assert "while samples.count < machineVideoAgreementMaxSamples" in agreement_probe
     assert "machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)" in agreement_probe
-    assert "model.isPrecisionConverged" in agreement_probe
-    assert "model.isOnlineEstimateUsable" in agreement_probe
+    assert "relativeUpdateMagnitude(from: bestModel)" in agreement_probe
+    assert "machineVideoAgreementConvergedUpdateNorm" in agreement_probe
+    assert "model.isPrecisionConverged" not in agreement_probe
+    assert "model.isOnlineEstimateUsable" not in agreement_probe
     assert "machineVideoAgreementModel = model" in agreement_probe
+    solve_block = agreement_probe.split("if let model = MachineVideoAgreementModel.solve", 1)[1].split(
+        "updateMachineVideoAgreementSummary",
+        1,
+    )[0]
+    assert "bestModel = model" in solve_block
+    assert "machineVideoAgreementModel = model" in solve_block
+    assert "isOnlineEstimateUsable" not in solve_block
     assert "samples.count >= machineVideoAgreementMinSamples" in agreement_probe
+    assert "latestUpdateMagnitude <= machineVideoAgreementConvergedUpdateNorm" in agreement_probe
     assert "magnitudeMm = min(machineVideoAgreementMaxMoveMm" in agreement_probe
+    assert "if bestModel != nil" in agreement_probe
     assert "machineVideoAgreementMaxSamples = 64" in content
     assert "machineVideoAgreementMinSamples = 8" in content
     assert "bootstrapMoves" in content
@@ -520,14 +533,21 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert '("Y+", 0.0, magnitude)' in content
     assert '("X-", -magnitude, 0.0)' in content
     assert '("Y-", 0.0, -magnitude)' in content
-    assert "fieldCornerPrecisionMm <= 2.0" in models
-    assert "var isOnlineEstimateUsable" in models
-    assert "fieldCornerPrecisionMm <= 40.0" in models
+    assert "func relativeUpdateMagnitude(from previous:" in models
+    assert "var isOnlineEstimateUsable" not in models
+    assert "isOnlineEstimateUsable" not in content + models
     assert "conditionNumber <= 30.0" in models
     assert "maxResidualNorm <= max(0.004, observationNoiseNorm * 8.0)" in models
-    assert "maxResidualNorm <= max(0.006, observationNoiseNorm * 10.0)" in models
-    assert "online_estimate_usable" in content
-    assert "Online estimate accepted" in content
+    assert "model_update_norm" in content
+    assert "model_update_converged" in content
+    assert "online_estimate_usable" not in content
+    assert "Online estimate accepted" not in content
+    probe_vectors = content.split("private func machineVideoAgreementProbeVectors", 1)[1].split(
+        "private func machineVideoAgreementStatus",
+        1,
+    )[0]
+    assert "guard let model else" in probe_vectors
+    assert "model.isOnlineEstimateUsable" not in probe_vectors
 
     field_seed = content.split("private func seededFieldCorners", 1)[1].split(
         "private func pointInsideCameraBounds",
@@ -542,19 +562,23 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "halfHeight = halfWidth * 0.75" not in content
 
     assert "before drawing any field box or grid" in readme
-    assert "publishes the current usable 2x2 estimate as online state" in readme
-    assert "accepted online 2x2 machine-video transform" in readme
+    assert "publishes each solved 2x2 estimate as the current online state" in readme
+    assert "current 2x2 machine-video transform" in readme
+    assert "relative update magnitude as the convergence signal" in readme
     assert "There is no manual field-corner setup branch" in readme
     assert "before drawing any field box or grid" in contract
     assert "There is no identity matrix as calibration evidence" in contract
-    assert "accepted online estimate" in contract
-    assert "online estimate" in plan
+    assert "reports update magnitude as the" in contract
+    assert "update magnitude approaching zero as the" in contract
+    assert "uses every later solved estimate" in plan
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
-    assert "Later relative vectors are chosen from the online estimate" in contract
+    assert "Every subsequent solved estimate becomes the current online" in contract
+    assert "later relative vectors are chosen from that latest estimate" in contract
     assert "must not expose a manual" in contract
     assert "before drawing any field box or grid" in plan
     assert "first empirical 2x2 estimate" in plan
-    assert "online estimate accepted from final field" in plan
+    assert "Update magnitude is the convergence signal" in plan
+    assert "accepted-estimate gate" in plan
     assert "does not expose a manual" in plan
 
 

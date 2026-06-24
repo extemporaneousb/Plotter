@@ -920,14 +920,6 @@ struct MachineVideoAgreementModel: Equatable {
             && conditionNumber <= 30.0
     }
 
-    var isOnlineEstimateUsable: Bool {
-        isUsable
-            && sampleCount >= 8
-            && fieldCornerPrecisionMm <= 40.0
-            && maxResidualNorm <= max(0.006, observationNoiseNorm * 10.0)
-            && conditionNumber <= 30.0
-    }
-
     var isUsable: Bool {
         abs(determinant) > 0.000_000_2
             && xBasisLengthNorm > 0.000_2
@@ -937,6 +929,32 @@ struct MachineVideoAgreementModel: Equatable {
             && sampleCount >= 4
             && conditionNumber.isFinite
             && conditionNumber <= 80.0
+    }
+
+    func relativeUpdateMagnitude(from previous: MachineVideoAgreementModel?) -> Double? {
+        guard let previous else { return nil }
+        let delta = sqrt(
+            pow(xBasisDxNorm - previous.xBasisDxNorm, 2.0)
+                + pow(xBasisDyNorm - previous.xBasisDyNorm, 2.0)
+                + pow(yBasisDxNorm - previous.yBasisDxNorm, 2.0)
+                + pow(yBasisDyNorm - previous.yBasisDyNorm, 2.0)
+        )
+        let scale = max(
+            sqrt(
+                xBasisDxNorm * xBasisDxNorm
+                    + xBasisDyNorm * xBasisDyNorm
+                    + yBasisDxNorm * yBasisDxNorm
+                    + yBasisDyNorm * yBasisDyNorm
+            ),
+            sqrt(
+                previous.xBasisDxNorm * previous.xBasisDxNorm
+                    + previous.xBasisDyNorm * previous.xBasisDyNorm
+                    + previous.yBasisDxNorm * previous.yBasisDxNorm
+                    + previous.yBasisDyNorm * previous.yBasisDyNorm
+            ),
+            0.000_000_001
+        )
+        return delta / scale
     }
 
     func cameraDelta(forMachineX xMm: Double, yMm: Double) -> (dx: Double, dy: Double) {

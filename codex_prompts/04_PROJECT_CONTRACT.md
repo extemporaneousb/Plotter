@@ -50,14 +50,16 @@ The app-first drawing flow is:
 4. Run a machine-video agreement probe before drawing any field box or grid. The probe first measures
    cap jitter, then runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to get the first empirical 2x2
    machine-to-video estimate. There is no identity matrix as calibration evidence; before that first
-   minibatch the prior is simply no model. Later relative vectors are chosen from the online estimate,
-   which may prioritize the weaker learned basis and keep refining corner precision. The loop accepts
-   swapped, rotated, skewed, or sign-reversed axes when the matrix is stable.
-5. Define Drawing Field from the accepted online 2x2 transform. The seeded field is 200 mm x 150 mm,
-   with the larger declared dimension on visual `+X`. Strict corner precision remains a quality
-   metric and should keep improving, but a stable online transform can seed a provisional field before
-   the final 2 mm corner target is reached. The active setup UI must not expose a manual field-corner
-   or stored-field reuse branch; if the frame is wrong, reset and rerun Machine-Video Agreement.
+   minibatch the prior is simply no model. Every subsequent solved estimate becomes the current online
+   transform, and later relative vectors are chosen from that latest estimate, which may prioritize the
+   weaker learned basis and keep refining the matrix. The loop reports update magnitude as the
+   convergence signal. Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the
+   learned matrix.
+5. Define Drawing Field from the current 2x2 transform. The seeded field is 200 mm x 150 mm, with the
+   larger declared dimension on visual `+X`. Residuals and field-corner precision remain quality
+   diagnostics, but setup must not discard the current transform behind a second accepted-estimate
+   gate. The active setup UI must not expose a manual field-corner or stored-field reuse branch; if
+   the frame is wrong, reset and rerun Machine-Video Agreement.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    Success for this milestone means predictable green-cap motion in the user-defined visual drawing
    field.
@@ -76,9 +78,10 @@ visual field is registered, the cap is localized in that field, and the learned 
 model is stable, invertible, and validated by observed cap movement. Machine axes may be swapped,
 rotated, skewed, or sign-reversed relative to the video field. Swift observations are evidence;
 Python decides whether the field, cap, and motion model are valid. During setup, no 200 mm x 150 mm
-field frame or millimeter grid should be drawn until Machine-Video Agreement has an accepted online estimate
-and seeds field registration from that matrix. The UI should distinguish online estimate accepted from
-strict final precision converged.
+field frame or millimeter grid should be drawn until Machine-Video Agreement has produced a current
+2x2 estimate and seeds field registration from that matrix. The UI should show update magnitude,
+residuals, and field-corner precision as diagnostics, with update magnitude approaching zero as the
+convergence signal.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned
