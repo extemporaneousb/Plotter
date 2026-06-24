@@ -107,51 +107,6 @@ struct PlotterViewportTransform<Content: View>: View {
     }
 }
 
-struct ManualFiducialOverlay: View {
-    let points: [ManualFiducialPoint]
-    let isActive: Bool
-
-    var body: some View {
-        Canvas { context, size in
-            guard !points.isEmpty || isActive else { return }
-
-            if isActive {
-                let label = Text("CLICK FIELD CORNERS \(min(points.count, 4))/4")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.yellow.opacity(0.95))
-                context.draw(label, at: CGPoint(x: size.width - 12, y: 14), anchor: .topTrailing)
-            }
-
-            for point in points {
-                let center = CGPoint(
-                    x: point.point.x * size.width,
-                    y: point.point.y * size.height
-                )
-                let color = Color.yellow
-                let outer = CGRect(x: center.x - 9, y: center.y - 9, width: 18, height: 18)
-                context.stroke(Path(ellipseIn: outer), with: .color(color.opacity(0.96)), lineWidth: 2.2)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: center.x - 3, y: center.y - 3, width: 6, height: 6)),
-                    with: .color(color.opacity(0.98))
-                )
-
-                var cross = Path()
-                cross.move(to: CGPoint(x: center.x - 15, y: center.y))
-                cross.addLine(to: CGPoint(x: center.x + 15, y: center.y))
-                cross.move(to: CGPoint(x: center.x, y: center.y - 15))
-                cross.addLine(to: CGPoint(x: center.x, y: center.y + 15))
-                context.stroke(cross, with: .color(.black.opacity(0.78)), lineWidth: 1.0)
-
-                let label = Text(point.label)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(color.opacity(0.95))
-                context.draw(label, at: CGPoint(x: center.x + 12, y: center.y), anchor: .leading)
-            }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
 struct ConfirmedCapOverlay: View {
     let point: ConfirmedCapPoint?
     let isActive: Bool
@@ -209,40 +164,6 @@ struct CapColorPickOverlay: View {
             context.draw(label, at: CGPoint(x: size.width - 12, y: 50), anchor: .topTrailing)
         }
         .allowsHitTesting(false)
-    }
-}
-
-struct ManualFiducialClickLayer: View {
-    let settings: PlotterViewportSettings
-    let videoSize: CGSize
-    let onMark: (CGPoint, CGPoint) -> Void
-
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onEnded { value in
-                            let width = max(geometry.size.width, 1)
-                            let height = max(geometry.size.height, 1)
-                            let viewPoint = CGPoint(
-                                x: value.location.x / width,
-                                y: value.location.y / height
-                            )
-                            let cameraPoint = plotterCameraNormFromViewPoint(
-                                value.location,
-                                viewSize: geometry.size,
-                                videoSize: videoSize,
-                                settings: settings
-                            )
-                            onMark(
-                                viewPoint,
-                                cameraPoint
-                            )
-                        }
-                )
-        }
     }
 }
 

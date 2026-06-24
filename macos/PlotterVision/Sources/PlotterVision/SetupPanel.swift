@@ -19,14 +19,11 @@ struct SetupPanel: View {
                 primaryActionTitle: workspace.setupSnapshot.primaryActionTitle,
                 primaryActionEnabled: workspace.setupSnapshot.primaryActionEnabled,
                 primaryActionDisabledReason: workspace.setupSnapshot.primaryActionDisabledReason,
-                manualFiducialCount: workspace.setupSnapshot.manualFiducialCount,
                 hasPaperLock: workspace.setupSnapshot.hasPaperLock,
                 capStateLabel: workspace.setupSnapshot.capStateLabel,
                 isLiveMotionMode: workspace.setupSnapshot.isLiveMotionMode,
                 capDetected: workspace.setupSnapshot.capDetected,
-                canConfirmSetup: workspace.setupSnapshot.canConfirmSetup,
                 primaryAction: { workspace.requestSetupCommand(.primary) },
-                confirmSetup: { workspace.requestSetupCommand(.confirm) },
                 reset: { workspace.requestSetupCommand(.reset) },
                 hide: { workspace.requestSetupCommand(.hide) }
             )

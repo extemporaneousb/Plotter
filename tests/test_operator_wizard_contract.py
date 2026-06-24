@@ -85,7 +85,7 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert '"empty": !plotterCameraVisible && !faceCameraVisible' in workspace
     assert "Sample Cap Color" not in _read(SWIFT_DIR / "CalibrationWizardView.swift")
     assert "startCalibrationWizard" in content
-    assert "Confirm Setup" in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
+    assert "Confirm Setup" not in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
 
 
 def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
@@ -367,23 +367,35 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     assert "func drawVisualBindingBoundsFrame" in model
 
 
-def test_wizard_can_reuse_locked_paper_setup_after_restart() -> None:
+def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
+    workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
 
-    assert 'Button("Confirm Setup", action: confirmSetup)' in wizard
-    assert "canConfirmSetup: bridge.hasPaperLock" in content
-    assert "confirmSetup: confirmWizardSetupFromExistingRegistration" in content
-    assert "private func confirmWizardSetupFromExistingRegistration" in content
-    assert '"wizard_setup_confirmed"' in content
+    assert "Confirm Setup" not in wizard
+    assert "confirmSetup" not in wizard
+    assert "canConfirmSetup" not in content
+    assert "canConfirmSetup" not in setup_panel
+    assert "canConfirmSetup" not in workspace
+    assert "confirmSetup: confirmWizardSetupFromExistingRegistration" not in content
+    assert "private func confirmWizardSetupFromExistingRegistration" not in content
+    assert "case confirm" not in workspace
+    assert '"wizard_setup_confirmed"' not in content
+    assert "ManualFiducialOverlay" not in _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    assert "ManualFiducialClickLayer" not in _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    assert "recordManualFiducial" not in content
+    assert "solvePaperHomographyFromWizard" not in content
+    assert "CLICK FIELD CORNERS" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert "resetCalibrationSetup()" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Visual Field Setup" in wizard
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
-    assert "Stored visual field in use" in content
+    assert "Stored visual field in use" not in content
     assert "FIELD run machine-video agreement before drawing field box" in content
     assert "FIELD 200x150 locked from machine-video agreement" in content
+    assert "200x150 field registered from agreement" in content
 
 
 def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
@@ -420,6 +432,9 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     assert "Run Drawing Calibration" not in content
     assert "runWizardDrawingCalibration" not in content
     assert "runVisualRelativeFivePointTest" not in content
+    assert "Confirm Setup" not in content + wizard
+    assert "ManualFiducialOverlay" not in support
+    assert "ManualFiducialClickLayer" not in support
     assert "pen tip not confirmed" not in content
     assert "estimateToolOffset(" not in content + model
     assert "BridgeToolEstimateRequest" not in client
@@ -513,11 +528,14 @@ def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> N
     assert "before drawing any field box or grid" in readme
     assert "loop increases move size only when the observed video signal is too weak" in readme
     assert "converged 2x2 machine-video transform" in readme
+    assert "There is no manual field-corner setup branch" in readme
     assert "before drawing any field box or grid" in contract
     assert "stops on precision convergence, not on a fixed sample count" in contract
+    assert "must not expose a manual" in contract
     assert "before drawing any field box or grid" in plan
     assert "stops on precision" in plan
     assert "fixed four-move script" in plan
+    assert "does not expose a manual" in plan
 
 
 def test_operator_log_replaces_bottom_status_bar() -> None:
@@ -568,8 +586,8 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "Zoom Out" not in plotter_panel
     assert "Reset FOV" not in plotter_panel
     assert "togglePlotterFocusMode()" in viewport_intent
-    assert "focusPlotterVideoOnPaper(source: \"wizard_field_solved\")" in content
-    assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" in content
+    assert "focusPlotterVideoOnPaper(source: \"machine_video_agreement_field_seeded\")" in content
+    assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" not in content
 
     assert "func captureOutput(" in camera_model
     assert "try self.analyzer.analyze(pixelBuffer: pixelBuffer" in camera_model

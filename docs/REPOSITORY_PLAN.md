@@ -86,8 +86,9 @@ The fixed-camera workflow is:
    clearance, a preexisting field lock, or machine workspace proof. The loop stops on precision
    convergence rather than a fixed four-move script.
 5. Define Drawing Field from the converged camera/video basis. The seeded field uses the learned
-   2x2 transform to place a 200 mm x 150 mm frame with the longer dimension on visual `+X`; the
-   existing field-corner affordance remains available for operator adjustment.
+   2x2 transform to place a 200 mm x 150 mm frame with the longer dimension on visual `+X`. The
+   active setup UI does not expose a manual field-corner or stored-field reuse branch; reset and rerun
+   Machine-Video Agreement if the seeded frame is wrong.
 6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
    swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.

@@ -13,14 +13,11 @@ struct CalibrationWizardView: View {
     let primaryActionTitle: String
     let primaryActionEnabled: Bool
     let primaryActionDisabledReason: String?
-    let manualFiducialCount: Int
     let hasPaperLock: Bool
     let capStateLabel: String
     let isLiveMotionMode: Bool
     let capDetected: Bool
-    let canConfirmSetup: Bool
     let primaryAction: () -> Void
-    let confirmSetup: () -> Void
     let reset: () -> Void
     let hide: () -> Void
 
@@ -97,11 +94,6 @@ struct CalibrationWizardView: View {
             .disabled(!primaryActionEnabled)
             .help(primaryActionDisabledReason ?? primaryActionTitle)
 
-            Button("Confirm Setup", action: confirmSetup)
-                .buttonStyle(.bordered)
-                .disabled(!canConfirmSetup)
-                .help("Reuse the locked visual field when the visible grid still matches the setup")
-
             Button("Reset", action: reset)
                 .buttonStyle(.bordered)
         }
@@ -124,8 +116,7 @@ struct CalibrationWizardView: View {
             Label(capDetected ? "cap detected" : "cap not detected", systemImage: "circle.fill")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(capDetected ? .green.opacity(0.92) : .yellow.opacity(0.86))
-            Text(String(format: "CORNERS %d/4  FIELD %@  CAP %@  LIVE %@",
-                        manualFiducialCount,
+            Text(String(format: "FIELD %@  CAP %@  LIVE %@",
                         hasPaperLock ? "LOCK" : "--",
                         capStateLabel,
                         isLiveMotionMode ? "YES" : "NO"))

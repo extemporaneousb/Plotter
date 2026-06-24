@@ -2427,7 +2427,7 @@ final class PlotterBridgeModel: ObservableObject {
         }
         guard fiducials.count >= 4 else {
             paperTransformStatus = "FIELD NEED 4"
-            statusText = "Need four drawing field corners"
+            statusText = "Need generated drawing field corners"
             return nil
         }
 

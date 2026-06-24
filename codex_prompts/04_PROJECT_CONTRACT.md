@@ -52,8 +52,9 @@ The app-first drawing flow is:
    machine-to-video matrix. It stops on precision convergence, not on a fixed sample count, and accepts
    swapped, rotated, skewed, or sign-reversed axes when the matrix is stable.
 5. Define Drawing Field from the converged 2x2 transform. The seeded field is 200 mm x 150 mm, with
-   the larger declared dimension on visual `+X`, and the existing field-corner affordance remains
-   adjustable.
+   the larger declared dimension on visual `+X`. The active setup UI must not expose a manual
+   field-corner or stored-field reuse branch; if the frame is wrong, reset and rerun Machine-Video
+   Agreement.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    Success for this milestone means predictable green-cap motion in the user-defined visual drawing
    field.

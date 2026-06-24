@@ -121,7 +121,6 @@ struct SetupPanelCommandRequest: Identifiable, Equatable {
 
 enum SetupPanelCommand: Equatable {
     case primary
-    case confirm
     case reset
     case hide
 }
@@ -154,12 +153,10 @@ struct SetupPanelSnapshot: Equatable {
     var primaryActionTitle: String
     var primaryActionEnabled: Bool
     var primaryActionDisabledReason: String?
-    var manualFiducialCount: Int
     var hasPaperLock: Bool
     var capStateLabel: String
     var isLiveMotionMode: Bool
     var capDetected: Bool
-    var canConfirmSetup: Bool
 
     static let idle = SetupPanelSnapshot(
         instructionText: "Open the plotter camera and start setup.",
@@ -174,11 +171,9 @@ struct SetupPanelSnapshot: Equatable {
         primaryActionTitle: "Start Setup",
         primaryActionEnabled: true,
         primaryActionDisabledReason: nil,
-        manualFiducialCount: 0,
         hasPaperLock: false,
         capStateLabel: "--",
         isLiveMotionMode: false,
-        capDetected: false,
-        canConfirmSetup: false
+        capDetected: false
     )
 }

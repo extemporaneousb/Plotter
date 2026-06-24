@@ -313,8 +313,6 @@ struct ContentView: View {
                 }
             }
 
-            ManualFiducialOverlay(points: manualFiducials, isActive: manualFiducialMode)
-
             ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode)
             CapColorPickOverlay(isActive: manualCapColorMode)
 
@@ -329,12 +327,6 @@ struct ContentView: View {
                     settings: plotterViewport,
                     videoSize: plotterCamera.videoSize,
                     onMark: recordConfirmedCap
-                )
-            } else if manualFiducialMode {
-                ManualFiducialClickLayer(
-                    settings: plotterViewport,
-                    videoSize: plotterCamera.videoSize,
-                    onMark: recordManualFiducial
                 )
             }
 
@@ -463,8 +455,6 @@ struct ContentView: View {
         switch command {
         case .primary:
             runCalibrationWizardPrimaryAction()
-        case .confirm:
-            confirmWizardSetupFromExistingRegistration()
         case .reset:
             resetCalibrationWizard()
         case .hide:
@@ -507,12 +497,10 @@ struct ContentView: View {
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
-            manualFiducialCount: manualFiducials.count,
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
-            capDetected: currentCarriageMarker != nil,
-            canConfirmSetup: bridge.hasPaperLock
+            capDetected: currentCarriageMarker != nil
         )
     }
 
@@ -2185,28 +2173,20 @@ struct ContentView: View {
         .joined(separator: ", ")
     }
 
-    private var currentGreenCapSafeZoneReady: Bool {
+    private var currentGreenCapFieldMappedReady: Bool {
         guard bridge.hasPaperLock else { return currentGreenCapCameraObservation() != nil }
-        guard let observation = currentGreenCapPaperObservation() else { return false }
-        return isGreenCapInsideSafeZone(observation.paperMm)
+        return currentGreenCapPaperObservation() != nil
     }
 
-    private var confirmedCapSafeZoneReady: Bool {
+    private var confirmedCapFieldMappedReady: Bool {
         guard bridge.hasPaperLock else { return confirmedCapPoint != nil }
-        guard let paperMm = confirmedCapPoint?.paperMm else { return false }
-        return isGreenCapInsideSafeZone(paperMm)
+        return confirmedCapPoint?.paperMm != nil
     }
 
-    private var greenCapSafeZoneDetail: String {
+    private var greenCapFieldMappingDetail: String {
         guard bridge.hasPaperLock else { return "Machine-video agreement must run before field bounds exist" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
-        guard isGreenCapInsideSafeZone(observation.paperMm) else {
-            return String(
-                format: "Cap outside %.0fmm field safe zone",
-                visualCapSafeZoneMarginMm
-            )
-        }
-        return "Cap inside field safe zone"
+        return String(format: "Cap mapped to field x%.1f y%.1f mm", observation.paperMm.x, observation.paperMm.y)
     }
 
     private var greenCapProbeReadinessDetail: String {
@@ -2216,25 +2196,13 @@ struct ContentView: View {
                 : "Cap marker ready for machine-video agreement"
         }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
-        guard isGreenCapInsideSafeZone(observation.paperMm) else {
-            return String(
-                format: "Cap outside %.0fmm field safe zone",
-                visualCapSafeZoneMarginMm
-            )
-        }
-        return "Cap marker ready for non-homed relative motion calibration"
+        return String(format: "Cap mapped to field x%.1f y%.1f mm", observation.paperMm.x, observation.paperMm.y)
     }
 
-    private var confirmedCapSafeZoneDetail: String {
+    private var confirmedCapFieldMappingDetail: String {
         guard bridge.hasPaperLock else { return "Confirmed cap ready for machine-video agreement" }
         guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap marker not confirmed" }
-        guard isGreenCapInsideSafeZone(paperMm) else {
-            return String(
-                format: "Confirmed cap outside %.0fmm motion-safe inset",
-                visualCapSafeZoneMarginMm
-            )
-        }
-        return "Confirmed cap inside motion-safe inset"
+        return String(format: "Confirmed cap mapped x%.1f y%.1f mm", paperMm.x, paperMm.y)
     }
 
     private var visualMotionValidated: Bool {
@@ -2244,7 +2212,7 @@ struct ContentView: View {
     private var canValidateWizardMotion: Bool {
         bridge.hasPaperLock
             && confirmedCapPoint?.paperMm != nil
-            && currentGreenCapSafeZoneReady
+            && currentGreenCapFieldMappedReady
             && frameLearning.status == "MEASURED"
             && visualMotionModel?.isUsable == true
             && !bridge.isMachineBusy
@@ -2943,14 +2911,11 @@ struct ContentView: View {
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
-            manualFiducialCount: manualFiducials.count,
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
             capDetected: currentCarriageMarker != nil,
-            canConfirmSetup: bridge.hasPaperLock,
             primaryAction: runCalibrationWizardPrimaryAction,
-            confirmSetup: confirmWizardSetupFromExistingRegistration,
             reset: resetCalibrationWizard,
             hide: hideCalibrationWizard
         )
@@ -2990,24 +2955,14 @@ struct ContentView: View {
     }
 
     private var wizardFiducialDetail: String {
-        if bridge.hasPaperLock && manualFiducials.count < 4 {
-            return "Stored visual field in use"
-        }
-        if manualFiducials.count >= 4 { return "200x150 field corners captured" }
-        if machineVideoAgreementModel?.isUsable == true {
-            return "Ready to seed 200x150 field from agreement"
-        }
-        return "Hidden until machine-video agreement is learned"
+        if bridge.hasPaperLock { return "200x150 field registered from agreement" }
+        if machineVideoAgreementModel?.isPrecisionConverged == true { return "Registering 200x150 field from agreement" }
+        return "Hidden until agreement converges"
     }
 
     private var wizardFieldDetail: String {
-        if bridge.hasPaperLock {
-            return "Field locked; confirm grid alignment"
-        }
-        if manualFiducials.count >= 4 {
-            return "Field corners captured; lock drawing field"
-        }
-        return "Needs four drawing field corners"
+        if bridge.hasPaperLock { return "Field locked from machine-video agreement" }
+        return "Waiting for converged machine-video agreement"
     }
 
     private var wizardGreenCapDetail: String {
@@ -3028,9 +2983,9 @@ struct ContentView: View {
     }
 
     private var wizardCapStateLabel: String {
-        if currentGreenCapSafeZoneReady { return "LIVE-SAFE" }
-        if confirmedCapSafeZoneReady { return "CONF-SAFE" }
-        if confirmedCapPoint != nil { return bridge.hasPaperLock ? "CONF-OUT" : "CONF-CAM" }
+        if currentGreenCapFieldMappedReady { return bridge.hasPaperLock ? "LIVE-MM" : "LIVE-CAM" }
+        if confirmedCapFieldMappedReady { return "CONF-MM" }
+        if confirmedCapPoint != nil { return "CONF-CAM" }
         return "--"
     }
 
@@ -3049,7 +3004,7 @@ struct ContentView: View {
             guard let model = visualMotionModel, model.isUsable else {
                 return "Measured samples did not produce a usable model"
             }
-            if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
+            if !currentGreenCapFieldMappedReady { return greenCapFieldMappingDetail }
             return String(
                 format: "Ready to validate rms %.1f max %.1f",
                 model.rmsResidualMm,
@@ -3134,23 +3089,10 @@ struct ContentView: View {
         }
         if visualMotionModel?.isUsable != true { return "motion model not usable" }
         if currentCarriageMarker == nil { return "green cap not detected" }
-        if !currentGreenCapSafeZoneReady { return greenCapSafeZoneDetail }
+        if !currentGreenCapFieldMappedReady { return greenCapFieldMappingDetail }
         if bridge.isMachineAlarm { return "machine alarm" }
         if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
         return "motion validation blocked"
-    }
-
-    private var nextFiducialLabel: String {
-        switch manualFiducials.count {
-        case 0:
-            return "FIELD-BL"
-        case 1:
-            return "FIELD-BR"
-        case 2:
-            return "FIELD-TR"
-        default:
-            return "FIELD-TL"
-        }
     }
 
     private func runCalibrationWizardPrimaryAction() {
@@ -3170,7 +3112,7 @@ struct ContentView: View {
 
         if frameLearning.status != "MEASURED" {
             guard canRunWizardMotionProbe else {
-                calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapSafeZoneDetail)"
+                calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
                 return
             }
             calibrationStatusText = "FIELD machine-video agreement requested"
@@ -3287,33 +3229,6 @@ struct ContentView: View {
         }
     }
 
-    private func confirmWizardSetupFromExistingRegistration() {
-        workspace.setupWindowActive = true
-        showPlotterCameraForSetup(source: "setup_confirm")
-        refreshSetupSnapshot()
-
-        guard bridge.hasPaperLock else {
-            calibrationStatusText = "FIELD no stored visual field; click FIELD-BL"
-            manualFiducialMode = true
-            manualPenMode = false
-            manualCapColorMode = false
-            return
-        }
-
-        manualFiducialMode = false
-        manualPenMode = false
-        manualCapColorMode = false
-        focusPlotterVideoOnPaper(source: "wizard_confirm_setup")
-        calibrationStatusText = "FIELD setup confirmed from stored visual field"
-        bridge.recordOperatorEvent(
-            "wizard_setup_confirmed",
-            details: [
-                "paper_status": bridge.paperTransformStatus,
-                "paper_registration_id": bridge.paperRegistrationSnapshot?.registrationId ?? ""
-            ]
-        )
-    }
-
     private func hideCalibrationWizard() {
         workspace.setupWindowActive = false
         _ = OperatorWindowSupport.closeWindow(title: "Setup", identifier: OperatorWindowID.setupPanel)
@@ -3322,32 +3237,6 @@ struct ContentView: View {
         manualCapColorMode = false
         calibrationStatusText = "FIELD hidden"
         publishOperatorUIState(reason: "operator_ui_setup_hidden")
-    }
-
-    private func solvePaperHomographyFromWizard() {
-        guard manualFiducials.count >= 4 else {
-            startCalibrationWizard()
-            return
-        }
-        guard bridge.isOnline else {
-            calibrationStatusText = "FIELD connect plotter to lock visual field"
-            return
-        }
-        guard !bridge.isCalibrating else { return }
-
-        manualFiducialMode = false
-        calibrationStatusText = "FIELD locking visual field"
-        Task {
-            let response = await bridge.registerPaperHomography(
-                fiducials: manualFiducials,
-                paperWidthMm: bridge.visualFieldWidthMm,
-                paperHeightMm: bridge.visualFieldHeightMm
-            )
-            if response?.registration != nil {
-                focusPlotterVideoOnPaper(source: "wizard_field_solved")
-            }
-            calibrationStatusText = bridge.hasPaperLock ? "FIELD visual field locked" : "FIELD \(bridge.paperTransformStatus)"
-        }
     }
 
     private func resetCalibrationWizard() {
@@ -3395,10 +3284,10 @@ struct ContentView: View {
                 help: bridge.motionGateMessage
             )
             StatusLamp(
-                title: "CORNERS",
-                value: "\(manualFiducials.count)/4",
-                color: fiducialLampColor,
-                help: "Manual drawing field corners"
+                title: "MODEL",
+                value: machineVideoAgreementModel?.isPrecisionConverged == true ? "2X2" : "--",
+                color: machineVideoAgreementModel?.isPrecisionConverged == true ? .green : .white.opacity(0.45),
+                help: wizardFiducialDetail
             )
             StatusLamp(
                 title: "FIELD",
@@ -3443,10 +3332,6 @@ struct ContentView: View {
         return .orange
     }
 
-    private var fiducialLampColor: Color {
-        manualFiducials.count >= 4 ? .green : .red
-    }
-
     private var paperLampValue: String {
         if bridge.paperTransformStatus.contains("LOCK") { return "LOCK" }
         if bridge.paperTransformStatus.contains("SOLVE") { return "SOLVE" }
@@ -3462,8 +3347,7 @@ struct ContentView: View {
 
     private var penLampColor: Color {
         guard let confirmedCapPoint else { return .white.opacity(0.45) }
-        guard let paperMm = confirmedCapPoint.paperMm else { return .yellow }
-        guard isGreenCapInsideSafeZone(paperMm) else { return .red }
+        guard confirmedCapPoint.paperMm != nil else { return .yellow }
         return bridge.visualBindingValid ? .green : .yellow
     }
 
@@ -3482,7 +3366,7 @@ struct ContentView: View {
                 confirmedCapPoint.cameraPoint.y,
                 paperMm.x,
                 paperMm.y,
-                isGreenCapInsideSafeZone(paperMm) ? "SAFE" : "OUTSIDE",
+                "MAPPED",
                 toolSuffix
             )
         }
@@ -3498,47 +3382,6 @@ struct ContentView: View {
         if bridge.paperTransformStatus.contains("SOLVE") { return .yellow }
         if bridge.paperTransformStatus.contains("ERR") { return .red }
         return .white.opacity(0.45)
-    }
-
-    private func recordManualFiducial(viewPoint: CGPoint, cameraPoint: CGPoint) {
-        let normalizedView = CGPoint(
-            x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
-        )
-        let normalizedCamera = CGPoint(
-            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
-        )
-
-        if manualFiducials.count < 4 {
-            manualFiducials.append(
-                ManualFiducialPoint(
-                    id: manualFiducials.count + 1,
-                    point: normalizedView,
-                    cameraPoint: normalizedCamera
-                )
-            )
-        } else if let nearestIndex = manualFiducials.indices.min(by: { lhs, rhs in
-            normalizedDistance(manualFiducials[lhs].point, normalizedView) < normalizedDistance(manualFiducials[rhs].point, normalizedView)
-        }) {
-            manualFiducials[nearestIndex].point = normalizedView
-            manualFiducials[nearestIndex].cameraPoint = normalizedCamera
-        }
-
-        calibrationStatusText = String(
-            format: "CAL field corner %d/4 cam x%.3f y%.3f",
-            manualFiducials.count,
-            normalizedCamera.x,
-            normalizedCamera.y
-        )
-        if workspace.setupWindowActive {
-            if manualFiducials.count >= 4 {
-                calibrationStatusText = "FIELD corners captured"
-                solvePaperHomographyFromWizard()
-            } else {
-                calibrationStatusText = "FIELD click \(nextFiducialLabel)"
-            }
-        }
     }
 
     private func startManualPenClick() {

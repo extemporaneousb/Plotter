@@ -145,13 +145,13 @@ struct ManualFiducialPoint: Identifiable, Equatable {
     var label: String {
         switch id {
         case 1:
-            return "FIELD-BL"
+            return "FIELD-1"
         case 2:
-            return "FIELD-BR"
+            return "FIELD-2"
         case 3:
-            return "FIELD-TR"
+            return "FIELD-3"
         case 4:
-            return "FIELD-TL"
+            return "FIELD-4"
         default:
             return String(format: "FIELD-%02d", id)
         }
