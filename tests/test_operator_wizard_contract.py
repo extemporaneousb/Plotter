@@ -485,7 +485,7 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "runBootstrapAdaptiveProbe(" not in model
 
 
-def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> None:
+def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     models = _read(SWIFT_DIR / "Models.swift")
     readme = _read(ROOT / "README.md")
@@ -498,7 +498,7 @@ def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> N
         1,
     )[0]
     assert "workspace.setupWindowActive" in overlay_gate
-    assert "machineVideoAgreementModel?.isPrecisionConverged != true" in overlay_gate
+    assert "machineVideoAgreementModel?.isOnlineEstimateUsable != true" in overlay_gate
     assert "return nil" in overlay_gate
     assert "paperTransform: visualFieldOverlayTransform" in content
 
@@ -507,14 +507,27 @@ def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> N
         1,
     )[0]
     assert "while samples.count < machineVideoAgreementMaxSamples" in agreement_probe
+    assert "machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)" in agreement_probe
     assert "model.isPrecisionConverged" in agreement_probe
+    assert "model.isOnlineEstimateUsable" in agreement_probe
+    assert "machineVideoAgreementModel = model" in agreement_probe
     assert "samples.count >= machineVideoAgreementMinSamples" in agreement_probe
     assert "magnitudeMm = min(machineVideoAgreementMaxMoveMm" in agreement_probe
-    assert "machineVideoAgreementMaxSamples = 32" in content
+    assert "machineVideoAgreementMaxSamples = 64" in content
     assert "machineVideoAgreementMinSamples = 8" in content
+    assert "bootstrapMoves" in content
+    assert '("X+", magnitude, 0.0)' in content
+    assert '("Y+", 0.0, magnitude)' in content
+    assert '("X-", -magnitude, 0.0)' in content
+    assert '("Y-", 0.0, -magnitude)' in content
     assert "fieldCornerPrecisionMm <= 2.0" in models
+    assert "var isOnlineEstimateUsable" in models
+    assert "fieldCornerPrecisionMm <= 40.0" in models
     assert "conditionNumber <= 30.0" in models
     assert "maxResidualNorm <= max(0.004, observationNoiseNorm * 8.0)" in models
+    assert "maxResidualNorm <= max(0.006, observationNoiseNorm * 10.0)" in models
+    assert "online_estimate_usable" in content
+    assert "Online estimate accepted" in content
 
     field_seed = content.split("private func seededFieldCorners", 1)[1].split(
         "private func pointInsideCameraBounds",
@@ -529,15 +542,19 @@ def test_machine_video_agreement_is_precision_driven_before_field_overlay() -> N
     assert "halfHeight = halfWidth * 0.75" not in content
 
     assert "before drawing any field box or grid" in readme
-    assert "loop increases move size only when the observed video signal is too weak" in readme
-    assert "converged 2x2 machine-video transform" in readme
+    assert "publishes the current usable 2x2 estimate as online state" in readme
+    assert "accepted online 2x2 machine-video transform" in readme
     assert "There is no manual field-corner setup branch" in readme
     assert "before drawing any field box or grid" in contract
-    assert "stops on precision convergence, not on a fixed sample count" in contract
+    assert "There is no identity matrix as calibration evidence" in contract
+    assert "accepted online estimate" in contract
+    assert "online estimate" in plan
+    assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
+    assert "Later relative vectors are chosen from the online estimate" in contract
     assert "must not expose a manual" in contract
     assert "before drawing any field box or grid" in plan
-    assert "stops on precision" in plan
-    assert "fixed four-move script" in plan
+    assert "first empirical 2x2 estimate" in plan
+    assert "online estimate accepted from final field" in plan
     assert "does not expose a manual" in plan
 
 

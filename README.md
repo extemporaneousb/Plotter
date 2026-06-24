@@ -50,12 +50,14 @@ The normal development target is the fixed-camera drawing loop:
 4. Run the machine-video agreement probe before drawing any field box or grid. The app first measures
    cap jitter, then sends adaptive relative machine vectors on X, Y, and diagonals without requiring
    homing, axis-model trust, absolute machine-position clearance, or a preexisting visual field. The
-   loop increases move size only when the observed video signal is too weak, keeps sampling until the
-   learned 2x2 machine-to-video matrix reaches the precision target, and accepts swapped, rotated,
-   skewed, or sign-reversed axes when the matrix is stable.
-5. Define Drawing Field from the converged 2x2 machine-video transform. The app places a clear
-   200 mm x 150 mm field by projecting the learned machine `+X` and `+Y` basis vectors, with the
-   larger declared dimension on `+X`. There is no manual field-corner setup branch in the active
+   loop publishes the current usable 2x2 estimate as online state, uses that estimate to prioritize
+   later minibatches, keeps refining field precision, and accepts swapped, rotated, skewed, or
+   sign-reversed axes when the matrix is stable.
+5. Define Drawing Field from the accepted online 2x2 machine-video transform. The app places a
+   provisional 200 mm x 150 mm field by projecting the learned machine `+X` and `+Y` basis vectors,
+   with the larger declared dimension on `+X`. Strict corner precision remains visible as a quality
+   metric, but a stable online estimate is not discarded merely because the far field corner has not
+   reached the final precision target. There is no manual field-corner setup branch in the active
    setup flow; reset and rerun Machine-Video Agreement if the frame is wrong.
 6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
    relative model. Success for this milestone means the green cap can be moved predictably inside the
@@ -89,7 +91,7 @@ The operator sequence should stay explicit:
 | Step | Action | Evidence recorded | Does not prove |
 | --- | --- | --- | --- |
 | 1 | Confirm Green Cap | Camera-space cap point | Relative motion model or drawing authority. |
-| 2 | Machine-Video Agreement Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, corner precision, learned 2x2 machine-to-video basis | Cap-to-tip offset, ink binding, or drawing authority. |
+| 2 | Machine-Video Agreement Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-video basis | Cap-to-tip offset, ink binding, or drawing authority. |
 | 3 | Define Drawing Field | Visual-field corners, field registration id, field size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
 | 5 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
@@ -347,9 +349,9 @@ diagnostics, but homing state, `axis_model_trusted`, and absolute machine worksp
 Visual Field Setup authority. The learned 2x2 relative model may swap axes, reverse signs, rotate, or
 skew machine motion relative to the video field as long as it is stable, invertible, and validated by
 observed cap motion. The setup UI must not draw the 200 mm x 150 mm frame or millimeter grid until
-Machine-Video Agreement converges; after convergence, that same 2x2 transform seeds the field
-registration. Restart the bridge after model changes so the running process picks up the current
-transform.
+Machine-Video Agreement has accepted an online estimate; strict 2 mm field-corner precision remains
+visible as a refinement metric rather than the only way to use the estimate. Restart the bridge after
+model changes so the running process picks up the current transform.
 
 Real motion is still gated:
 

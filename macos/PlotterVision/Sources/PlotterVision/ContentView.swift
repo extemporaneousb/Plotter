@@ -5,7 +5,7 @@ private let machineVideoAgreementMinimumObservedNorm = 0.0015
 private let machineVideoAgreementInitialMoveMm = 6.0
 private let machineVideoAgreementMaxMoveMm = 40.0
 private let machineVideoAgreementMinSamples = 8
-private let machineVideoAgreementMaxSamples = 32
+private let machineVideoAgreementMaxSamples = 64
 private let machineVideoAgreementNoiseSampleCount = 18
 private let machineVideoAgreementSignalToNoise = 8.0
 private let visualMotionInitialProbeMoveMm = 8.0
@@ -270,7 +270,7 @@ struct ContentView: View {
     private var visualFieldOverlayTransform: PaperRegistrationSnapshot? {
         guard let registration = bridge.paperRegistrationSnapshot else { return nil }
         if workspace.setupWindowActive,
-           machineVideoAgreementModel?.isPrecisionConverged != true,
+           machineVideoAgreementModel?.isOnlineEstimateUsable != true,
            !visualMotionValidated {
             return nil
         }
@@ -885,7 +885,7 @@ struct ContentView: View {
 
         while samples.count < machineVideoAgreementMaxSamples {
             cycle += 1
-            let vectors = machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm)
+            let vectors = machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)
             for vector in vectors {
                 guard samples.count < machineVideoAgreementMaxSamples else { break }
                 guard let sample = await runMachineVideoAgreementMove(
@@ -905,10 +905,13 @@ struct ContentView: View {
                     observationNoiseNorm: noise.rmsNorm
                 ) {
                     bestModel = model
+                    if model.isOnlineEstimateUsable {
+                        machineVideoAgreementModel = model
+                    }
                 }
                 updateMachineVideoAgreementSummary(
                     samples: samples,
-                    status: bestModel?.isPrecisionConverged == true ? "AGREE" : "LEARN",
+                    status: machineVideoAgreementStatus(for: bestModel),
                     noise: noise,
                     minimumSignalNorm: minimumSignalNorm,
                     bestModel: bestModel
@@ -939,7 +942,11 @@ struct ContentView: View {
                 return model
             }
 
-            magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.45, magnitudeMm + 2.0))
+            if bestModel?.isOnlineEstimateUsable == true {
+                magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.65, magnitudeMm + 4.0))
+            } else {
+                magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.45, magnitudeMm + 2.0))
+            }
             calibrationStatusText = String(
                 format: "CAL machine-video agreement refining cycle %d samples %d next %.1fmm",
                 cycle,
@@ -954,6 +961,27 @@ struct ContentView: View {
             frameLearning.sampleCount = samples.count
             calibrationStatusText = "CAL machine-video agreement weak: basis solve failed"
             return nil
+        }
+        if model.isOnlineEstimateUsable {
+            machineVideoAgreementModel = model
+            frameLearning = FrameLearningState(
+                status: "ESTIMATE",
+                detail: String(
+                    format: "Online estimate accepted corner %.1fmm rms %.4f max %.4f cond %.1f samples %d",
+                    model.fieldCornerPrecisionMm,
+                    model.rmsResidualNorm,
+                    model.maxResidualNorm,
+                    model.conditionNumber,
+                    model.sampleCount
+                ),
+                sampleCount: model.sampleCount,
+                xPixelsPerMm: model.xBasisLengthNorm,
+                yPixelsPerMm: model.yBasisLengthNorm,
+                lastPins: bridge.machinePins
+            )
+            calibrationStatusText = "CAL machine-video online estimate accepted; seeding provisional 200x150 field"
+            recordMachineVideoAgreementModel(model, noise: noise, minimumSignalNorm: minimumSignalNorm)
+            return model
         }
         frameLearning = FrameLearningState(
             status: "WEAK",
@@ -1009,20 +1037,45 @@ struct ContentView: View {
     }
 
     private func machineVideoAgreementProbeVectors(
-        magnitudeMm: Double
+        magnitudeMm: Double,
+        model: MachineVideoAgreementModel? = nil
     ) -> [(label: String, xMm: Double, yMm: Double)] {
         let magnitude = min(machineVideoAgreementMaxMoveMm, max(1.0, magnitudeMm))
         let diagonal = magnitude / sqrt(2.0)
-        return [
+        let xMoves: [(label: String, xMm: Double, yMm: Double)] = [
             ("X+", magnitude, 0.0),
-            ("X-", -magnitude, 0.0),
+            ("X-", -magnitude, 0.0)
+        ]
+        let yMoves: [(label: String, xMm: Double, yMm: Double)] = [
             ("Y+", 0.0, magnitude),
-            ("Y-", 0.0, -magnitude),
+            ("Y-", 0.0, -magnitude)
+        ]
+        let bootstrapMoves: [(label: String, xMm: Double, yMm: Double)] = [
+            ("X+", magnitude, 0.0),
+            ("Y+", 0.0, magnitude),
+            ("X-", -magnitude, 0.0),
+            ("Y-", 0.0, -magnitude)
+        ]
+        let diagonalMoves: [(label: String, xMm: Double, yMm: Double)] = [
             ("D++", diagonal, diagonal),
             ("D--", -diagonal, -diagonal),
             ("D+-", diagonal, -diagonal),
             ("D-+", -diagonal, diagonal)
         ]
+        guard let model, model.isOnlineEstimateUsable else {
+            return bootstrapMoves
+        }
+        if model.xBasisLengthNorm <= model.yBasisLengthNorm {
+            return xMoves + yMoves + diagonalMoves
+        }
+        return yMoves + xMoves + diagonalMoves
+    }
+
+    private func machineVideoAgreementStatus(for model: MachineVideoAgreementModel?) -> String {
+        guard let model else { return "LEARN" }
+        if model.isPrecisionConverged { return "AGREE" }
+        if model.isOnlineEstimateUsable { return "ESTIMATE" }
+        return "LEARN"
     }
 
     @MainActor
@@ -1262,6 +1315,7 @@ struct ContentView: View {
                 "observation_noise_norm": noise.rmsNorm,
                 "minimum_signal_norm": minimumSignalNorm,
                 "field_corner_precision_mm": model.fieldCornerPrecisionMm,
+                "online_estimate_usable": model.isOnlineEstimateUsable,
                 "precision_converged": model.isPrecisionConverged
             ]
         )
@@ -2933,7 +2987,7 @@ struct ContentView: View {
     }
 
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
-        if frameLearning.status == "AGREE" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
+        if frameLearning.status == "AGREE" || frameLearning.status == "ESTIMATE" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
             return .done
         }
         if confirmedCapPoint != nil {
@@ -2957,12 +3011,14 @@ struct ContentView: View {
     private var wizardFiducialDetail: String {
         if bridge.hasPaperLock { return "200x150 field registered from agreement" }
         if machineVideoAgreementModel?.isPrecisionConverged == true { return "Registering 200x150 field from agreement" }
-        return "Hidden until agreement converges"
+        if machineVideoAgreementModel?.isOnlineEstimateUsable == true { return "Registering provisional 200x150 field from online estimate" }
+        return "Hidden until online agreement estimate is usable"
     }
 
     private var wizardFieldDetail: String {
         if bridge.hasPaperLock { return "Field locked from machine-video agreement" }
-        return "Waiting for converged machine-video agreement"
+        if machineVideoAgreementModel?.isOnlineEstimateUsable == true { return "Waiting for field registration from online estimate" }
+        return "Waiting for usable machine-video agreement"
     }
 
     private var wizardGreenCapDetail: String {
@@ -3019,9 +3075,10 @@ struct ContentView: View {
         }
         if let model = machineVideoAgreementModel, model.isUsable {
             return String(
-                format: "Agreement ready X %.4f Y %.4f",
+                format: "Online agreement X %.4f Y %.4f corner %.1fmm",
                 model.xBasisLengthNorm,
-                model.yBasisLengthNorm
+                model.yBasisLengthNorm,
+                model.fieldCornerPrecisionMm
             )
         }
         return "Run machine-video agreement first"
@@ -3035,7 +3092,7 @@ struct ContentView: View {
         }
         if frameLearning.status != "MEASURED" && !visualMotionValidated {
             if !bridge.hasPaperLock {
-                return "Run machine-video agreement. The field box is intentionally hidden until +X/+Y are learned from movement."
+                return "Run machine-video agreement. The field box is hidden until the online +X/+Y estimate is usable."
             }
             return "Run non-homed relative motion calibration only when the nearby path is clear."
         }
@@ -3285,8 +3342,12 @@ struct ContentView: View {
             )
             StatusLamp(
                 title: "MODEL",
-                value: machineVideoAgreementModel?.isPrecisionConverged == true ? "2X2" : "--",
-                color: machineVideoAgreementModel?.isPrecisionConverged == true ? .green : .white.opacity(0.45),
+                value: machineVideoAgreementModel?.isPrecisionConverged == true
+                    ? "2X2"
+                    : (machineVideoAgreementModel?.isOnlineEstimateUsable == true ? "EST" : "--"),
+                color: machineVideoAgreementModel?.isPrecisionConverged == true
+                    ? .green
+                    : (machineVideoAgreementModel?.isOnlineEstimateUsable == true ? .yellow : .white.opacity(0.45)),
                 help: wizardFiducialDetail
             )
             StatusLamp(

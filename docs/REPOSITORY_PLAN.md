@@ -81,14 +81,15 @@ The fixed-camera workflow is:
 2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
 4. Run Machine-Video Agreement from the current cap location before drawing any field box or grid.
-   Calibration measures cap jitter, samples adaptive relative X/Y/diagonal machine vectors, and solves
-   a 2x2 machine-to-video transform without requiring homing, axis-model trust, absolute `MPos`
-   clearance, a preexisting field lock, or machine workspace proof. The loop stops on precision
-   convergence rather than a fixed four-move script.
-5. Define Drawing Field from the converged camera/video basis. The seeded field uses the learned
-   2x2 transform to place a 200 mm x 150 mm frame with the longer dimension on visual `+X`. The
-   active setup UI does not expose a manual field-corner or stored-field reuse branch; reset and rerun
-   Machine-Video Agreement if the seeded frame is wrong.
+   Calibration measures cap jitter, runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to create the
+   first empirical 2x2 estimate, then uses the online estimate to choose later X/Y/diagonal vectors
+   without requiring homing, axis-model trust, absolute `MPos` clearance, a preexisting field lock, or
+   machine workspace proof. The loop distinguishes online estimate accepted from final field
+   precision converged.
+5. Define Drawing Field from the accepted online camera/video basis. The seeded field uses the learned
+   2x2 transform to place a provisional 200 mm x 150 mm frame with the longer dimension on visual `+X`.
+   The active setup UI does not expose a manual field-corner or stored-field reuse branch; reset and
+   rerun Machine-Video Agreement if the seeded frame is wrong.
 6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
    swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.

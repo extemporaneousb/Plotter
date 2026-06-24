@@ -920,6 +920,14 @@ struct MachineVideoAgreementModel: Equatable {
             && conditionNumber <= 30.0
     }
 
+    var isOnlineEstimateUsable: Bool {
+        isUsable
+            && sampleCount >= 8
+            && fieldCornerPrecisionMm <= 40.0
+            && maxResidualNorm <= max(0.006, observationNoiseNorm * 10.0)
+            && conditionNumber <= 30.0
+    }
+
     var isUsable: Bool {
         abs(determinant) > 0.000_000_2
             && xBasisLengthNorm > 0.000_2
