@@ -2991,7 +2991,7 @@ struct ContentView: View {
 
     private var wizardFiducialStatus: CalibrationWizardStepStatus {
         if bridge.hasPaperLock { return .done }
-        if machineVideoAgreementModel?.isUsable == true { return .active }
+        if machineVideoAgreementModel != nil { return .active }
         return .pending
     }
 

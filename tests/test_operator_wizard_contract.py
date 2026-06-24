@@ -349,6 +349,8 @@ def test_old_binding_runner_is_not_active_setup() -> None:
         "private var topStatusLights",
         1,
     )[0]
+    assert "if machineVideoAgreementModel != nil { return .active }" in active_setup
+    assert "machineVideoAgreementModel?.isUsable == true" not in active_setup
     stale_terms = [
         "Run Drawing Calibration",
         "runWizardDrawingCalibration",
