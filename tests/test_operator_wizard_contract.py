@@ -460,6 +460,9 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "observedDistanceNorm / max(sample.commandDistanceMm" in content
     assert "cameraDelta(forMachineX" in models
     assert "bridge.learningJog(" in content
+    learning_jog = model.split("func learningJog", 1)[1].split("func observeVisualCapForProbe", 1)[0]
+    assert "bypassWorkspaceProjection: true" in learning_jog
+    assert "manualJogWorkspaceOverride" not in learning_jog
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
     setup_gate = model.split("private func setupRelativeMotionBlockReason", 1)[1].split(

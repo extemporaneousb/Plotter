@@ -1921,7 +1921,8 @@ final class PlotterBridgeModel: ObservableObject {
                 MachineJogRequest(
                     axis: axis,
                     distanceMm: distanceMm,
-                    feedMmMin: feedMmMin
+                    feedMmMin: feedMmMin,
+                    bypassWorkspaceProjection: true
                 )
             )
             if let machineStatus = response.machineStatus {
