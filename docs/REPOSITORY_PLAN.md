@@ -58,6 +58,10 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
 - `plotter_vision.machine` owns safety validation, machine configuration, homing/pen/settings
   guards, and trust flags such as `homing_trusted` and `axis_model_trusted`. Those flags are
   diagnostics for Visual Field Setup, not setup authority.
+- Manual Machine-panel jogs may carry an explicit Boundary Override that bypasses only the live
+  projected-workspace check for operator-owned jog arrows. It must not bypass connectivity, arming,
+  max jog/feed limits, busy/alarm guards, pen/drawing gates, or setup validation, and it must not
+  promote calibration or axis trust.
 - `plotter_vision.calibration` owns the active Visual Field Setup contract: user-defined field
   registration, green-cap localization, and the learned 2x2 relative motion model from
   machine-relative millimeters into field millimeters.

@@ -677,10 +677,31 @@ struct MachineJogRequest: Encodable {
     let axis: String
     let distanceMm: Double
     let feedMmMin: Double
-    let requestId: String? = nil
-    let traceId: String? = nil
-    let spanId: String? = nil
-    let parentSpanId: String? = nil
+    let bypassWorkspaceProjection: Bool
+    let requestId: String?
+    let traceId: String?
+    let spanId: String?
+    let parentSpanId: String?
+
+    init(
+        axis: String,
+        distanceMm: Double,
+        feedMmMin: Double,
+        bypassWorkspaceProjection: Bool = false,
+        requestId: String? = nil,
+        traceId: String? = nil,
+        spanId: String? = nil,
+        parentSpanId: String? = nil
+    ) {
+        self.axis = axis
+        self.distanceMm = distanceMm
+        self.feedMmMin = feedMmMin
+        self.bypassWorkspaceProjection = bypassWorkspaceProjection
+        self.requestId = requestId
+        self.traceId = traceId
+        self.spanId = spanId
+        self.parentSpanId = parentSpanId
+    }
 }
 
 struct MachineRelativeMoveRequest: Encodable {

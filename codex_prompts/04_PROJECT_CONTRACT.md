@@ -35,6 +35,10 @@
 - Obsolete compatibility paths should be removed when no external caller exists. Keep setup surfaces
   named for their current bridge contract: visual field registration, green-cap observation, relative
   motion calibration, and validation.
+- Manual Machine-panel jogs may expose an explicit operator Boundary Override for stale projected
+  workspace bounds. That override is not calibration trust: it is limited to operator-requested jog
+  arrows and must not bypass bridge connectivity, live arming, max jog/feed limits, busy/alarm
+  guards, pen/drawing gates, or setup validation.
 
 ## Canonical fixed-camera flow
 

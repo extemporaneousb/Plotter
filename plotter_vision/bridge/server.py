@@ -763,6 +763,7 @@ class MachineJogRequest(MachineActionRequest):
     axis: str
     distance_mm: float
     feed_mm_min: float = 500.0
+    bypass_workspace_projection: bool = False
 
 
 class MachineRelativeMoveRequest(MachineActionRequest):
@@ -2767,6 +2768,7 @@ class PlotterBridge:
                 command_id=command_id,
                 planned_commands=planned_commands,
                 transcript_path=transcript_path,
+                bypass_workspace_projection=request.bypass_workspace_projection,
             )
         except Exception as exc:
             return self._machine_command_error(
@@ -3883,6 +3885,7 @@ class PlotterBridge:
         action: str,
         planned_commands: list[PlannedCommand],
         transcript_path: Path,
+        bypass_workspace_projection: bool = False,
     ) -> MachineStatusResponse:
         with self._machine_lock:
             self._set_active_command(command_id=command_id, action=action)
@@ -3892,6 +3895,7 @@ class PlotterBridge:
                     action=action,
                     planned_commands=planned_commands,
                     transcript_path=transcript_path,
+                    bypass_workspace_projection=bypass_workspace_projection,
                 )
             finally:
                 self._set_active_command(command_id=None, action=None)
@@ -3903,6 +3907,7 @@ class PlotterBridge:
         action: str,
         planned_commands: list[PlannedCommand],
         transcript_path: Path,
+        bypass_workspace_projection: bool = False,
     ) -> MachineStatusResponse:
         with self._make_controller(transcript_path=transcript_path) as controller:
             self._set_active_controller(controller)
@@ -3912,21 +3917,34 @@ class PlotterBridge:
                 initial_status = self._machine_status_from_report(initial_report, status="guard")
                 self._remember_machine_status(initial_status)
                 if action in {"adaptive_probe", "relative_move", "relative_mark", "jog"}:
-                    validate_projected_workspace_motion(
-                        start_mpos_mm=initial_status.mpos_mm,
-                        commands=[planned.command for planned in planned_commands],
-                        machine=self._load_machine_config(),
-                    )
-                    self.event_log.emit(
-                        "machine.motion_workspace_guard",
-                        command_id=command_id,
-                        status="accepted",
-                        payload={
-                            "action": action,
-                            "start_mpos_mm": initial_status.mpos_mm,
-                            "command_count": len(planned_commands),
-                        },
-                    )
+                    if bypass_workspace_projection and action == "jog":
+                        self.event_log.emit(
+                            "machine.motion_workspace_guard",
+                            command_id=command_id,
+                            status="bypassed",
+                            payload={
+                                "action": action,
+                                "start_mpos_mm": initial_status.mpos_mm,
+                                "command_count": len(planned_commands),
+                                "operator_override": True,
+                            },
+                        )
+                    else:
+                        validate_projected_workspace_motion(
+                            start_mpos_mm=initial_status.mpos_mm,
+                            commands=[planned.command for planned in planned_commands],
+                            machine=self._load_machine_config(),
+                        )
+                        self.event_log.emit(
+                            "machine.motion_workspace_guard",
+                            command_id=command_id,
+                            status="accepted",
+                            payload={
+                                "action": action,
+                                "start_mpos_mm": initial_status.mpos_mm,
+                                "command_count": len(planned_commands),
+                            },
+                        )
                 current_feed_mm_min: float | None = None
                 for planned in planned_commands:
                     self.event_log.emit(
@@ -4054,6 +4072,7 @@ class PlotterBridge:
         command_id: str,
         planned_commands: list[PlannedCommand],
         transcript_path: Path,
+        bypass_workspace_projection: bool = False,
     ) -> MachineCommandResponse:
         self.event_log.emit(
             "machine.action_started",
@@ -4063,6 +4082,7 @@ class PlotterBridge:
                 "action": action,
                 "dry_run": self.config.dry_run,
                 "command_count": len(planned_commands),
+                "bypass_workspace_projection": bypass_workspace_projection,
             },
         )
         if self.config.dry_run:
@@ -4097,6 +4117,7 @@ class PlotterBridge:
                 action=action,
                 planned_commands=planned_commands,
                 transcript_path=transcript_path,
+                bypass_workspace_projection=bypass_workspace_projection,
             )
             self.event_log.emit(
                 "machine.action_completed",

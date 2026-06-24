@@ -35,6 +35,11 @@ Implemented vertical slices now include:
 - a windowed operator UI with independent plotter/face camera toggles, Setup, Plotter Video, and
   Face Video panels, plus UI state surfaced in `/codex/snapshot`.
 
+The Machine panel also has an explicit Boundary Override for manual jog arrows. It bypasses the
+live projected-workspace guard when stale or untrusted `MPos`/workspace bounds would otherwise block
+operator-owned jogs, but it does not bypass bridge connectivity, live arming, feed/step limits,
+active-command locks, alarms, pen/drawing gates, or Visual Field Setup validation.
+
 ## Canonical Operator Flow
 
 The normal development target is the fixed-camera drawing loop:

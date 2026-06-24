@@ -77,6 +77,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var activeAction = ""
     @Published var manualStepMm = 1.0
     @Published var manualFeedMmMin = 1200.0
+    @Published var manualJogWorkspaceOverride = false
     @Published var machineMPosMm: [Double] = []
     @Published var machineWPosMm: [Double] = []
     @Published var operatorUIState: [String: Any] = [:]
@@ -327,7 +328,7 @@ final class PlotterBridgeModel: ObservableObject {
         var lines = [bridgeLifecycleStatusLine]
         lines.append("Controller: \(bridgeController)")
         lines.append("Motion: \(motionModeLabel)")
-        lines.append(motionGateMessage)
+        lines.append(manualMotionGateMessage)
         if let pid = bridgePid {
             lines.append("PID: \(pid)")
         }
@@ -459,6 +460,16 @@ final class PlotterBridgeModel: ObservableObject {
         if !machineAxisModelTrusted { return "Bridge-run drawing blocked: axis geometry not trusted" }
         if !machineHomingTrusted { return "Bridge-run drawing blocked: absolute position not trusted" }
         return "Live motion enabled"
+    }
+
+    var manualMotionGateMessage: String {
+        if let blockReason = liveMachineCommandBlockReason(allowBusy: false) {
+            return blockReason
+        }
+        if manualJogWorkspaceOverride {
+            return "Manual jog live: workspace projection override ON"
+        }
+        return "Manual jog live: workspace projection guard ON"
     }
 
     private func liveMachineCommandBlockReason(allowBusy: Bool = false) -> String? {
@@ -690,6 +701,8 @@ final class PlotterBridgeModel: ObservableObject {
                 "motion_mode": motionModeLabel,
                 "arm": armStatusLabel,
                 "motion_gate": motionGateMessage,
+                "manual_motion_gate": manualMotionGateMessage,
+                "manual_jog_workspace_override": manualJogWorkspaceOverride,
                 "draw_preflight": drawPreflightMessage,
                 "can_connect_hardware": canConnectHardware,
                 "can_arm_hardware": canArmHardware,
@@ -1844,15 +1857,30 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func jog(axis: String, distanceMm: Double) async {
-        await runMachineCommand(action: "jog") {
+        await runMachineCommand(action: manualJogWorkspaceOverride ? "jog override" : "jog") {
             try await client.jog(
                 MachineJogRequest(
                     axis: axis,
                     distanceMm: distanceMm,
-                    feedMmMin: manualFeedMmMin
+                    feedMmMin: manualFeedMmMin,
+                    bypassWorkspaceProjection: manualJogWorkspaceOverride
                 )
             )
         }
+    }
+
+    func setManualJogWorkspaceOverride(_ enabled: Bool) {
+        guard manualJogWorkspaceOverride != enabled else { return }
+        manualJogWorkspaceOverride = enabled
+        shortStatus = enabled ? "OVRD" : (isLiveMotionMode ? "LIVE" : shortStatus)
+        statusText = enabled
+            ? "Manual jog workspace projection override enabled"
+            : "Manual jog workspace projection override disabled"
+        diagnosticsEvent(
+            "manual_jog_workspace_override_changed",
+            ["enabled": enabled],
+            snapshot: true
+        )
     }
 
     func learningJog(axis: String, distanceMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {

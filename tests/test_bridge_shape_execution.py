@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -785,6 +786,57 @@ def test_bridge_dry_run_jog_validates_and_plans_commands(tmp_path: Path) -> None
     assert response.status == "completed"
     assert response.dry_run is True
     assert response.planned_commands == ["G21", "G91", "G94", "G1 F500", "G1 X2.5", "G90"]
+
+
+def test_bridge_live_manual_jog_override_bypasses_projected_workspace_guard(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
+
+    blocked = bridge.jog_machine(
+        MachineJogRequest(
+            axis="x",
+            distance_mm=-2.5,
+            feed_mm_min=500.0,
+            request_id="jog-blocked",
+        )
+    )
+
+    assert blocked.status == "failed"
+    assert blocked.error is not None
+    assert "Projected X position -2.500" in blocked.error
+
+    allowed = bridge.jog_machine(
+        MachineJogRequest(
+            axis="x",
+            distance_mm=-2.5,
+            feed_mm_min=500.0,
+            request_id="jog-override",
+            bypass_workspace_projection=True,
+        )
+    )
+
+    assert allowed.status == "completed"
+    assert allowed.dry_run is False
+    assert allowed.planned_commands == ["G21", "G91", "G94", "G1 F500", "G1 X-2.5", "G90"]
+    assert allowed.controller_transcript is not None
+    transcript = Path(allowed.controller_transcript).read_text(encoding="utf-8")
+    assert '"payload":"G1 X-2.5"' in transcript
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    bypass_events = [
+        event
+        for event in events
+        if event["event_type"] == "machine.motion_workspace_guard"
+        and event["command_id"] == "jog-override"
+    ]
+    assert bypass_events
+    assert bypass_events[-1]["status"] == "bypassed"
+    assert bypass_events[-1]["payload"]["operator_override"] is True
 
 
 def test_bridge_dry_run_relative_move_raises_pen_and_plans_xy_move(tmp_path: Path) -> None:

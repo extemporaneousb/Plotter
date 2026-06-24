@@ -274,6 +274,26 @@ def test_bridge_contract_requires_api_3_and_gates_build_mismatch() -> None:
     assert '"can_run_visual_relative_motion": canRunLiveRelativeMotionCommand' in model
 
 
+def test_machine_panel_has_explicit_manual_jog_boundary_override() -> None:
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    panel = _read(SWIFT_DIR / "MachineControlPanel.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
+
+    assert "@Published var manualJogWorkspaceOverride = false" in model
+    assert "var manualMotionGateMessage" in model
+    assert "manual_jog_workspace_override" in model
+    assert "func setManualJogWorkspaceOverride(_ enabled: Bool)" in model
+    assert "manual_jog_workspace_override_changed" in model
+    assert "bypassWorkspaceProjection: manualJogWorkspaceOverride" in model
+    assert "bypassWorkspaceProjection: Bool = false" in client
+    assert "Boundary Override" in panel
+    assert "JOG WORKSPACE GUARD OFF" in panel
+    assert "bridge.manualMotionGateMessage" in panel
+    assert "bridge.motionGateMessage" not in panel
+    assert "Manual Machine-panel jogs may expose an explicit operator Boundary Override" in contract
+
+
 def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")

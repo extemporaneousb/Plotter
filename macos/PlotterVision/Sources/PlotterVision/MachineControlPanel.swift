@@ -8,15 +8,16 @@ struct MachineControlPanel: View {
             header
             statusGrid
             hardwareControls
-            Text(bridge.motionGateMessage)
+            Text(bridge.manualMotionGateMessage)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(bridge.isLiveMotionMode ? .green.opacity(0.86) : .orange.opacity(0.92))
+                .foregroundStyle(manualMotionGateColor)
                 .lineLimit(2)
 
             Divider()
                 .overlay(Color.white.opacity(0.16))
 
             jogPad
+            manualJogOverrideControl
             stepAndFeed
 
             Divider()
@@ -180,6 +181,30 @@ struct MachineControlPanel: View {
         }
     }
 
+    private var manualJogOverrideControl: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Toggle(isOn: Binding(
+                get: { bridge.manualJogWorkspaceOverride },
+                set: { bridge.setManualJogWorkspaceOverride($0) }
+            )) {
+                Label("Unsafe Boundary Override", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(bridge.manualJogWorkspaceOverride ? .orange.opacity(0.95) : .white.opacity(0.76))
+            }
+            .toggleStyle(.checkbox)
+            .disabled(bridge.isRunning || bridge.isMachineBusy)
+            .help("Bypass projected workspace bounds for Machine-panel jog arrows only.")
+
+            if bridge.manualJogWorkspaceOverride {
+                Text("UNSAFE JOG WORKSPACE GUARD OFF")
+                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(.orange.opacity(0.95))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
     private var commandRows: some View {
         VStack(spacing: 9) {
             HStack(spacing: 9) {
@@ -239,6 +264,11 @@ struct MachineControlPanel: View {
 
     private var resumeDisabled: Bool {
         bridge.isRunning || !bridge.isLiveMotionMode || bridge.isMachineAlarm || !bridge.machineState.hasPrefix("Hold")
+    }
+
+    private var manualMotionGateColor: Color {
+        if bridge.manualJogWorkspaceOverride { return .orange.opacity(0.95) }
+        return bridge.isLiveMotionMode ? .green.opacity(0.86) : .orange.opacity(0.92)
     }
 
     private func jogButton(systemName: String, axis: String, distance: Double) -> some View {
