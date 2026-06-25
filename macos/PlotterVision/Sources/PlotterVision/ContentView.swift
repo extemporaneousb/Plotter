@@ -25,6 +25,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var showLiveVideo = true
     @State private var didLoadSavedFrameState = false
+    @State private var fieldRelockTask: Task<Void, Never>?
 
     init(bridge: PlotterBridgeModel, workspace: OperatorWorkspaceState) {
         self.bridge = bridge
@@ -211,6 +212,12 @@ struct ContentView: View {
                 focusPlotterVideoOnPaper(source: "paper_registration_changed")
             }
         }
+        .onChange(of: workspace.visualFieldWidthMm) { _, _ in
+            scheduleEditableVisualFieldRelock(source: "field_width_changed")
+        }
+        .onChange(of: workspace.visualFieldHeightMm) { _, _ in
+            scheduleEditableVisualFieldRelock(source: "field_height_changed")
+        }
         .onChange(of: bridge.statusText) { _, status in
             workspace.appendOperatorLog(status, source: "Bridge", level: logLevel(for: status))
         }
@@ -326,6 +333,16 @@ struct ContentView: View {
                     onMark: recordConfirmedCap
                 )
             }
+
+            VisualFieldEditLayer(
+                settings: plotterViewport,
+                videoSize: plotterCamera.videoSize,
+                corners: editableVisualFieldCorners,
+                fieldWidthMm: desiredVisualFieldWidthMm,
+                fieldHeightMm: desiredVisualFieldHeightMm,
+                isActive: canEditVisualFieldBox,
+                onUpdate: updateEditableVisualFieldCorners
+            )
 
             CameraPaneBadge(camera: plotterCamera)
         }
@@ -679,6 +696,38 @@ struct ContentView: View {
             return
         }
 
+        if bridge.hasPaperLock, let agreement = machineVideoAgreementModel {
+            visualMotionModel = nil
+            visualMotionSamples = []
+            _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
+            manualPenMode = false
+            manualFiducialMode = false
+            manualCapColorMode = false
+            plotterCamera.showGrid = true
+
+            await bridge.refreshMachineStatus()
+            calibrationStatusText = "CAL motion calibration using adjusted field box"
+            frameLearning = FrameLearningState(
+                status: "LEARN",
+                detail: "Sampling motion in adjusted visual field",
+                sampleCount: 0,
+                xPixelsPerMm: agreement.xBasisLengthNorm,
+                yPixelsPerMm: agreement.yBasisLengthNorm,
+                lastPins: bridge.machinePins
+            )
+
+            await bridge.penUpMachine()
+            guard !bridge.isMachineAlarm else {
+                frameLearning.status = "STOP"
+                frameLearning.detail = "Pen-up failed or machine alarm"
+                calibrationStatusText = "CAL motion calibration stopped: pen-up failed"
+                return
+            }
+
+            await runFieldMotionCalibration(using: agreement)
+            return
+        }
+
         machineVideoAgreementModel = nil
         machineVideoAgreementSamples = []
         visualMotionModel = nil
@@ -719,6 +768,11 @@ struct ContentView: View {
             return
         }
 
+        await runFieldMotionCalibration(using: agreement)
+    }
+
+    @MainActor
+    private func runFieldMotionCalibration(using agreement: MachineVideoAgreementModel) async {
         guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
             calibrationStatusText = "CAL motion calibration blocked: cap is not mapped into the field"
             frameLearning = FrameLearningState(
@@ -1389,6 +1443,26 @@ struct ContentView: View {
         String(format: "%.0fx%.0f", desiredVisualFieldWidthMm, desiredVisualFieldHeightMm)
     }
 
+    private var editableVisualFieldCorners: [ManualFiducialPoint] {
+        let ordered = orderedManualFieldCorners(manualFiducials)
+        if ordered.count == 4 { return ordered }
+        if let registration = bridge.paperRegistrationSnapshot,
+           let cameraCorners = visualFieldCameraCorners(from: registration) {
+            return manualFieldPoints(cameraCorners: cameraCorners)
+        }
+        return []
+    }
+
+    private var canEditVisualFieldBox: Bool {
+        workspace.setupWindowActive
+            && editableVisualFieldCorners.count == 4
+            && !manualPenMode
+            && !manualCapColorMode
+            && !bridge.isCalibrating
+            && !bridge.isRunning
+            && !bridge.isMachineBusy
+    }
+
     private func seededFieldCorners(
         from model: MachineVideoAgreementModel,
         center: CGPoint,
@@ -1474,6 +1548,101 @@ struct ContentView: View {
                 cameraPoint: cameraPoint
             )
         }
+    }
+
+    private func orderedManualFieldCorners(_ corners: [ManualFiducialPoint]) -> [ManualFiducialPoint] {
+        Array(corners.sorted { $0.id < $1.id }.prefix(4))
+    }
+
+    @MainActor
+    private func updateEditableVisualFieldCorners(_ corners: [ManualFiducialPoint], commit: Bool) {
+        let ordered = orderedManualFieldCorners(corners)
+        guard ordered.count == 4 else { return }
+        manualFiducials = ordered
+        if commit {
+            scheduleEditableVisualFieldRelock(source: "field_box_drag_released", delayNanoseconds: 0)
+        }
+    }
+
+    private func scheduleEditableVisualFieldRelock(
+        source: String,
+        delayNanoseconds: UInt64 = 220_000_000
+    ) {
+        guard workspace.setupWindowActive, editableVisualFieldCorners.count == 4 else { return }
+        fieldRelockTask?.cancel()
+        let corners = editableVisualFieldCorners
+        let widthMm = desiredVisualFieldWidthMm
+        let heightMm = desiredVisualFieldHeightMm
+        fieldRelockTask = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+            guard !Task.isCancelled else { return }
+            await relockEditableVisualField(
+                corners: corners,
+                fieldWidthMm: widthMm,
+                fieldHeightMm: heightMm,
+                source: source
+            )
+        }
+    }
+
+    @MainActor
+    private func relockEditableVisualField(
+        corners: [ManualFiducialPoint],
+        fieldWidthMm: Double,
+        fieldHeightMm: Double,
+        source: String
+    ) async {
+        let ordered = orderedManualFieldCorners(corners)
+        guard ordered.count == 4 else { return }
+
+        visualMotionModel = nil
+        visualMotionSamples = []
+        if frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATED" {
+            frameLearning = FrameLearningState(
+                status: "AGREE",
+                detail: "Field edited; run motion calibration against the adjusted field",
+                sampleCount: machineVideoAgreementSamples.count,
+                xPixelsPerMm: machineVideoAgreementModel?.xBasisLengthNorm ?? frameLearning.xPixelsPerMm,
+                yPixelsPerMm: machineVideoAgreementModel?.yBasisLengthNorm ?? frameLearning.yPixelsPerMm,
+                lastPins: bridge.machinePins
+            )
+        }
+
+        manualFiducials = ordered
+        plotterCamera.showGrid = true
+        calibrationStatusText = "FIELD re-locking adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) box"
+        guard let response = await bridge.registerPaperHomography(
+            fiducials: ordered,
+            paperWidthMm: fieldWidthMm,
+            paperHeightMm: fieldHeightMm
+        ), response.registration != nil else {
+            frameLearning.status = "BLOCK"
+            frameLearning.detail = bridge.statusText.isEmpty ? "Adjusted field registration failed" : bridge.statusText
+            calibrationStatusText = "FIELD edit blocked: \(frameLearning.detail)"
+            return
+        }
+
+        if let confirmedCapPoint {
+            self.confirmedCapPoint = ConfirmedCapPoint(
+                point: confirmedCapPoint.point,
+                cameraPoint: confirmedCapPoint.cameraPoint,
+                paperMm: bridge.paperPointMm(cameraPoint: confirmedCapPoint.cameraPoint)
+            )
+        }
+
+        calibrationStatusText = "FIELD adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) box locked"
+        bridge.recordOperatorEvent(
+            "field_adjusted_from_video_box",
+            details: [
+                "source": source,
+                "field_width_mm": fieldWidthMm,
+                "field_height_mm": fieldHeightMm,
+                "corner_count": ordered.count,
+                "paper_registration_id": bridge.paperRegistrationSnapshot?.registrationId ?? ""
+            ]
+        )
     }
 
     @MainActor
@@ -3042,13 +3211,13 @@ struct ContentView: View {
     }
 
     private var wizardFiducialDetail: String {
-        if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) registered from current estimate" }
+        if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) locked; drag/resize in video to re-lock" }
         if machineVideoAgreementModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
         return "Hidden until first machine-video estimate exists"
     }
 
     private var wizardFieldDetail: String {
-        if bridge.hasPaperLock { return "Field locked from current machine-video estimate" }
+        if bridge.hasPaperLock { return "Field locked; video box remains editable while setup is open" }
         if machineVideoAgreementModel != nil { return "Waiting for field registration from current estimate" }
         return "Waiting for first machine-video estimate"
     }
@@ -3126,7 +3295,7 @@ struct ContentView: View {
             if !bridge.hasPaperLock {
                 return "Run machine-video agreement. The field box is hidden until the online +X/+Y estimate is usable."
             }
-            return "Run non-homed relative motion calibration only when the nearby path is clear."
+            return "Drag or resize the field box if needed, then run non-homed relative motion calibration in that field."
         }
         if visualMotionValidated {
             return "Motion calibration is validated for green-cap movement inside the field."
@@ -3143,7 +3312,11 @@ struct ContentView: View {
         }
         if frameLearning.status == "VALIDATE" { return "Validating Motion" }
         if visualMotionValidated { return "Motion Validated" }
-        if frameLearning.status != "MEASURED" { return "Run Machine-Video Probe" }
+        if frameLearning.status != "MEASURED" {
+            return bridge.hasPaperLock && machineVideoAgreementModel != nil
+                ? "Run Motion Calibration"
+                : "Run Machine-Video Probe"
+        }
         if frameLearning.status == "MEASURED" { return "Validate Motion" }
         return "Blocked"
     }
@@ -3204,7 +3377,9 @@ struct ContentView: View {
                 calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
                 return
             }
-            calibrationStatusText = "FIELD machine-video agreement requested"
+            calibrationStatusText = bridge.hasPaperLock && machineVideoAgreementModel != nil
+                ? "FIELD adjusted-box motion calibration requested"
+                : "FIELD machine-video agreement requested"
             Task {
                 await runFrameLearning()
             }

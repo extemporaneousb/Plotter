@@ -198,6 +198,198 @@ struct ManualPenClickLayer: View {
     }
 }
 
+struct VisualFieldEditLayer: View {
+    let settings: PlotterViewportSettings
+    let videoSize: CGSize
+    let corners: [ManualFiducialPoint]
+    let fieldWidthMm: Double
+    let fieldHeightMm: Double
+    let isActive: Bool
+    let onUpdate: ([ManualFiducialPoint], Bool) -> Void
+
+    @State private var dragStartCorners: [ManualFiducialPoint]?
+
+    private var orderedCorners: [ManualFiducialPoint] {
+        Array(corners.sorted { $0.id < $1.id }.prefix(4))
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            if isActive, orderedCorners.count == 4 {
+                let viewCorners = orderedCorners.map {
+                    plotterViewportPointFromCameraNorm(
+                        $0.cameraPoint,
+                        viewSize: geometry.size,
+                        videoSize: videoSize,
+                        settings: settings
+                    )
+                }
+                ZStack {
+                    editableFieldPolygon(points: viewCorners)
+                        .fill(Color.cyan.opacity(0.001))
+                        .contentShape(editableFieldPolygon(points: viewCorners))
+                        .gesture(moveGesture(in: geometry.size))
+
+                    Canvas { context, _ in
+                        var path = editableFieldPolygon(points: viewCorners).path(in: .zero)
+                        path.closeSubpath()
+                        context.fill(path, with: .color(.cyan.opacity(0.10)))
+                        context.stroke(path, with: .color(.cyan.opacity(0.92)), lineWidth: 3.0)
+                        context.stroke(path, with: .color(.black.opacity(0.75)), lineWidth: 1.0)
+
+                        let label = Text(String(format: "FIELD %.0fx%.0f mm  DRAG/RESIZE; RELEASE RE-LOCKS", fieldWidthMm, fieldHeightMm))
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.cyan.opacity(0.96))
+                        if let topLeft = viewCorners.min(by: { $0.y < $1.y }) {
+                            context.draw(
+                                label,
+                                at: CGPoint(x: topLeft.x + 8, y: max(18, topLeft.y - 16)),
+                                anchor: .leading
+                            )
+                        }
+                    }
+                    .allowsHitTesting(false)
+
+                    ForEach(Array(viewCorners.enumerated()), id: \.offset) { index, point in
+                        Circle()
+                            .fill(Color.black.opacity(0.68))
+                            .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
+                            .overlay(Circle().fill(Color.white.opacity(0.92)).frame(width: 6, height: 6))
+                            .frame(width: 26, height: 26)
+                            .position(point)
+                            .contentShape(Circle())
+                            .gesture(cornerGesture(index: index, in: geometry.size))
+                            .help("Drag field corner \(index + 1) and release to re-lock")
+                    }
+                }
+            }
+        }
+    }
+
+    private func editableFieldPolygon(points: [CGPoint]) -> VisualFieldEditPolygonShape {
+        VisualFieldEditPolygonShape(points: points)
+    }
+
+    private func moveGesture(in viewSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let base = dragStartCorners ?? orderedCorners
+                dragStartCorners = base
+                let start = plotterCameraNormFromViewPoint(
+                    value.startLocation,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                let current = plotterCameraNormFromViewPoint(
+                    value.location,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                let dx = current.x - start.x
+                let dy = current.y - start.y
+                onUpdate(
+                    base.map {
+                        updatedFieldPoint(
+                            $0,
+                            cameraPoint: CGPoint(x: $0.cameraPoint.x + dx, y: $0.cameraPoint.y + dy)
+                        )
+                    },
+                    false
+                )
+            }
+            .onEnded { value in
+                let base = dragStartCorners ?? orderedCorners
+                dragStartCorners = nil
+                let start = plotterCameraNormFromViewPoint(
+                    value.startLocation,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                let current = plotterCameraNormFromViewPoint(
+                    value.location,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                let dx = current.x - start.x
+                let dy = current.y - start.y
+                onUpdate(
+                    base.map {
+                        updatedFieldPoint(
+                            $0,
+                            cameraPoint: CGPoint(x: $0.cameraPoint.x + dx, y: $0.cameraPoint.y + dy)
+                        )
+                    },
+                    true
+                )
+            }
+    }
+
+    private func cornerGesture(index: Int, in viewSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let base = dragStartCorners ?? orderedCorners
+                dragStartCorners = base
+                onUpdate(updatedCorners(base, index: index, value: value.location, viewSize: viewSize), false)
+            }
+            .onEnded { value in
+                let base = dragStartCorners ?? orderedCorners
+                dragStartCorners = nil
+                onUpdate(updatedCorners(base, index: index, value: value.location, viewSize: viewSize), true)
+            }
+    }
+
+    private func updatedCorners(
+        _ base: [ManualFiducialPoint],
+        index: Int,
+        value: CGPoint,
+        viewSize: CGSize
+    ) -> [ManualFiducialPoint] {
+        let cameraPoint = plotterCameraNormFromViewPoint(
+            value,
+            viewSize: viewSize,
+            videoSize: videoSize,
+            settings: settings
+        )
+        return base.enumerated().map { offset, corner in
+            offset == index ? updatedFieldPoint(corner, cameraPoint: cameraPoint) : corner
+        }
+    }
+
+    private func updatedFieldPoint(
+        _ corner: ManualFiducialPoint,
+        cameraPoint: CGPoint
+    ) -> ManualFiducialPoint {
+        let clamped = CGPoint(
+            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
+            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
+        )
+        return ManualFiducialPoint(
+            id: corner.id,
+            point: CGPoint(x: clamped.x, y: 1.0 - clamped.y),
+            cameraPoint: clamped
+        )
+    }
+}
+
+struct VisualFieldEditPolygonShape: Shape {
+    let points: [CGPoint]
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct CameraPlaceholder: View {
     @ObservedObject var camera: CameraModel
 
@@ -571,6 +763,48 @@ func plotterCameraNormFromViewPoint(
     )
 }
 
+func plotterViewportPointFromCameraNorm(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    videoSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let displayRect = videoDisplayRect(
+        viewSize: viewSize,
+        videoSize: videoSize,
+        previewMode: settings.previewMode
+    )
+    let untransformed = CGPoint(
+        x: displayRect.minX + point.x * displayRect.width,
+        y: displayRect.minY + (1.0 - point.y) * displayRect.height
+    )
+    return plotterViewportPoint(untransformed, viewSize: viewSize, settings: settings)
+}
+
+func plotterViewportPoint(
+    _ point: CGPoint,
+    viewSize: CGSize,
+    settings: PlotterViewportSettings
+) -> CGPoint {
+    let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+    let radians = CGFloat(settings.rotationDegrees) * .pi / 180.0
+    let cosTheta = cos(radians)
+    let sinTheta = sin(radians)
+    let translated = CGPoint(x: point.x - center.x, y: point.y - center.y)
+    let rotated = CGPoint(
+        x: center.x + translated.x * cosTheta - translated.y * sinTheta,
+        y: center.y + translated.x * sinTheta + translated.y * cosTheta
+    )
+    let fitScale = rotationFitScale(size: viewSize, degrees: settings.rotationDegrees)
+    let zoomScale = plotterViewportZoomScale(settings)
+    let scaled = CGPoint(
+        x: center.x + (rotated.x - center.x) * fitScale * zoomScale,
+        y: center.y + (rotated.y - center.y) * fitScale * zoomScale
+    )
+    let zoomOffset = plotterViewportZoomOffset(size: viewSize, settings: settings)
+    return CGPoint(x: scaled.x + zoomOffset.width, y: scaled.y + zoomOffset.height)
+}
+
 func inversePlotterViewportPoint(
     _ point: CGPoint,
     viewSize: CGSize,
@@ -683,6 +917,39 @@ func clampDouble(_ value: Double, min minimum: Double, max maximum: Double) -> D
 
 func normalizedDistance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
     hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+}
+
+func visualFieldCameraCorners(from registration: PaperRegistrationSnapshot) -> [CGPoint]? {
+    let paperCorners = [
+        CGPoint(x: 0.0, y: 0.0),
+        CGPoint(x: 1.0, y: 0.0),
+        CGPoint(x: 1.0, y: 1.0),
+        CGPoint(x: 0.0, y: 1.0)
+    ]
+    let cameraCorners = paperCorners.compactMap {
+        visualFieldCameraPoint(paperNorm: $0, registration: registration)
+    }
+    return cameraCorners.count == 4 ? cameraCorners : nil
+}
+
+func visualFieldCameraPoint(
+    paperNorm: CGPoint,
+    registration: PaperRegistrationSnapshot
+) -> CGPoint? {
+    let coefficients = registration.paperToCamera.coefficients
+    guard coefficients.count == 9 else { return nil }
+    let x = Double(paperNorm.x)
+    let y = Double(paperNorm.y)
+    let denominator = coefficients[6] * x + coefficients[7] * y + coefficients[8]
+    guard abs(denominator) > 0.000_000_001 else { return nil }
+
+    let cameraX = (coefficients[0] * x + coefficients[1] * y + coefficients[2]) / denominator
+    let cameraY = (coefficients[3] * x + coefficients[4] * y + coefficients[5]) / denominator
+    guard cameraX.isFinite, cameraY.isFinite else { return nil }
+    return CGPoint(
+        x: clampDouble(cameraX, min: 0.0, max: 1.0),
+        y: clampDouble(cameraY, min: 0.0, max: 1.0)
+    )
 }
 
 struct PlotterVideoFilterModifier: ViewModifier {

@@ -88,9 +88,11 @@ The fixed-camera workflow is:
    residuals and field-corner precision are diagnostics.
 5. Define Drawing Field from the current camera/video basis. The seeded field uses the learned 2x2
    transform and the Setup panel's physical field width/height, defaulting to 200 mm x 150 mm, with
-   the longer dimension on visual `+X`. The active setup UI does not expose a manual field-corner,
-   stored-field reuse branch, or separate accepted-estimate gate; adjust the field dimensions, reset,
-   and rerun Machine-Video Agreement if the seeded frame is wrong.
+   the longer dimension on visual `+X`. The video field box remains operator-adjustable while setup
+   is open: drag the box to move it, drag corners to resize or correct perspective, and release to
+   re-lock field registration using the adjusted corners. Updating the declared dimensions re-locks
+   the current field box instead of forcing reset and reseed. There is still no separate
+   accepted-estimate gate behind the current online machine-video transform.
 6. Validate Motion by commanding field-target moves through the inverse relative model using setup
    relative jogs that bypass absolute workspace projection. The model may swap axes, reverse signs,
    rotate, or skew machine motion relative to the field if the 2x2 matrix

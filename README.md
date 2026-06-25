@@ -26,8 +26,8 @@ Implemented vertical slices now include:
 
 - passive controller interrogation and parsed snapshots;
 - guarded machine actions through typed bridge requests and responses;
-- Visual Field Setup from Machine-Video Agreement seeded drawing-field corners, with bridge-owned
-  registration artifacts;
+- Visual Field Setup from Machine-Video Agreement seeded drawing-field corners, with a draggable
+  and resizable video field box that re-locks bridge-owned registration artifacts;
 - non-homed relative motion calibration that maps machine-relative X/Y moves into visual-field
   millimeters;
 - preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
@@ -57,8 +57,9 @@ The normal development target is the fixed-camera drawing loop:
    field by projecting the learned machine `+X` and `+Y` basis vectors using the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm. Residuals and field-corner
    precision remain visible diagnostics, but they do not create a second accepted-estimate gate.
-   There is no manual field-corner setup branch in the active setup flow; adjust the field dimensions,
-   reset, and rerun Machine-Video Agreement if the frame is wrong.
+   The seeded video field box is operator-adjustable: drag the box to move it, drag corners to
+   resize or correct perspective, and release to re-lock field registration using the adjusted
+   corners. Changing the declared width/height also re-locks the current video field.
 6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
    relative model through setup relative jogs, not absolute workspace-projected drawing moves.
    Success for this milestone means the green cap can be moved predictably inside the user-defined
@@ -334,8 +335,9 @@ Interpretation rules:
 In the app, use Setup as the only setup path: green cap confirmation starts Machine-Video Agreement,
 Machine-Video Agreement seeds the operator-selected drawing field size, and Validate Motion proves
 that the cap can be sent to visual-field targets by applying the inverse relative motion model. The
-active setup UI does not expose a manual field-corner or stored-field reuse branch. Bridge previews for
-future drawing work still simulate command streams before execution. Capability-check examples remain
+active setup UI keeps the seeded video field box editable and re-locks adjusted corners through field
+registration. Bridge previews for future drawing work still simulate command streams before execution.
+Capability-check examples remain
 available as backend bridge tests, but the current operator setup flow stops at predictable cap motion.
 Stop the background preview bridge with:
 

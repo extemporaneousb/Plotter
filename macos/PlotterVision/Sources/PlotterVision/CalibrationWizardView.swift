@@ -93,15 +93,14 @@ struct CalibrationWizardView: View {
                 Text(String(format: "X %.0fmm", fieldWidthMm))
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
             }
-            .help(hasPaperLock ? "Reset setup before changing locked field width" : "Drawing field width in millimeters")
+            .help(hasPaperLock ? "Adjust width and re-lock the current video field" : "Drawing field width in millimeters")
             Stepper(value: fieldHeightBinding, in: 30...fieldHeightUpperBound, step: 5) {
                 Text(String(format: "Y %.0fmm", fieldHeightMm))
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
             }
-            .help(hasPaperLock ? "Reset setup before changing locked field height" : "Drawing field height in millimeters")
+            .help(hasPaperLock ? "Adjust height and re-lock the current video field" : "Drawing field height in millimeters")
         }
         .controlSize(.mini)
-        .disabled(hasPaperLock)
     }
 
     private var fieldHeightUpperBound: Double {

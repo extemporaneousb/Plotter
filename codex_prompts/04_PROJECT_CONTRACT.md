@@ -58,9 +58,10 @@ The app-first drawing flow is:
 5. Define Drawing Field from the current 2x2 transform. The seeded field uses the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm, with the larger declared dimension
    on visual `+X`. Residuals and field-corner precision remain quality diagnostics, but setup must
-   not discard the current transform behind a second accepted-estimate gate. The active setup UI must
-   not expose a manual field-corner or stored-field reuse branch; if the frame is wrong, adjust the
-   dimensions, reset, and rerun Machine-Video Agreement.
+   not discard the current transform behind a second accepted-estimate gate. The seeded video field
+   box is operator-adjustable: drag the box to move it, drag corners to resize or correct perspective,
+   and release to re-lock field registration using the adjusted corners. Changing field dimensions
+   re-locks the current video field instead of forcing reset and reseed.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    These validation moves are setup relative jogs and must not be blocked by absolute `MPos`
    workspace projection. Success for this milestone means predictable green-cap motion in the

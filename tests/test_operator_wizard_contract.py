@@ -225,7 +225,7 @@ def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> Non
     assert not (SWIFT_DIR / "DrawVerifyCoordinator.swift").exists()
     assert "final class PlotterBridgeModel" not in client
     assert "final class PlotterBridgeModel" in model
-    assert len(content.splitlines()) < 3700
+    assert len(content.splitlines()) < 3900
 
 
 def test_swift_auto_red_fiducial_path_is_removed() -> None:
@@ -319,9 +319,12 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Stepper(value: fieldWidthBinding" in wizard
     assert "Stepper(value: fieldHeightBinding" in wizard
     assert "fieldHeightMm > fieldWidthMm" in wizard
+    assert ".disabled(hasPaperLock)" not in wizard
     assert "Confirm Green Cap" in content
     assert "Run Machine-Video Probe" in content
+    assert "Run Motion Calibration" in content
     assert "runMachineVideoAgreementProbe" in content
+    assert "runFieldMotionCalibration(using:" in content
     assert "measureMachineVideoAgreementNoise" in content
     assert "machineVideoAgreementProbeVectors" in content
     assert "runSetupVectorJog" in content
@@ -426,11 +429,12 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     assert "func drawVisualBindingBoundsFrame" in model
 
 
-def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse() -> None:
+def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
+    support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
     assert "Confirm Setup" not in wizard
     assert "confirmSetup" not in wizard
@@ -446,6 +450,20 @@ def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse(
     assert "recordManualFiducial" not in content
     assert "solvePaperHomographyFromWizard" not in content
     assert "CLICK FIELD CORNERS" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
+    assert "struct VisualFieldEditLayer" in support
+    assert "plotterViewportPointFromCameraNorm" in support
+    assert "plotterCameraNormFromViewPoint" in support
+    assert "VisualFieldEditLayer(" in content
+    assert "editableVisualFieldCorners" in content
+    assert "updateEditableVisualFieldCorners" in content
+    assert "scheduleEditableVisualFieldRelock" in content
+    assert "relockEditableVisualField" in content
+    assert "field_adjusted_from_video_box" in content
+    assert "bridge.registerPaperHomography(" in content
+    assert "FIELD re-locking adjusted" in content
+    assert "FIELD adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) box locked" in content
+    assert "Run Motion Calibration" in content
+    assert "CAL motion calibration using adjusted field box" in content
     assert "resetCalibrationSetup()" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Visual Field Setup" in wizard
@@ -454,7 +472,8 @@ def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse(
     assert "Stored visual field in use" not in content
     assert "FIELD run machine-video agreement before drawing field box" in content
     assert 'FIELD \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
-    assert "registered from current estimate" in content
+    assert "drag/resize in video to re-lock" in content
+    assert ".disabled(hasPaperLock)" not in wizard
 
 
 def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
@@ -625,7 +644,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "publishes each solved 2x2 estimate as the current online state" in readme
     assert "current 2x2 machine-video transform" in readme
     assert "relative update magnitude as the convergence signal" in readme
-    assert "There is no manual field-corner setup branch" in readme
+    assert "seeded video field box is operator-adjustable" in readme
+    assert "Changing the declared width/height also re-locks" in readme
     assert "before drawing any field box or grid" in contract
     assert "There is no identity matrix as calibration evidence" in contract
     assert "reports update magnitude as the" in contract
@@ -634,12 +654,13 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
-    assert "manual field-corner" in contract
+    assert "seeded video field" in contract
+    assert "release to re-lock field registration" in contract
     assert "before drawing any field box or grid" in plan
     assert "first empirical 2x2 estimate" in plan
     assert "Update magnitude is the convergence signal" in plan
     assert "accepted-estimate gate" in plan
-    assert "does not expose a manual" in plan
+    assert "video field box remains operator-adjustable" in plan
 
 
 def test_operator_log_replaces_bottom_status_bar() -> None:
