@@ -866,6 +866,55 @@ def test_bridge_dry_run_relative_move_raises_pen_and_plans_xy_move(tmp_path: Pat
     ]
 
 
+def test_bridge_live_relative_move_override_bypasses_projected_workspace_guard(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
+
+    blocked = bridge.relative_move_machine(
+        MachineRelativeMoveRequest(
+            x_mm=-2.5,
+            y_mm=1.25,
+            feed_mm_min=300.0,
+            ensure_pen_up=False,
+            request_id="rel-blocked",
+        )
+    )
+
+    assert blocked.status == "failed"
+    assert blocked.error is not None
+    assert "Projected X position -2.500" in blocked.error
+
+    allowed = bridge.relative_move_machine(
+        MachineRelativeMoveRequest(
+            x_mm=-2.5,
+            y_mm=1.25,
+            feed_mm_min=300.0,
+            ensure_pen_up=False,
+            request_id="rel-override",
+            bypass_workspace_projection=True,
+        )
+    )
+
+    assert allowed.status == "completed"
+    assert allowed.dry_run is False
+    assert allowed.planned_commands == ["G21", "G91", "G94", "G1 F300", "G1 X-2.5 Y1.25", "G90"]
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    bypass_events = [
+        event
+        for event in events
+        if event["event_type"] == "machine.motion_workspace_guard"
+        and event["command_id"] == "rel-override"
+    ]
+    assert bypass_events
+    assert bypass_events[-1]["status"] == "bypassed"
+    assert bypass_events[-1]["payload"]["operator_override"] is True
+
+
 def test_bridge_relative_move_rejects_oversized_vector(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)

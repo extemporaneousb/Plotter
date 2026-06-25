@@ -11,7 +11,9 @@ private let machineVideoAgreementNoiseSampleCount = 18
 private let machineVideoAgreementSignalToNoise = 8.0
 private let visualMotionInitialProbeMoveMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
-private let visualMotionTravelFeedMmMin = 1200.0
+let visualFieldFrameInsetMm = visualCapSafeZoneMarginMm
+let visualFieldFrameMaxSegmentMm = 25.0
+let visualMotionTravelFeedMmMin = 1200.0
 private let visualCapReacquireStepXMm = 10.0
 private let visualCapReacquireMaxTotalXMm = 40.0
 private let visualCapReacquireMaxAttempts = 2
@@ -469,6 +471,8 @@ struct ContentView: View {
         switch command {
         case .primary:
             runCalibrationWizardPrimaryAction()
+        case .drawFrame:
+            drawValidatedFieldFrame()
         case .reset:
             resetCalibrationWizard()
         case .hide:
@@ -511,6 +515,9 @@ struct ContentView: View {
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
+            drawFrameVisible: wizardDrawFrameVisible,
+            drawFrameEnabled: wizardDrawFrameEnabled,
+            drawFrameDisabledReason: wizardDrawFrameDisabledReason,
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
@@ -2463,6 +2470,44 @@ struct ContentView: View {
         frameLearning.status == "VALIDATED" && visualMotionModel?.isUsable == true
     }
 
+    private var wizardDrawFrameVisible: Bool {
+        visualMotionValidated
+    }
+
+    private var wizardDrawFrameEnabled: Bool {
+        wizardDrawFrameVisible && wizardDrawFrameDisabledReason == nil
+    }
+
+    private var wizardDrawFrameDisabledReason: String? {
+        guard visualMotionValidated else { return "motion validation required" }
+        guard bridge.hasPaperLock else { return "visual field missing" }
+        guard visualMotionModel?.isUsable == true else { return "motion model not usable" }
+        guard currentGreenCapFieldMappedReady else { return greenCapFieldMappingDetail }
+        guard validatedFieldFrameCorners != nil else { return "field frame is too small" }
+        if !bridge.canRunSetupRelativeMotionCommand { return bridge.motionGateMessage }
+        if bridge.isMachineAlarm { return "machine alarm" }
+        if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
+        return nil
+    }
+
+    private var validatedFieldFrameCorners: [PaperPointMmSnapshot]? {
+        let width = bridge.visualFieldWidthMm
+        let height = bridge.visualFieldHeightMm
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+        let inset = min(visualFieldFrameInsetMm, max(0.0, min(width, height) / 4.0))
+        let minX = inset
+        let minY = inset
+        let maxX = width - inset
+        let maxY = height - inset
+        guard maxX - minX > 1.0, maxY - minY > 1.0 else { return nil }
+        return [
+            PaperPointMmSnapshot(x: minX, y: minY),
+            PaperPointMmSnapshot(x: maxX, y: minY),
+            PaperPointMmSnapshot(x: maxX, y: maxY),
+            PaperPointMmSnapshot(x: minX, y: maxY),
+        ]
+    }
+
     private var canValidateWizardMotion: Bool {
         bridge.hasPaperLock
             && confirmedCapPoint?.paperMm != nil
@@ -3165,6 +3210,9 @@ struct ContentView: View {
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
+            drawFrameVisible: wizardDrawFrameVisible,
+            drawFrameEnabled: wizardDrawFrameEnabled,
+            drawFrameDisabledReason: wizardDrawFrameDisabledReason,
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
@@ -3172,6 +3220,7 @@ struct ContentView: View {
             fieldWidthMm: $workspace.visualFieldWidthMm,
             fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,
+            drawFrame: drawValidatedFieldFrame,
             reset: resetCalibrationWizard,
             hide: hideCalibrationWizard
         )
@@ -3341,7 +3390,7 @@ struct ContentView: View {
             return "cap marker not confirmed"
         }
         if frameLearning.status == "VALIDATE" { return "motion validation running" }
-        if visualMotionValidated { return "motion already validated" }
+        if visualMotionValidated { return nil }
         if frameLearning.status != "MEASURED" {
             if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
             if bridge.isMachineAlarm { return "machine alarm" }
@@ -3368,7 +3417,7 @@ struct ContentView: View {
         }
 
         if visualMotionValidated {
-            calibrationStatusText = "FIELD motion already validated"
+            calibrationStatusText = "FIELD motion validated; draw frame is available"
             return
         }
 
@@ -3399,6 +3448,28 @@ struct ContentView: View {
         frameLearning.detail = "Moving cap to a field target"
         Task {
             await runWizardMotionValidation(model: model)
+        }
+    }
+
+    private func drawValidatedFieldFrame() {
+        guard wizardDrawFrameVisible else {
+            calibrationStatusText = "FIELD frame draw blocked: validate motion first"
+            return
+        }
+        guard wizardDrawFrameEnabled else {
+            calibrationStatusText = "FIELD frame draw blocked: \(wizardDrawFrameDisabledReason ?? "setup not ready")"
+            return
+        }
+        guard let model = visualMotionModel, model.isUsable else {
+            calibrationStatusText = "FIELD frame draw blocked: motion model not usable"
+            return
+        }
+        guard let corners = validatedFieldFrameCorners else {
+            calibrationStatusText = "FIELD frame draw blocked: field frame is too small"
+            return
+        }
+        Task {
+            await runValidatedFieldFrameDraw(model: model, corners: corners)
         }
     }
 

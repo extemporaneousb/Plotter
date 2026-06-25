@@ -71,6 +71,9 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "machine_video_agreement_valid" not in workspace
     assert "CalibrationWizardView(" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
+    assert "workspace.requestSetupCommand(.drawFrame)" in setup_panel
+    assert "drawFrameVisible" in workspace
+    assert "drawFrameEnabled" in workspace
     assert "fieldWidthMm: $workspace.visualFieldWidthMm" in setup_panel
     assert "fieldHeightMm: $workspace.visualFieldHeightMm" in setup_panel
     assert "Drawing Checkout" not in setup_panel
@@ -307,6 +310,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
+    frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
 
     assert "CalibrationWizardView(" in setup_panel
     assert "Visual Field Setup" in wizard
@@ -339,6 +343,12 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "currentGreenCapCameraObservation" in content
     assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
     assert "Validate Motion" in content
+    assert "Draw Frame" in wizard
+    assert "wizardDrawFrameVisible" in content
+    assert "wizardDrawFrameEnabled" in content
+    assert "drawValidatedFieldFrame" in content
+    assert "setupRelativeMove(" in frame_drawing
+    assert "motion already validated" not in content
     assert "runFrameLearning()" in content
     assert "runWizardMotionValidation" in content
     assert "approachVisualTarget(target, label: \"VALIDATE\", targetIndex: 1)" in content
@@ -540,6 +550,9 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "bridge.learningJog(" in content
     learning_jog = model.split("func learningJog", 1)[1].split("func observeVisualCapForProbe", 1)[0]
     assert "bypassWorkspaceProjection: true" in learning_jog
+    setup_relative_move = model.split("func setupRelativeMove", 1)[1].split("func observeVisualCapForProbe", 1)[0]
+    assert "bypassWorkspaceProjection: true" in setup_relative_move
+    assert "ensurePenUp: ensurePenUp" in setup_relative_move
     assert "manualJogWorkspaceOverride" not in learning_jog
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
@@ -785,8 +798,8 @@ def test_visual_cap_gates_use_stabilized_marker_observation() -> None:
     camera_model = _read(SWIFT_DIR / "CameraModel.swift")
 
     assert "@Published var stabilizedCarriageMarker" in camera_model
-    assert "carriageMarkerSmoothingWindow = 5" in camera_model
-    assert "carriageMarkerHoldMisses = 6" in camera_model
+    assert "carriageMarkerSmoothingWindow = 7" in camera_model
+    assert "carriageMarkerHoldMisses = 12" in camera_model
     assert "publishCarriageMarkerObservation(visionResult.carriageMarker)" in camera_model
     assert "averagedCarriageMarker(from: carriageMarkerHistory)" in camera_model
     assert "private var currentCarriageMarker" in content

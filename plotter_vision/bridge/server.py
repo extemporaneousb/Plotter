@@ -771,6 +771,7 @@ class MachineRelativeMoveRequest(MachineActionRequest):
     y_mm: float = 0.0
     feed_mm_min: float = 300.0
     ensure_pen_up: bool = True
+    bypass_workspace_projection: bool = False
 
 
 class MachineRelativeMarkRequest(MachineActionRequest):
@@ -2824,6 +2825,7 @@ class PlotterBridge:
                 command_id=command_id,
                 planned_commands=planned_commands,
                 transcript_path=transcript_path,
+                bypass_workspace_projection=request.bypass_workspace_projection,
             )
         except Exception as exc:
             return self._machine_command_error(
@@ -3916,7 +3918,7 @@ class PlotterBridge:
                 initial_status = self._machine_status_from_report(initial_report, status="guard")
                 self._remember_machine_status(initial_status)
                 if action in {"adaptive_probe", "relative_move", "relative_mark", "jog"}:
-                    if bypass_workspace_projection and action == "jog":
+                    if bypass_workspace_projection and action in {"jog", "relative_move"}:
                         self.event_log.emit(
                             "machine.motion_workspace_guard",
                             command_id=command_id,

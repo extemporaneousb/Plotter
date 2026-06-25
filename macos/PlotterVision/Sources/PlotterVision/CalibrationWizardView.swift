@@ -13,6 +13,9 @@ struct CalibrationWizardView: View {
     let primaryActionTitle: String
     let primaryActionEnabled: Bool
     let primaryActionDisabledReason: String?
+    let drawFrameVisible: Bool
+    let drawFrameEnabled: Bool
+    let drawFrameDisabledReason: String?
     let hasPaperLock: Bool
     let capStateLabel: String
     let isLiveMotionMode: Bool
@@ -20,6 +23,7 @@ struct CalibrationWizardView: View {
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
+    let drawFrame: () -> Void
     let reset: () -> Void
     let hide: () -> Void
 
@@ -140,6 +144,19 @@ struct CalibrationWizardView: View {
             .tint(primaryActionEnabled ? .cyan : .gray)
             .disabled(!primaryActionEnabled)
             .help(primaryActionDisabledReason ?? primaryActionTitle)
+
+            if drawFrameVisible {
+                Button(action: drawFrame) {
+                    Label(
+                        "Draw Frame",
+                        systemImage: drawFrameEnabled ? "rectangle" : "lock.fill"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(drawFrameEnabled ? .green : .gray)
+                .disabled(!drawFrameEnabled)
+                .help(drawFrameDisabledReason ?? "Draw the validated safe field frame")
+            }
 
             Button("Reset", action: reset)
                 .buttonStyle(.bordered)

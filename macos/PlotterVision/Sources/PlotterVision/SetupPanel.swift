@@ -19,6 +19,9 @@ struct SetupPanel: View {
                 primaryActionTitle: workspace.setupSnapshot.primaryActionTitle,
                 primaryActionEnabled: workspace.setupSnapshot.primaryActionEnabled,
                 primaryActionDisabledReason: workspace.setupSnapshot.primaryActionDisabledReason,
+                drawFrameVisible: workspace.setupSnapshot.drawFrameVisible,
+                drawFrameEnabled: workspace.setupSnapshot.drawFrameEnabled,
+                drawFrameDisabledReason: workspace.setupSnapshot.drawFrameDisabledReason,
                 hasPaperLock: workspace.setupSnapshot.hasPaperLock,
                 capStateLabel: workspace.setupSnapshot.capStateLabel,
                 isLiveMotionMode: workspace.setupSnapshot.isLiveMotionMode,
@@ -26,6 +29,7 @@ struct SetupPanel: View {
                 fieldWidthMm: $workspace.visualFieldWidthMm,
                 fieldHeightMm: $workspace.visualFieldHeightMm,
                 primaryAction: { workspace.requestSetupCommand(.primary) },
+                drawFrame: { workspace.requestSetupCommand(.drawFrame) },
                 reset: { workspace.requestSetupCommand(.reset) },
                 hide: { workspace.requestSetupCommand(.hide) }
             )

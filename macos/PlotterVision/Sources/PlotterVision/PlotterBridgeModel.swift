@@ -1963,6 +1963,88 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func setupRelativeMove(
+        xMm: Double,
+        yMm: Double,
+        feedMmMin: Double,
+        ensurePenUp: Bool,
+        actionLabel: String
+    ) async -> MachineCommandResponse? {
+        guard canRunSetupRelativeMotionCommand else {
+            blockSetupRelativeMotionCommand(
+                event: "setup_relative_move_blocked",
+                details: ["x_mm": xMm, "y_mm": yMm, "action_label": actionLabel]
+            )
+            return nil
+        }
+
+        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+            statusText = "Machine did not become ready for setup move"
+            return nil
+        }
+        guard !isMachineAlarm else {
+            statusText = "Machine alarm blocks setup move"
+            return nil
+        }
+
+        isRunning = true
+        isMachineBusy = true
+        activeAction = actionLabel
+        shortStatus = "RUN"
+        statusText = String(format: "Setup move X%.2f Y%.2f", xMm, yMm)
+        diagnosticsEvent(
+            "setup_relative_move_started",
+            [
+                "x_mm": xMm,
+                "y_mm": yMm,
+                "feed_mm_min": feedMmMin,
+                "ensure_pen_up": ensurePenUp,
+                "action_label": actionLabel
+            ],
+            snapshot: true
+        )
+        defer {
+            isRunning = false
+            activeAction = ""
+        }
+
+        do {
+            let response = try await client.relativeMove(
+                MachineRelativeMoveRequest(
+                    xMm: xMm,
+                    yMm: yMm,
+                    feedMmMin: feedMmMin,
+                    ensurePenUp: ensurePenUp,
+                    bypassWorkspaceProjection: true
+                )
+            )
+            if let machineStatus = response.machineStatus {
+                applyMachineStatus(machineStatus)
+            } else {
+                await refreshMachineStatus()
+            }
+            isOnline = true
+            isDryRun = response.dryRun
+            shortStatus = response.dryRun ? "DRY" : "DONE"
+            statusText = "\(response.action) \(response.status)"
+            await refreshMachineStatus()
+            diagnosticsEvent("setup_relative_move_completed", commandPayload(response), snapshot: true)
+            return response
+        } catch {
+            shortStatus = "ERR"
+            statusText = error.localizedDescription
+            machineStatus = error.localizedDescription
+            isMachineBusy = false
+            isMachineAlarm = error.localizedDescription.localizedCaseInsensitiveContains("alarm")
+            diagnosticsEvent(
+                "setup_relative_move_failed",
+                errorPayload(error).merging(["x_mm": xMm, "y_mm": yMm, "action_label": actionLabel]) { current, _ in current },
+                snapshot: true
+            )
+            return nil
+        }
+    }
+
     func observeVisualCapForProbe(
         cameraPoint: CGPoint,
         paperMm: PaperPointMmSnapshot,

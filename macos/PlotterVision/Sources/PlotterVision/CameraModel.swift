@@ -66,8 +66,8 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     private var fpsFrames = 0
     private var carriageMarkerHistory: [CarriageMarker] = []
     private var carriageMarkerMissCount = 0
-    private let carriageMarkerSmoothingWindow = 5
-    private let carriageMarkerHoldMisses = 6
+    private let carriageMarkerSmoothingWindow = 7
+    private let carriageMarkerHoldMisses = 12
     private let carriageMarkerJumpResetDistance = 0.10
 
     init(role: CameraRole = .plotter) {
