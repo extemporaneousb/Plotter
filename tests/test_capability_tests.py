@@ -85,7 +85,7 @@ def test_capability_run_requires_axis_model_or_validated_binding(tmp_path: Path)
 
     assert response.status == "failed"
     assert response.error is not None
-    assert "VisualPositionBinding" in response.error
+    assert "future ink binding" in response.error
     assert response.controller_transcript is None
 
 

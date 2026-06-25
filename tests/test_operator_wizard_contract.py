@@ -378,6 +378,29 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
     assert not (SWIFT_DIR / "VisualBindingMarkRunner.swift").exists()
+    assert "await bridge.refreshVisualBindingStatus()" not in content
+    assert "visual_binding_status_refreshed" in model
+    visual_binding_refresh = model.split("func refreshVisualBindingStatus", 1)[1].split(
+        "func observeVisualBindingPoint",
+        1,
+    )[0]
+    assert "snapshot: true" not in visual_binding_refresh
+    assert "snapshot: false" in visual_binding_refresh
+    exact_blockers = model.split("private func exactDiagnosticsBlockers", 1)[1].split(
+        "private func latestVisibleDiagnosticsError",
+        1,
+    )[0]
+    assert "binding_untrusted" not in exact_blockers
+    assert "visualBindingDetail" not in exact_blockers.split("if isFutureDrawingAction", 1)[0]
+    assert "drawPreflightMessage" not in exact_blockers.split("if isFutureDrawingAction", 1)[0]
+    motion_gate = model.split("var motionGateMessage", 1)[1].split(
+        "var manualMotionGateMessage",
+        1,
+    )[0]
+    assert "machineAxisModelTrusted" not in motion_gate
+    assert "machineHomingTrusted" not in motion_gate
+    assert "Bridge-run drawing blocked" not in motion_gate
+    assert "Live motion enabled" in motion_gate
     active_setup = content.split("private var wizardFiducialStatus", 1)[1].split(
         "private var topStatusLights",
         1,

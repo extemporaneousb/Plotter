@@ -412,8 +412,8 @@ final class PlotterBridgeModel: ObservableObject {
     var drawingAuthorityDetail: String {
         if isDryRun { return "dry-run bridge" }
         if machineAxisModelTrusted { return "axis model trusted" }
-        if visualBindingValid { return "VisualPositionBinding validated" }
-        return "axis model or VisualPositionBinding required"
+        if visualBindingValid { return "future ink binding validated" }
+        return "future drawing authority required"
     }
 
     var canRunAbsoluteDrawing: Bool {
@@ -456,9 +456,6 @@ final class PlotterBridgeModel: ObservableObject {
         if isDryRun { return "Motion blocked: dry-run bridge; arm hardware to enable live controls" }
         if isMachineAlarm { return "Motion blocked: machine alarm" }
         if isMachineBusy || isRunning { return "Motion busy: \(activeAction)" }
-        if !hasPaperLock { return "Bridge-run drawing blocked: visual field missing" }
-        if !machineAxisModelTrusted { return "Bridge-run drawing blocked: axis geometry not trusted" }
-        if !machineHomingTrusted { return "Bridge-run drawing blocked: absolute position not trusted" }
         return "Live motion enabled"
     }
 
@@ -615,7 +612,7 @@ final class PlotterBridgeModel: ObservableObject {
             "motion_mode": motionModeLabel,
             "arm": armStatusLabel,
             "motion_gate": motionGateMessage,
-            "draw_preflight": drawPreflightMessage
+            "future_drawing_preflight": drawPreflightMessage
         ]
     }
 
@@ -703,12 +700,12 @@ final class PlotterBridgeModel: ObservableObject {
                 "motion_gate": motionGateMessage,
                 "manual_motion_gate": manualMotionGateMessage,
                 "manual_jog_workspace_override": manualJogWorkspaceOverride,
-                "draw_preflight": drawPreflightMessage,
+                "future_drawing_preflight": drawPreflightMessage,
                 "can_connect_hardware": canConnectHardware,
                 "can_arm_hardware": canArmHardware,
                 "can_disarm_hardware": canDisarmHardware,
                 "can_run_absolute_drawing": canRunAbsoluteDrawing,
-                "can_run_visual_relative_motion": canRunLiveRelativeMotionCommand && !bindingMarkPreviewPoints.isEmpty
+                "can_run_visual_relative_motion": canRunLiveRelativeMotionCommand
             ]
         ]
     }
@@ -725,24 +722,34 @@ final class PlotterBridgeModel: ObservableObject {
         if hasLifecycleBuildMismatch { add("app_bridge_build_mismatch") }
         if isDryRun { add("bridge_dry_run") }
         if !hasPaperLock { add("paper_registration_missing") }
-        if !visualBindingValid { add("binding_untrusted") }
         if isMachineAlarm { add("machine_alarm") }
         if isMachineBusy || isRunning { add("machine_busy") }
         add(motionGateMessage)
-        add(drawPreflightMessage)
-        if !visualBindingDetail.isEmpty { add(visualBindingDetail) }
+        if isFutureDrawingAction {
+            add(drawPreflightMessage)
+            if !visualBindingDetail.isEmpty { add(visualBindingDetail) }
+        }
         if paperTransformStatus.contains("ERR") { add(paperTransformStatus) }
         return blockers
     }
 
     private func latestVisibleDiagnosticsError() -> String {
-        for value in [statusText, machineStatus, drawVerifyDetail, visualBindingDetail] {
+        for value in [statusText, machineStatus, drawVerifyDetail] {
             let lower = value.lowercased()
             if lower.contains("error") || lower.contains("failed") || lower.contains("blocked") || lower.contains("offline") {
                 return value
             }
         }
         return ""
+    }
+
+    private var isFutureDrawingAction: Bool {
+        let action = activeAction.lowercased()
+        return action.contains("draw")
+            || action.contains("binding")
+            || action.contains("portrait")
+            || action.contains("image")
+            || action.contains("shape")
     }
 
     private static func blockerId(_ value: String) -> String {
@@ -2606,13 +2613,13 @@ final class PlotterBridgeModel: ObservableObject {
                     "validation_status": response.binding?.validationStatus ?? "",
                     "valid": visualBindingValid
                 ],
-                snapshot: true
+                snapshot: false
             )
         } catch {
             visualBindingStatus = "BIND ERR"
             visualBindingDetail = error.localizedDescription
             visualBindingValid = false
-            diagnosticsEvent("visual_binding_status_failed", errorPayload(error), snapshot: true)
+            diagnosticsEvent("visual_binding_status_failed", errorPayload(error), snapshot: false)
         }
     }
 

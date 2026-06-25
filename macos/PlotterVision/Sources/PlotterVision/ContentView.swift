@@ -167,7 +167,6 @@ struct ContentView: View {
             await bridge.refreshHealth()
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
-            await bridge.refreshVisualBindingStatus()
             var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -179,9 +178,6 @@ struct ContentView: View {
                 await bridge.refreshMachineStatus()
                 if !refreshedHealth {
                     await bridge.refreshPaperStatus()
-                }
-                if pollIteration.isMultiple(of: 4) {
-                    await bridge.refreshVisualBindingStatus()
                 }
             }
         }
@@ -3451,7 +3447,7 @@ struct ContentView: View {
     private var penLampColor: Color {
         guard let confirmedCapPoint else { return .white.opacity(0.45) }
         guard confirmedCapPoint.paperMm != nil else { return .yellow }
-        return bridge.visualBindingValid ? .green : .yellow
+        return visualMotionValidated ? .green : .yellow
     }
 
     private var confirmedCapStatusText: String {

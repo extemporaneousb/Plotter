@@ -3726,14 +3726,12 @@ class PlotterBridge:
         app_section = app_payload.get("app") if isinstance(app_payload.get("app"), dict) else {}
         binding_status = "missing"
         binding_trusted = False
-        binding_blockers: list[str] = []
         try:
             binding = self._load_latest_visual_position_binding()
             binding_status = binding.validation_status
             binding_trusted = binding.validation_status == "validated"
-            binding_blockers = list(binding.blockers)
         except Exception:
-            binding_blockers = ["binding_missing"]
+            pass
 
         paper_registered = paper.registration is not None and paper.status != "missing"
         paper_registration_id = ""
@@ -3749,15 +3747,10 @@ class PlotterBridge:
             blockers.append("machine_busy")
         if not paper_registered:
             blockers.append("paper_registration_missing")
-        if not binding_trusted:
-            blockers.append("binding_untrusted")
         for blocker in machine.visual_readiness_blockers:
-            blockers.append(_blocker_id(blocker))
-        for blocker in binding_blockers:
             blockers.append(_blocker_id(blocker))
         for value in [
             gates_payload.get("motion_gate"),
-            gates_payload.get("draw_preflight"),
             gates_payload.get("connection_help"),
         ]:
             text = _clean_optional_string(value)
@@ -4410,8 +4403,8 @@ class PlotterBridge:
         if self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot():
             return
         raise MotionSafetyError(
-            "Real drawing requires axis_model_trusted=true or a validated current "
-            "VisualPositionBinding. Cap-only visual readiness is relative evidence and "
+            "Real drawing requires axis_model_trusted=true or a validated future ink "
+            "binding. Cap-only visual readiness is relative evidence and "
             "cannot unlock absolute drawing."
         )
 

@@ -112,7 +112,9 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
     assert snapshot["state_summary"]["ui"]["windows"]["face_video_panel"] is True
     assert snapshot["state_summary"]["ui"]["cameras"]["plotter"]["visible"] is False
     assert "paper_registration_missing" in snapshot["exact_blockers"]
-    assert "binding_untrusted" in snapshot["exact_blockers"]
+    assert "binding_untrusted" not in snapshot["exact_blockers"]
+    assert "binding_missing" not in snapshot["exact_blockers"]
+    assert snapshot["state_summary"]["binding_status"] == "missing"
     assert any(trace["trace_id"] == "trace-panel" for trace in snapshot["recent_traces"])
     assert events["canonical"] is True
     assert any(event["trace_id"] == "trace-panel" for event in events["events"])
