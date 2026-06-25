@@ -1050,7 +1050,7 @@ struct MachineCommandResponse: Decodable {
 }
 
 final class PlotterBridgeClient {
-    private let baseURL: URL
+    let baseURL: URL
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 

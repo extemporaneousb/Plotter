@@ -52,6 +52,10 @@ The older `smoke_probe/` utility is preserved as reference material, but new wor
   locks, expected paths, durable probe evidence, and controller status, but it must not own serial
   transport or hardware command semantics. Plotter-camera FOV zoom is Swift display state for
   operator inspection; it is not calibration authority.
+- For the normal development/operator launch path, SwiftUI may supervise a child Python bridge
+  process and choose an ephemeral localhost base URL. That lifecycle ownership is process
+  supervision only: the Python bridge remains the machine-action boundary and owns controller
+  access, routing, safety, calibration, planning, execution, and persisted model authority.
 - `plotter_vision.bridge` is the local process boundary. It accepts typed request/response models,
   publishes current controller/runtime state, and routes every machine action through the Python
   safety and controller layers.

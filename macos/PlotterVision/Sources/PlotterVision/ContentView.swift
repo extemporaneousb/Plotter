@@ -167,7 +167,8 @@ struct ContentView: View {
             bridge.recordOperatorEvent("content_view_appeared")
         }
         .task {
-            await bridge.refreshHealth()
+            bridge.startOwnedBridgeIfNeeded()
+            await bridge.waitForOwnedBridgeStartup()
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
             var pollIteration = 0

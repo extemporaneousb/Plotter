@@ -4,8 +4,18 @@ import AppKit
 @main
 struct PlotterVisionApp: App {
     @NSApplicationDelegateAdaptor(WindowPlacementDelegate.self) private var windowPlacement
-    @StateObject private var bridge = PlotterBridgeModel()
+    @StateObject private var bridge: PlotterBridgeModel
     @StateObject private var workspace = OperatorWorkspaceState.shared
+
+    init() {
+        let supervisor = BridgeProcessSupervisor.shared
+        _bridge = StateObject(
+            wrappedValue: PlotterBridgeModel(
+                client: PlotterBridgeClient(baseURL: supervisor.baseURL),
+                bridgeSupervisor: supervisor
+            )
+        )
+    }
 
     var body: some Scene {
         WindowGroup(PlotterWindowConfiguration.mainTitle) {
@@ -123,6 +133,7 @@ final class WindowPlacementDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         saveOpenWindowFrames()
+        BridgeProcessSupervisor.shared.stopOwnedBridge(reason: "app_terminating")
     }
 
     private func normalizeOpenWindows() {

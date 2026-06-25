@@ -36,11 +36,11 @@ usage() {
 Usage: scripts/plotter_launcher.sh [smart|standby|preview|live|app|stop|help]
 
 Modes:
-  smart    One-click launcher. Preserve live, restart dry-run, or start standby.
+  smart    One-click launcher. Open the Swift app; the app owns its bridge process.
   standby  Restart the dry-run serial-capable bridge and relaunch the native camera app.
   preview  Restart the mock dry-run preview bridge and relaunch the native camera app.
   live     Start dry-run hardware standby with an optional port; arm live from inside the app.
-  app      Rebuild and relaunch only the native camera app.
+  app      Rebuild and relaunch the native camera app and its app-owned bridge.
   stop     Stop the background bridge.
 
 Environment:
@@ -160,12 +160,25 @@ bridge_label_from_health() {
   fi
 }
 
+stop_dry_run_listener() {
+  local http_port="$1"
+  local pid
+
+  pid="$("$LSOF_BIN" -tiTCP:"$http_port" -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" 2>/dev/null || true
+    rm -f "$ROOT_DIR/artifacts/bridge.pid"
+    log_phase "external dry-run bridge: stopped pid=$pid on port $http_port"
+    sleep 0.2
+  fi
+}
+
 smart_launch() {
   local http_port="${HTTP_PORT:-8765}"
   local health
   local detected
 
-  log_phase "smart launch: build_id=$PLOTTER_BUILD_ID http_port=$http_port"
+  log_phase "smart launch: build_id=$PLOTTER_BUILD_ID http_port=$http_port app_owned_bridge=true"
   health="$(bridge_health "$http_port")"
 
   if [[ -n "$health" ]]; then
@@ -175,41 +188,38 @@ smart_launch() {
       write_launcher_status \
         smart \
         live \
-        live \
-        reuse_live_bridge_open_app \
+        app \
+        preserve_external_live_open_app \
         "$http_port" \
         false \
-        "LIVE bridge detected; smart launch will not restart or stop it."
-      echo "LIVE bridge is already running at $(health_url "$http_port"); leaving it alone."
+        "LIVE bridge detected on the legacy port; smart launch leaves it alone and opens the app-owned dev bridge."
+      echo "LIVE bridge is already running at $(health_url "$http_port"); leaving it alone. The Swift app will own its development bridge."
       echo "$health"
-      log_phase "smart launch: reusing live bridge and opening rebuilt app"
-      run_make app "$@"
     elif [[ "$detected" == "preview" || "$detected" == "standby" ]]; then
+      stop_dry_run_listener "$http_port"
       write_launcher_status \
         smart \
         "$detected" \
-        standby \
-        restart_dry_run_bridge_open_app \
+        app \
+        stop_external_dry_run_open_app \
         "$http_port" \
         true \
-        "Dry-run ${detected} bridge detected; safe restart targets STANDBY."
-      echo "$(printf '%s' "$detected" | tr '[:lower:]' '[:upper:]') dry-run bridge is running at $(health_url "$http_port"); restarting as STANDBY from current code."
-      log_phase "smart launch: restarting dry-run bridge as standby before opening app"
-      run_make standby-app HTTP_PORT="$http_port" "$@"
+        "Dry-run ${detected} bridge detected on the legacy port; stopped it before opening the app-owned bridge."
+      echo "$(printf '%s' "$detected" | tr '[:lower:]' '[:upper:]') dry-run bridge was running at $(health_url "$http_port"); stopped it. The Swift app will own the next bridge."
     else
       write_launcher_status \
         smart \
         unknown \
-        none \
-        blocked_unrecognized_bridge_health \
+        app \
+        ignore_unclassified_bridge_open_app \
         "$http_port" \
         false \
-        "Bridge answered health but did not expose a recognized dry_run lifecycle state."
-      echo "Bridge answered at $(health_url "$http_port"), but its lifecycle state was not recognized." >&2
+        "Bridge answered on the legacy port but was unclassified; app launch uses an app-owned ephemeral bridge."
+      echo "Bridge answered at $(health_url "$http_port"), but its lifecycle state was not recognized. Leaving it alone and opening the app-owned bridge." >&2
       echo "$health" >&2
-      echo "Not restarting an unclassified bridge." >&2
-      exit 2
     fi
+    log_phase "smart launch: opening app with Swift-owned bridge process"
+    run_make app "$@"
     return
   fi
 
@@ -218,27 +228,29 @@ smart_launch() {
     write_launcher_status \
       smart \
       unknown \
-      none \
-      blocked_unknown_listener \
+      app \
+      ignore_unknown_listener_open_app \
       "$http_port" \
       false \
-      "Port is in use but did not answer as the Plotter bridge; launcher refused to kill it."
+      "Legacy port is in use but did not answer as Plotter; launcher leaves it alone because the app uses an owned ephemeral bridge."
     echo "Port $http_port is in use, but it did not answer as the Plotter bridge." >&2
-    echo "Not killing an unknown process. Stop it or choose HTTP_PORT=..." >&2
-    exit 2
+    echo "Not killing an unknown process. Opening the Swift app with its owned bridge instead." >&2
+    log_phase "smart launch: opening app with Swift-owned bridge process"
+    run_make app "$@"
+    return
   fi
 
   write_launcher_status \
     smart \
     none \
-    standby \
-    start_standby_bridge_open_app \
+    app \
+    open_app_owned_bridge \
     "$http_port" \
     false \
-    "No bridge detected; starting STANDBY dry-run bridge."
-  echo "No bridge is running at $(health_url "$http_port"); starting safe hardware standby."
-  log_phase "smart launch: starting standby bridge before opening app"
-  run_make standby-app HTTP_PORT="$http_port" "$@"
+    "No legacy bridge detected; opening the Swift app, which starts a dry-run hardware-standby bridge child."
+  echo "No bridge is running at $(health_url "$http_port"); opening the Swift app with an owned safe bridge."
+  log_phase "smart launch: opening app with Swift-owned bridge process"
+  run_make app "$@"
 }
 
 mode="${1:-smart}"
@@ -279,15 +291,15 @@ case "$mode" in
     ;;
   app)
     http_port="${HTTP_PORT:-8765}"
-    log_phase "launcher mode: app-only"
+    log_phase "launcher mode: app"
     write_launcher_status \
       app \
       unknown \
       app \
-      open_app_only \
+      open_app_owned_bridge \
       "$http_port" \
       false \
-      "App-only launch does not touch bridge lifecycle."
+      "App launch delegates bridge lifecycle to the Swift app process."
     run_make app "$@"
     ;;
   stop)

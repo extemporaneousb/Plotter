@@ -16,6 +16,12 @@ The script creates:
 build/PlotterVision.app
 ```
 
+The default build path fingerprints Swift sources, `Info.plist`, build metadata, and build settings.
+When those inputs are unchanged, `./build.sh` reuses the existing staged app bundle instead of
+entering the Swift compiler. Set `PLOTTER_SWIFT_BUILD_SYSTEM=swiftpm` to use the experimental
+SwiftPM package path; the default remains direct `swiftc` because it is the faster clean build on
+this machine.
+
 ## Run Directly
 
 ```bash
@@ -36,8 +42,10 @@ targets are developer paths for focused debugging.
 
 ## Controller Bridge Preview
 
-From the repository root, a direct dry-run hardware-standby bridge can still be started for focused
-developer sessions:
+The normal app launch starts a dry-run hardware-standby bridge as a child of the Swift app process.
+The app points its bridge client at that child process on an ephemeral localhost port and stops the
+owned child when the app terminates. From the repository root, a direct dry-run hardware-standby
+bridge can still be started for focused diagnostics:
 
 ```bash
 make bridge-standby-bg
@@ -65,7 +73,7 @@ Real hardware can be connected after the app starts: use the Machine panel's Con
 attach a visible USB serial controller and leave dry-run mode. Runtime arming only changes bridge
 safety state after `/health` and `/machine/status` show the expected bridge/controller state; it does
 not home, unlock, move, or actuate the pen by itself.
-Stop the background bridge with `make bridge-stop`.
+If you start a diagnostic bridge manually, stop that manual bridge with `make bridge-stop`.
 
 The bridge uses logical plotter coordinates for planning: `X0 Y0` is the corner opposite the X/Y
 homing switches. It converts those logical coordinates to the controller's negative `G53` machine

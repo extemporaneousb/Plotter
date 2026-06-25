@@ -110,8 +110,8 @@ def test_smart_reuses_live_bridge_without_safe_restart(tmp_path: Path) -> None:
 
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["detected"] == "live"
-    assert status["target"] == "live"
-    assert status["action"] == "reuse_live_bridge_open_app"
+    assert status["target"] == "app"
+    assert status["action"] == "preserve_external_live_open_app"
     assert status["safe_restart"] is False
 
 
@@ -135,13 +135,14 @@ def test_smart_dry_run_bridge_uses_safe_standby_restart(
 
     assert result.returncode == 0, result.stderr
     make_invocation = make_log.read_text(encoding="utf-8")
-    assert "standby-app" in make_invocation
+    assert make_invocation.split()[-1] == "app"
+    assert "standby-app" not in make_invocation
     assert "bridge-live-restart" not in make_invocation
 
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["detected"] == expected_label
-    assert status["target"] == "standby"
-    assert status["action"] == "restart_dry_run_bridge_open_app"
+    assert status["target"] == "app"
+    assert status["action"] == "stop_external_dry_run_open_app"
     assert status["safe_restart"] is True
 
 
@@ -153,14 +154,15 @@ def test_smart_refuses_unknown_listener_without_make_restart(tmp_path: Path) -> 
         lsof_output="12345",
     )
 
-    assert result.returncode == 2
+    assert result.returncode == 0
     assert "Not killing an unknown process" in result.stderr
-    assert not make_log.exists()
+    make_invocation = make_log.read_text(encoding="utf-8")
+    assert make_invocation.split()[-1] == "app"
 
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["detected"] == "unknown"
-    assert status["target"] == "none"
-    assert status["action"] == "blocked_unknown_listener"
+    assert status["target"] == "app"
+    assert status["action"] == "ignore_unknown_listener_open_app"
     assert status["safe_restart"] is False
 
 

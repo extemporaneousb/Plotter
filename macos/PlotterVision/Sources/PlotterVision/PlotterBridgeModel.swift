@@ -82,7 +82,8 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var machineWPosMm: [Double] = []
     @Published var operatorUIState: [String: Any] = [:]
 
-    private let client = PlotterBridgeClient()
+    private let client: PlotterBridgeClient
+    private let bridgeSupervisor: BridgeProcessSupervisor?
     private let diagnostics = AppDiagnostics.shared
     private let appBuildId = currentAppBuildId()
     private let requiredBridgeApiVersion = currentRequiredBridgeApiVersion()
@@ -100,7 +101,12 @@ final class PlotterBridgeModel: ObservableObject {
     private var lastDiagnosticsMachineSummary = ""
     private var lastDiagnosticsPaperSummary = ""
 
-    init() {
+    init(
+        client: PlotterBridgeClient = PlotterBridgeClient(),
+        bridgeSupervisor: BridgeProcessSupervisor? = nil
+    ) {
+        self.client = client
+        self.bridgeSupervisor = bridgeSupervisor
         diagnosticsEvent("app_model_initialized", snapshot: true)
     }
 
@@ -938,6 +944,38 @@ final class PlotterBridgeModel: ObservableObject {
             armUnlock = false
             clearBridgeLifecycleMetadata()
             diagnosticsEvent("bridge_health_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func startOwnedBridgeIfNeeded() {
+        guard let bridgeSupervisor else { return }
+        switch bridgeSupervisor.startIfNeeded() {
+        case .alreadyRunning(let url):
+            statusText = "Bridge starting \(url.absoluteString)"
+            shortStatus = "BOOT"
+        case .started(let url, let logPath):
+            statusText = "Bridge starting \(url.absoluteString)"
+            shortStatus = "BOOT"
+            diagnosticsEvent(
+                "owned_bridge_started",
+                ["base_url": url.absoluteString, "log": logPath],
+                snapshot: true
+            )
+        case .unavailable(let reason):
+            isOnline = false
+            shortStatus = "OFF"
+            statusText = "Bridge supervisor failed"
+            machineStatus = reason
+            diagnosticsEvent("owned_bridge_unavailable", ["reason": reason], snapshot: true)
+        }
+    }
+
+    func waitForOwnedBridgeStartup() async {
+        guard bridgeSupervisor != nil else { return }
+        for _ in 0..<12 {
+            await refreshHealth()
+            if isOnline { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
     }
 

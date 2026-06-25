@@ -184,37 +184,25 @@ make snapshot PORT=/dev/cu.usbmodemXXXX
 
 ## Native Camera Plotter Preview
 
-The camera app can now talk to a local controller bridge. Start with the mock dry-run bridge in the
-background:
-
-```bash
-make bridge-preview-bg
-```
-
-Then build and run the native app:
-
-```bash
-make app
-```
-
-For the normal operator loop, use one command. It is status-aware: it opens against an existing live
-bridge without stopping it, restarts a dry-run bridge from the current checkout, or starts a dry-run
-hardware-standby bridge when no bridge is running:
+The normal operator loop is app-owned. `make launch` incrementally builds the native app bundle and
+opens the Swift app. The Swift app process starts a dry-run hardware-standby Python bridge child on
+an ephemeral localhost port, writes its session record under `artifacts/dev_session/`, and terminates
+that exact child when the app exits:
 
 ```bash
 make launch
 ```
 
-The launcher writes its last lifecycle decision to:
+The launcher writes its last decision to:
 
 ```text
 artifacts/launcher_status.json
 ```
 
-The native app and bridge also exchange lifecycle identity through `/health`. The app displays the
-bridge as `Preview Bridge`, `Hardware Standby`, `Live Bridge`, `Offline`, `STALE`, or `API` when a
-bridge/app mismatch is detected. When launched through `make launch` or `Plotter Vision.app`, both
-the rebuilt app bundle and restarted bridge receive the same build id from the current checkout.
+The owned bridge still exposes lifecycle identity through `/health`. The app displays the bridge as
+`Preview Bridge`, `Hardware Standby`, `Live Bridge`, `Offline`, `STALE`, or `API` when a bridge/app
+mismatch is detected. When launched through `make launch` or `Plotter Vision.app`, the app passes its
+current build id to the child bridge so stale app/bridge mismatches are visible.
 
 To install Finder launchers:
 
@@ -233,11 +221,12 @@ Both Finder launchers run `scripts/plotter_launcher.sh smart`. The lifecycle lab
 - `standby`: serial-capable dry-run bridge.
 - `live`: bridge reports `dry_run: false`.
 
-The smart launcher never replaces a live bridge. If a live bridge is already running, it leaves the
-bridge alone and only relaunches the app. The standby bridge can start before the controller is
-connected. In the app, use the Machine panel's Connect button to attach a visible USB serial
-controller, then Arm Live to enable the runtime homing, motion, pen, and unlock gates. Arm Live does
-not home, unlock, move, or actuate the pen by itself.
+The smart launcher no longer starts a detached bridge for normal app launch. If a dry-run bridge is
+still sitting on the legacy `8765` port, it stops that bridge before opening the app. If a live or
+unknown process is on that port, it leaves it alone because the app uses its own ephemeral bridge.
+The standby bridge can start before the controller is connected. In the app, use the Machine panel's
+Connect button to attach a visible USB serial controller, then Arm Live to enable the runtime homing,
+motion, pen, and unlock gates. Arm Live does not home, unlock, move, or actuate the pen by itself.
 
 From Codex, use the same root target:
 
@@ -245,15 +234,16 @@ From Codex, use the same root target:
 make launch
 ```
 
-For a port-specific hardware-standby launch, use the launcher directly. This still starts dry-run
-standby; live arming happens from the running UI:
+For focused diagnostics, the explicit bridge targets still exist. A port-specific hardware-standby
+launch through the legacy launcher still starts dry-run standby; live arming happens from the running
+UI:
 
 ```bash
 PORT=/dev/cu.usbserial-XXXX scripts/plotter_launcher.sh live
 ```
 
 The older fully armed bridge targets still exist for deliberate diagnostics, but the normal app path
-is to start dry-run and arm hardware from the running UI.
+is app-owned dry-run standby and runtime arming from the UI.
 
 ## Codex Observability
 

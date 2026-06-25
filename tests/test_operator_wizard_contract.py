@@ -231,6 +231,42 @@ def test_swift_app_split_keeps_transport_client_separate_from_app_model() -> Non
     assert len(content.splitlines()) < 3900
 
 
+def test_swift_app_owns_development_bridge_process_without_serial_authority() -> None:
+    app_main = _read(SWIFT_DIR / "AppMain.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    supervisor_path = SWIFT_DIR / "BridgeProcessSupervisor.swift"
+    supervisor = _read(supervisor_path)
+
+    assert supervisor_path.exists()
+    assert "BridgeProcessSupervisor.shared" in app_main
+    assert "PlotterBridgeClient(baseURL: supervisor.baseURL)" in app_main
+    assert "stopOwnedBridge(reason: \"app_terminating\")" in app_main
+    assert "private let client: PlotterBridgeClient" in model
+    assert "private let bridgeSupervisor: BridgeProcessSupervisor?" in model
+    assert "let baseURL: URL" in client
+
+    assert "Process()" in supervisor
+    assert "bridge-server" in supervisor
+    assert "--dry-run" in supervisor
+    assert "--controller-port" not in supervisor
+    assert ".VE/bin/plotterctl" in supervisor
+    assert ".venv/bin/plotterctl" in supervisor
+    assert "PLOTTER_PARENT_PID" in supervisor
+    assert "kill -0 \"$PLOTTER_PARENT_PID\"" in supervisor
+    assert "save-pen-config" in supervisor
+
+
+def test_macos_build_script_has_no_change_fast_path() -> None:
+    build_script = _read(ROOT / "macos" / "PlotterVision" / "build.sh")
+
+    assert "build_fingerprint()" in build_script
+    assert "inputs unchanged; reusing" in build_script
+    assert ".PlotterVision.build.sha256" in build_script
+    assert "PLOTTER_SWIFT_BUILD_SYSTEM" in build_script
+    assert "--disable-index-store" in build_script
+
+
 def test_swift_auto_red_fiducial_path_is_removed() -> None:
     swift_text = "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     removed_terms = [
