@@ -63,10 +63,16 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "SetupPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "PlotterVideoPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "FaceVideoPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert "@Published var visualFieldWidthMm = 200.0" in workspace
+    assert "@Published var visualFieldHeightMm = 150.0" in workspace
+    assert '"visual_field_width_mm": visualFieldWidthMm' in workspace
+    assert '"visual_field_height_mm": visualFieldHeightMm' in workspace
     assert '"machine_video_agreement_estimate_present": machineVideoAgreementModel != nil' in workspace
     assert "machine_video_agreement_valid" not in workspace
     assert "CalibrationWizardView(" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
+    assert "fieldWidthMm: $workspace.visualFieldWidthMm" in setup_panel
+    assert "fieldHeightMm: $workspace.visualFieldHeightMm" in setup_panel
     assert "Drawing Checkout" not in setup_panel
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
@@ -308,12 +314,20 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Define Drawing Field"' in wizard
     assert 'title: "Validate Motion"' in wizard
+    assert "@Binding var fieldWidthMm" in wizard
+    assert "@Binding var fieldHeightMm" in wizard
+    assert "Stepper(value: fieldWidthBinding" in wizard
+    assert "Stepper(value: fieldHeightBinding" in wizard
+    assert "fieldHeightMm > fieldWidthMm" in wizard
     assert "Confirm Green Cap" in content
     assert "Run Machine-Video Probe" in content
     assert "runMachineVideoAgreementProbe" in content
     assert "measureMachineVideoAgreementNoise" in content
     assert "machineVideoAgreementProbeVectors" in content
-    assert "runMachineVideoAgreementVectorJog" in content
+    assert "runSetupVectorJog" in content
+    assert "runMachineVideoAgreementVectorJog" not in content
+    assert "private let machineVideoAgreementInitialMoveMm = 10.0" in content
+    assert "private let machineVideoAgreementMaxMoveMm = 50.0" in content
     assert "machineVideoAgreementMaxSamples" in content
     assert "func relativeUpdateMagnitude(from previous:" in _read(SWIFT_DIR / "Models.swift")
     assert "model_update_norm" in content
@@ -325,6 +339,23 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "runFrameLearning()" in content
     assert "runWizardMotionValidation" in content
     assert "approachVisualTarget(target, label: \"VALIDATE\", targetIndex: 1)" in content
+    validation_run = content.split("private func runWizardMotionValidation", 1)[1].split(
+        "private func wizardMotionValidationTarget",
+        1,
+    )[0]
+    validation_target_failure = validation_run.split(
+        'guard let observed = await approachVisualTarget(target, label: "VALIDATE", targetIndex: 1) else',
+        1,
+    )[1].split("let residualMm", 1)[0]
+    assert 'status: "MEASURED"' in validation_target_failure
+    assert "Motion validation failed; fix blocker and retry validation" in validation_target_failure
+    assert 'frameLearning.status = "BLOCK"' not in validation_target_failure
+    validation_path = content.split("func approachVisualTarget", 1)[1].split(
+        "private func visualTargetResidualDetails",
+        1,
+    )[0]
+    assert "runSetupVectorJog(" in validation_path
+    assert "bridge.visualRelativeMove(" not in validation_path
     assert "bridge.canRunSetupRelativeMotionCommand" in content
     assert "private func setupRelativeMotionBlockReason" in model
     setup_gate = model.split("private func setupRelativeMotionBlockReason", 1)[1].split(
@@ -399,8 +430,8 @@ def test_wizard_uses_single_machine_video_setup_path_without_stored_field_reuse(
     assert "Paper homography" not in content
     assert "Stored visual field in use" not in content
     assert "FIELD run machine-video agreement before drawing field box" in content
-    assert "FIELD 200x150 locked from machine-video agreement" in content
-    assert "200x150 field registered from current estimate" in content
+    assert 'FIELD \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
+    assert "registered from current estimate" in content
 
 
 def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() -> None:
@@ -557,10 +588,12 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         "private func pointInsideCameraBounds",
         1,
     )[0]
-    assert "model.xBasisDxNorm * 200.0" in field_seed
-    assert "model.xBasisDyNorm * 200.0" in field_seed
-    assert "model.yBasisDxNorm * 150.0" in field_seed
-    assert "model.yBasisDyNorm * 150.0" in field_seed
+    assert "model.xBasisDxNorm * fieldWidthMm" in field_seed
+    assert "model.xBasisDyNorm * fieldWidthMm" in field_seed
+    assert "model.yBasisDxNorm * fieldHeightMm" in field_seed
+    assert "model.yBasisDyNorm * fieldHeightMm" in field_seed
+    assert "desiredVisualFieldWidthMm" in content
+    assert "desiredVisualFieldHeightMm" in content
     assert "fitFieldCenter" in field_seed
     assert "halfWidth *= 0.92" not in content
     assert "halfHeight = halfWidth * 0.75" not in content
@@ -573,12 +606,12 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "before drawing any field box or grid" in contract
     assert "There is no identity matrix as calibration evidence" in contract
     assert "reports update magnitude as the" in contract
-    assert "update magnitude approaching zero as the" in contract
+    assert "magnitude approaching zero" in contract
     assert "uses every later solved estimate" in plan
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
-    assert "must not expose a manual" in contract
+    assert "manual field-corner" in contract
     assert "before drawing any field box or grid" in plan
     assert "first empirical 2x2 estimate" in plan
     assert "Update magnitude is the convergence signal" in plan

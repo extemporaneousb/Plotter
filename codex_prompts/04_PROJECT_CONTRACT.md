@@ -55,14 +55,16 @@ The app-first drawing flow is:
    weaker learned basis and keep refining the matrix. The loop reports update magnitude as the
    convergence signal. Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the
    learned matrix.
-5. Define Drawing Field from the current 2x2 transform. The seeded field is 200 mm x 150 mm, with the
-   larger declared dimension on visual `+X`. Residuals and field-corner precision remain quality
-   diagnostics, but setup must not discard the current transform behind a second accepted-estimate
-   gate. The active setup UI must not expose a manual field-corner or stored-field reuse branch; if
-   the frame is wrong, reset and rerun Machine-Video Agreement.
+5. Define Drawing Field from the current 2x2 transform. The seeded field uses the Setup panel's
+   physical field width and height, defaulting to 200 mm x 150 mm, with the larger declared dimension
+   on visual `+X`. Residuals and field-corner precision remain quality diagnostics, but setup must
+   not discard the current transform behind a second accepted-estimate gate. The active setup UI must
+   not expose a manual field-corner or stored-field reuse branch; if the frame is wrong, adjust the
+   dimensions, reset, and rerun Machine-Video Agreement.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
-   Success for this milestone means predictable green-cap motion in the user-defined visual drawing
-   field.
+   These validation moves are setup relative jogs and must not be blocked by absolute `MPos`
+   workspace projection. Success for this milestone means predictable green-cap motion in the
+   user-defined visual drawing field.
 7. Treat field registration, cap localization, and a valid relative motion model as the active setup
    authority. Cap-to-tip offset, ink observations, and actual drawing are future work.
 8. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
@@ -77,11 +79,11 @@ Cap-only motion is relative session evidence. For this milestone, the bridge is 
 visual field is registered, the cap is localized in that field, and the learned 2x2 relative motion
 model is stable, invertible, and validated by observed cap movement. Machine axes may be swapped,
 rotated, skewed, or sign-reversed relative to the video field. Swift observations are evidence;
-Python decides whether the field, cap, and motion model are valid. During setup, no 200 mm x 150 mm
-field frame or millimeter grid should be drawn until Machine-Video Agreement has produced a current
-2x2 estimate and seeds field registration from that matrix. The UI should show update magnitude,
-residuals, and field-corner precision as diagnostics, with update magnitude approaching zero as the
-convergence signal.
+Python decides whether the field, cap, and motion model are valid. During setup, no field frame or
+millimeter grid should be drawn until Machine-Video Agreement has produced a current 2x2 estimate and
+seeds field registration from that matrix and the operator-selected physical field dimensions. The UI
+should show update magnitude, residuals, and field-corner precision as diagnostics, with update
+magnitude approaching zero as the convergence signal.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned

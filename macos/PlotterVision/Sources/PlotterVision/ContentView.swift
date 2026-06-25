@@ -2,8 +2,8 @@ import SwiftUI
 
 private let visualProbeMinimumObservedMm = 1.5
 private let machineVideoAgreementMinimumObservedNorm = 0.0015
-private let machineVideoAgreementInitialMoveMm = 6.0
-private let machineVideoAgreementMaxMoveMm = 40.0
+private let machineVideoAgreementInitialMoveMm = 10.0
+private let machineVideoAgreementMaxMoveMm = 50.0
 private let machineVideoAgreementMinSamples = 8
 private let machineVideoAgreementMaxSamples = 64
 private let machineVideoAgreementConvergedUpdateNorm = 0.015
@@ -943,7 +943,7 @@ struct ContentView: View {
                     yPixelsPerMm: model.yBasisLengthNorm,
                     lastPins: bridge.machinePins
                 )
-                calibrationStatusText = "CAL machine-video update converged; seeding 200x150 field"
+                calibrationStatusText = "CAL machine-video update converged; seeding \(desiredVisualFieldSizeLabel) field"
                 recordMachineVideoAgreementModel(
                     model,
                     noise: noise,
@@ -989,7 +989,7 @@ struct ContentView: View {
             yPixelsPerMm: model.yBasisLengthNorm,
             lastPins: bridge.machinePins
         )
-        calibrationStatusText = "CAL machine-video using latest estimate; seeding provisional 200x150 field"
+        calibrationStatusText = "CAL machine-video using latest estimate; seeding provisional \(desiredVisualFieldSizeLabel) field"
         recordMachineVideoAgreementModel(
             model,
             noise: noise,
@@ -1121,7 +1121,7 @@ struct ContentView: View {
                 commandY
             )
 
-            guard let response = await runMachineVideoAgreementVectorJog(
+            guard let response = await runSetupVectorJog(
                 xMm: commandX,
                 yMm: commandY,
                 feedMmMin: feedMmMin
@@ -1228,7 +1228,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func runMachineVideoAgreementVectorJog(
+    private func runSetupVectorJog(
         xMm: Double,
         yMm: Double,
         feedMmMin: Double
@@ -1337,10 +1337,17 @@ struct ContentView: View {
 
     @MainActor
     private func seedAndLockFieldFromMachineVideoAgreement(_ model: MachineVideoAgreementModel) async -> Bool {
+        let fieldWidthMm = desiredVisualFieldWidthMm
+        let fieldHeightMm = desiredVisualFieldHeightMm
         guard let cap = await waitForGreenCapCameraObservation(timeoutSeconds: 2.0),
-              let corners = seededFieldCorners(from: model, center: cap.cameraPoint) else {
+              let corners = seededFieldCorners(
+                  from: model,
+                  center: cap.cameraPoint,
+                  fieldWidthMm: fieldWidthMm,
+                  fieldHeightMm: fieldHeightMm
+              ) else {
             frameLearning.status = "BLOCK"
-            frameLearning.detail = "Could not seed a 200x150 field from machine-video agreement"
+            frameLearning.detail = "Could not seed the selected field from machine-video agreement"
             calibrationStatusText = "FIELD seed blocked: machine-video basis did not fit in camera"
             return false
         }
@@ -1348,11 +1355,11 @@ struct ContentView: View {
         manualFiducials = corners
         manualFiducialMode = false
         plotterCamera.showGrid = true
-        calibrationStatusText = "FIELD seeded from machine-video agreement; locking 200x150"
+        calibrationStatusText = "FIELD seeded from machine-video agreement; locking \(desiredVisualFieldSizeLabel)"
         guard let response = await bridge.registerPaperHomography(
             fiducials: corners,
-            paperWidthMm: 200.0,
-            paperHeightMm: 150.0
+            paperWidthMm: fieldWidthMm,
+            paperHeightMm: fieldHeightMm
         ), response.registration != nil else {
             frameLearning.status = "BLOCK"
             frameLearning.detail = bridge.statusText.isEmpty ? "Field registration failed" : bridge.statusText
@@ -1361,12 +1368,12 @@ struct ContentView: View {
         }
 
         focusPlotterVideoOnPaper(source: "machine_video_agreement_field_seeded")
-        calibrationStatusText = "FIELD 200x150 locked from machine-video agreement"
+        calibrationStatusText = "FIELD \(desiredVisualFieldSizeLabel) locked from machine-video agreement"
         bridge.recordOperatorEvent(
             "field_seeded_from_machine_video_agreement",
             details: [
-                "field_width_mm": 200.0,
-                "field_height_mm": 150.0,
+                "field_width_mm": fieldWidthMm,
+                "field_height_mm": fieldHeightMm,
                 "corner_count": corners.count,
                 "paper_registration_id": bridge.paperRegistrationSnapshot?.registrationId ?? ""
             ]
@@ -1374,17 +1381,31 @@ struct ContentView: View {
         return true
     }
 
+    private var desiredVisualFieldWidthMm: Double {
+        min(400.0, max(40.0, workspace.visualFieldWidthMm))
+    }
+
+    private var desiredVisualFieldHeightMm: Double {
+        min(desiredVisualFieldWidthMm, min(300.0, max(30.0, workspace.visualFieldHeightMm)))
+    }
+
+    private var desiredVisualFieldSizeLabel: String {
+        String(format: "%.0fx%.0f", desiredVisualFieldWidthMm, desiredVisualFieldHeightMm)
+    }
+
     private func seededFieldCorners(
         from model: MachineVideoAgreementModel,
-        center: CGPoint
+        center: CGPoint,
+        fieldWidthMm: Double,
+        fieldHeightMm: Double
     ) -> [ManualFiducialPoint]? {
         let xVector = CGVector(
-            dx: CGFloat(model.xBasisDxNorm * 200.0),
-            dy: CGFloat(model.xBasisDyNorm * 200.0)
+            dx: CGFloat(model.xBasisDxNorm * fieldWidthMm),
+            dy: CGFloat(model.xBasisDyNorm * fieldWidthMm)
         )
         let yVector = CGVector(
-            dx: CGFloat(model.yBasisDxNorm * 150.0),
-            dy: CGFloat(model.yBasisDyNorm * 150.0)
+            dx: CGFloat(model.yBasisDxNorm * fieldHeightMm),
+            dy: CGFloat(model.yBasisDyNorm * fieldHeightMm)
         )
         guard hypot(xVector.dx, xVector.dy) > 0.000_001,
               hypot(yVector.dx, yVector.dy) > 0.000_001 else {
@@ -2391,7 +2412,7 @@ struct ContentView: View {
                 detail: String(format: "cmd X%+.1f Y%+.1f", commandX, commandY)
             )
 
-            guard let response = await bridge.visualRelativeMove(
+            guard let response = await runSetupVectorJog(
                 xMm: commandX,
                 yMm: commandY,
                 feedMmMin: feedMmMin
@@ -2420,7 +2441,7 @@ struct ContentView: View {
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandX),
                           feedMmMin: min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
-                              await bridge.visualRelativeMove(xMm: commandMm, yMm: 0.0, feedMmMin: feedMmMin)
+                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
                       ) else {
                     clearVisualMoveIntent(reason: "visual_target_no_new_frame")
@@ -2680,7 +2701,7 @@ struct ContentView: View {
             detail: String(format: "cmd X%+.1f Y%+.1f", -commandX, -commandY)
         )
 
-        guard let response = await bridge.visualRelativeMove(
+        guard let response = await runSetupVectorJog(
             xMm: -commandX,
             yMm: -commandY,
             feedMmMin: feedMmMin
@@ -2983,6 +3004,8 @@ struct ContentView: View {
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
             capDetected: currentCarriageMarker != nil,
+            fieldWidthMm: $workspace.visualFieldWidthMm,
+            fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,
             reset: resetCalibrationWizard,
             hide: hideCalibrationWizard
@@ -3023,8 +3046,8 @@ struct ContentView: View {
     }
 
     private var wizardFiducialDetail: String {
-        if bridge.hasPaperLock { return "200x150 field registered from current estimate" }
-        if machineVideoAgreementModel != nil { return "Registering provisional 200x150 field from current estimate" }
+        if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) registered from current estimate" }
+        if machineVideoAgreementModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
         return "Hidden until first machine-video estimate exists"
     }
 
@@ -3227,8 +3250,14 @@ struct ContentView: View {
             target.y
         )
         guard let observed = await approachVisualTarget(target, label: "VALIDATE", targetIndex: 1) else {
-            frameLearning.status = "BLOCK"
-            frameLearning.detail = "Motion validation target failed"
+            frameLearning = FrameLearningState(
+                status: "MEASURED",
+                detail: "Motion validation failed; fix blocker and retry validation",
+                sampleCount: model.sampleCount,
+                xPixelsPerMm: hypot(model.xBasisDx, model.xBasisDy),
+                yPixelsPerMm: hypot(model.yBasisDx, model.yBasisDy),
+                lastPins: bridge.machinePins
+            )
             return
         }
         let residualMm = paperDistance(from: observed.paperMm, to: target)

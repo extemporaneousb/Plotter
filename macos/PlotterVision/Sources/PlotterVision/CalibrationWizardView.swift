@@ -17,6 +17,8 @@ struct CalibrationWizardView: View {
     let capStateLabel: String
     let isLiveMotionMode: Bool
     let capDetected: Bool
+    @Binding var fieldWidthMm: Double
+    @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
     let reset: () -> Void
     let hide: () -> Void
@@ -32,6 +34,7 @@ struct CalibrationWizardView: View {
                         .foregroundStyle(.white.opacity(0.72))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                    fieldSizeControls
                     steps
                     actions
                     blockedReason
@@ -79,6 +82,51 @@ struct CalibrationWizardView: View {
             CalibrationWizardStepRow(index: 3, title: "Define Drawing Field", detail: fiducialDetail, status: fiducialStatus)
             CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
         }
+    }
+
+    private var fieldSizeControls: some View {
+        HStack(spacing: 8) {
+            Text("Field")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.62))
+            Stepper(value: fieldWidthBinding, in: 40...400, step: 5) {
+                Text(String(format: "X %.0fmm", fieldWidthMm))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            }
+            .help(hasPaperLock ? "Reset setup before changing locked field width" : "Drawing field width in millimeters")
+            Stepper(value: fieldHeightBinding, in: 30...fieldHeightUpperBound, step: 5) {
+                Text(String(format: "Y %.0fmm", fieldHeightMm))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            }
+            .help(hasPaperLock ? "Reset setup before changing locked field height" : "Drawing field height in millimeters")
+        }
+        .controlSize(.mini)
+        .disabled(hasPaperLock)
+    }
+
+    private var fieldHeightUpperBound: Double {
+        min(300.0, max(30.0, fieldWidthMm))
+    }
+
+    private var fieldWidthBinding: Binding<Double> {
+        Binding(
+            get: { fieldWidthMm },
+            set: { newValue in
+                fieldWidthMm = min(400.0, max(40.0, newValue))
+                if fieldHeightMm > fieldWidthMm {
+                    fieldHeightMm = fieldWidthMm
+                }
+            }
+        )
+    }
+
+    private var fieldHeightBinding: Binding<Double> {
+        Binding(
+            get: { fieldHeightMm },
+            set: { newValue in
+                fieldHeightMm = min(fieldHeightUpperBound, max(30.0, newValue))
+            }
+        )
     }
 
     private var actions: some View {

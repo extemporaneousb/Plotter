@@ -87,11 +87,13 @@ The fixed-camera workflow is:
    preexisting field lock, or machine workspace proof. Update magnitude is the convergence signal;
    residuals and field-corner precision are diagnostics.
 5. Define Drawing Field from the current camera/video basis. The seeded field uses the learned 2x2
-   transform to place a provisional 200 mm x 150 mm frame with the longer dimension on visual `+X`.
-   The active setup UI does not expose a manual field-corner, stored-field reuse branch, or separate
-   accepted-estimate gate; reset and rerun Machine-Video Agreement if the seeded frame is wrong.
-6. Validate Motion by commanding field-target moves through the inverse relative model. The model may
-   swap axes, reverse signs, rotate, or skew machine motion relative to the field if the 2x2 matrix
+   transform and the Setup panel's physical field width/height, defaulting to 200 mm x 150 mm, with
+   the longer dimension on visual `+X`. The active setup UI does not expose a manual field-corner,
+   stored-field reuse branch, or separate accepted-estimate gate; adjust the field dimensions, reset,
+   and rerun Machine-Video Agreement if the seeded frame is wrong.
+6. Validate Motion by commanding field-target moves through the inverse relative model using setup
+   relative jogs that bypass absolute workspace projection. The model may swap axes, reverse signs,
+   rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.
 7. Treat field registration, cap localization, and a valid relative motion model as the setup
    authority for this milestone. Cap-to-tip offset, ink observations, and real drawing remain future

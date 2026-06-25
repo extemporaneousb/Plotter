@@ -28,6 +28,8 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var visualMoveIntent: VisualMoveIntent?
     @Published var machineVideoAgreementModel: MachineVideoAgreementModel?
     @Published var machineVideoAgreementSamples: [MachineVideoAgreementSample] = []
+    @Published var visualFieldWidthMm = 200.0
+    @Published var visualFieldHeightMm = 150.0
     @Published var visualMotionModel: VisualMotionModel?
     @Published var visualMotionSamples: [VisualMotionSample] = []
     @Published var visualCenterDotTaskActive = false
@@ -106,6 +108,8 @@ final class OperatorWorkspaceState: ObservableObject {
                 "manual_fiducial_mode": manualFiducialMode,
                 "manual_cap_mode": manualPenMode,
                 "cap_color_pick_mode": manualCapColorMode,
+                "visual_field_width_mm": visualFieldWidthMm,
+                "visual_field_height_mm": visualFieldHeightMm,
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
                 "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
                 "operator_log_entries": operatorLog.count
