@@ -3749,10 +3749,7 @@ class PlotterBridge:
             blockers.append("paper_registration_missing")
         for blocker in machine.visual_readiness_blockers:
             blockers.append(_blocker_id(blocker))
-        for value in [
-            gates_payload.get("motion_gate"),
-            gates_payload.get("connection_help"),
-        ]:
+        for value in [gates_payload.get("motion_gate")]:
             text = _clean_optional_string(value)
             if text and "armed" not in text.lower():
                 blockers.append(_blocker_id(text))
@@ -3790,6 +3787,19 @@ class PlotterBridge:
         )
 
     def _latest_visible_error(self, app_diagnostics: AppDiagnosticsSnapshot) -> str | None:
+        if app_diagnostics.latest_state is not None:
+            payload = app_diagnostics.latest_state.payload
+            state_error = _clean_optional_string(payload.get("latest_visible_error"))
+            if state_error:
+                return state_error
+            if "latest_visible_error" in payload:
+                return None
+
+            machine = payload.get("machine") if isinstance(payload.get("machine"), dict) else {}
+            machine_error = _first_payload_string(machine, "error")
+            if machine_error:
+                return machine_error
+
         for record in reversed(app_diagnostics.recent_events):
             error = (
                 record.reason
@@ -3801,10 +3811,6 @@ class PlotterBridge:
                 or "failed" in record.event_type
             ):
                 return error
-        if app_diagnostics.latest_state is not None:
-            payload = app_diagnostics.latest_state.payload
-            machine = payload.get("machine") if isinstance(payload.get("machine"), dict) else {}
-            return _first_payload_string(machine, "status", "error")
         return None
 
     def _recent_trace_summaries(self, events: list[AgentEvent]) -> list[CodexTraceSummary]:

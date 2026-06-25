@@ -177,6 +177,51 @@ def test_canonical_codex_events_reads_are_read_only_and_posts_append(tmp_path: P
     assert _jsonl_count(tmp_path / "app_events.jsonl") == 2
 
 
+def test_codex_snapshot_uses_latest_app_state_over_stale_error_events(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=True)
+
+    with _running_bridge(bridge) as client:
+        status_code, _ = client.post(
+            "/codex/app/events",
+            {
+                "event_type": "visual_relative_move_failed",
+                "trace_id": "old-relative-move",
+                "status": "failed",
+                "reason": "relative_move",
+                "payload": {
+                    "error": "Projected Y position -47.857 mm is outside workspace.",
+                    "status_text": "Projected Y position -47.857 mm is outside workspace.",
+                },
+            },
+        )
+        assert status_code == 200
+
+        status_code, _ = client.post(
+            "/codex/app/state",
+            {
+                "status": "ready",
+                "trace_id": "current-state",
+                "payload": {
+                    "latest_visible_error": "",
+                    "gates": {
+                        "motion_gate": "Controller not connected; connect or arm to auto-detect",
+                        "connection_help": "Hardware Standby build noisy detail that should stay help.",
+                    },
+                },
+            },
+        )
+        assert status_code == 200
+
+        status_code, snapshot = client.get("/codex/snapshot")
+
+    assert status_code == 200
+    assert snapshot["latest_visible_error"] is None
+    assert "relative_move" not in snapshot["exact_blockers"]
+    assert "projected_y_position_47_857_mm_is_outside_workspace" not in snapshot["exact_blockers"]
+    assert "hardware_standby_build_noisy_detail_that_should_stay_help" not in snapshot["exact_blockers"]
+    assert "controller_not_connected_connect_or_arm_to_auto_detect" in snapshot["exact_blockers"]
+
+
 def test_superseded_observability_read_routes_are_removed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, dry_run=True, mock=True)
 
