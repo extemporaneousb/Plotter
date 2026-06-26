@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct CalibrationWizardView: View {
@@ -20,6 +21,7 @@ struct CalibrationWizardView: View {
     let capStateLabel: String
     let isLiveMotionMode: Bool
     let capDetected: Bool
+    let fieldAspectYPerX: Double?
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
@@ -93,31 +95,50 @@ struct CalibrationWizardView: View {
             Text("Field")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.62))
-            Stepper(value: fieldWidthBinding, in: 40...400, step: 5) {
-                Text(String(format: "X %.0fmm", fieldWidthMm))
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            }
-            .help(hasPaperLock ? "Adjust width and re-lock the current video field" : "Drawing field width in millimeters")
-            Stepper(value: fieldHeightBinding, in: 30...fieldHeightUpperBound, step: 5) {
-                Text(String(format: "Y %.0fmm", fieldHeightMm))
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            }
-            .help(hasPaperLock ? "Adjust height and re-lock the current video field" : "Drawing field height in millimeters")
+            fieldDimensionControl(label: "X", value: fieldWidthBinding)
+                .help(hasPaperLock ? "Adjust X millimeters and re-lock the current video field" : "Drawing field X millimeters")
+            fieldDimensionControl(label: "Y", value: fieldHeightBinding)
+                .help(hasPaperLock ? "Adjust Y millimeters and re-lock the current video field" : "Drawing field Y millimeters")
         }
         .controlSize(.mini)
     }
 
-    private var fieldHeightUpperBound: Double {
-        min(300.0, max(30.0, fieldWidthMm))
+    private func fieldDimensionControl(label: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.58))
+            TextField(label, value: value, formatter: Self.fieldDimensionFormatter)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .frame(width: 58)
+                .multilineTextAlignment(.trailing)
+            Text("mm")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.50))
+        }
+    }
+
+    private static let fieldDimensionFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 1
+        formatter.usesGroupingSeparator = false
+        return formatter
+    }()
+
+    private var fieldDimensionRange: ClosedRange<Double> {
+        1.0...1000.0
     }
 
     private var fieldWidthBinding: Binding<Double> {
         Binding(
             get: { fieldWidthMm },
             set: { newValue in
-                fieldWidthMm = min(400.0, max(40.0, newValue))
-                if fieldHeightMm > fieldWidthMm {
-                    fieldHeightMm = fieldWidthMm
+                let width = clampedFieldDimension(newValue)
+                fieldWidthMm = width
+                if let fieldAspectYPerX, fieldAspectYPerX > 0 {
+                    fieldHeightMm = clampedFieldDimension(width * fieldAspectYPerX)
                 }
             }
         )
@@ -127,9 +148,13 @@ struct CalibrationWizardView: View {
         Binding(
             get: { fieldHeightMm },
             set: { newValue in
-                fieldHeightMm = min(fieldHeightUpperBound, max(30.0, newValue))
+                fieldHeightMm = clampedFieldDimension(newValue)
             }
         )
+    }
+
+    private func clampedFieldDimension(_ value: Double) -> Double {
+        min(fieldDimensionRange.upperBound, max(fieldDimensionRange.lowerBound, value))
     }
 
     private var actions: some View {

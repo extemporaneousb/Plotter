@@ -110,6 +110,7 @@ final class OperatorWorkspaceState: ObservableObject {
                 "cap_color_pick_mode": manualCapColorMode,
                 "visual_field_width_mm": visualFieldWidthMm,
                 "visual_field_height_mm": visualFieldHeightMm,
+                "visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0,
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
                 "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
                 "operator_log_entries": operatorLog.count
@@ -165,6 +166,7 @@ struct SetupPanelSnapshot: Equatable {
     var capStateLabel: String
     var isLiveMotionMode: Bool
     var capDetected: Bool
+    var fieldAspectYPerX: Double?
 
     static let idle = SetupPanelSnapshot(
         instructionText: "Open the plotter camera and start setup.",
@@ -185,6 +187,7 @@ struct SetupPanelSnapshot: Equatable {
         hasPaperLock: false,
         capStateLabel: "--",
         isLiveMotionMode: false,
-        capDetected: false
+        capDetected: false,
+        fieldAspectYPerX: nil
     )
 }

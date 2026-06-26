@@ -74,8 +74,11 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "workspace.requestSetupCommand(.drawFrame)" in setup_panel
     assert "drawFrameVisible" in workspace
     assert "drawFrameEnabled" in workspace
+    assert "fieldAspectYPerX" in workspace
+    assert '"visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0' in workspace
     assert "fieldWidthMm: $workspace.visualFieldWidthMm" in setup_panel
     assert "fieldHeightMm: $workspace.visualFieldHeightMm" in setup_panel
+    assert "fieldAspectYPerX: workspace.setupSnapshot.fieldAspectYPerX" in setup_panel
     assert "Drawing Checkout" not in setup_panel
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
@@ -357,11 +360,17 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
+    assert "let fieldAspectYPerX: Double?" in wizard
     assert "@Binding var fieldWidthMm" in wizard
     assert "@Binding var fieldHeightMm" in wizard
-    assert "Stepper(value: fieldWidthBinding" in wizard
-    assert "Stepper(value: fieldHeightBinding" in wizard
-    assert "fieldHeightMm > fieldWidthMm" in wizard
+    assert "TextField(label, value: value, formatter: Self.fieldDimensionFormatter)" in wizard
+    assert "fieldDimensionControl(label: \"X\", value: fieldWidthBinding)" in wizard
+    assert "fieldDimensionControl(label: \"Y\", value: fieldHeightBinding)" in wizard
+    assert "fieldHeightMm > fieldWidthMm" not in wizard
+    assert "fieldHeightUpperBound" not in wizard
+    assert "fieldHeightMm = fieldWidthMm" not in wizard
+    assert "fieldHeightMm = clampedFieldDimension(width * fieldAspectYPerX)" in wizard
+    assert "fieldHeightMm = clampedFieldDimension(newValue)" in wizard
     assert ".disabled(hasPaperLock)" not in wizard
     assert "Confirm Green Cap" in content
     assert "Run Machine-Video Probe" in content
@@ -503,6 +512,7 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "let isVisible: Bool" in support
     assert "plotterViewportPointFromCameraNorm" in support
     assert "plotterCameraNormFromViewPoint" in support
+    assert "func visualFieldVideoAspectYPerX" in support
     assert "visualFieldRectangleCornersFromCurrentBounds" in support
     assert "visualFieldRectangleMoved" in support
     assert "visualFieldRectangleResizedFromTopRight" in support
@@ -539,6 +549,8 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
         corner_order.index(point) for point in expected_order
     )
     assert "VisualFieldEditLayer(" in content
+    assert "currentVisualFieldAspectYPerX" in content
+    assert "fieldAspectYPerX: currentVisualFieldAspectYPerX" in content
     assert "editableVisualFieldCorners" in content
     assert "updateEditableVisualFieldCorners" in content
     assert "scheduleEditableVisualFieldRelock" in content
@@ -777,8 +789,11 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "before locking or drawing the Drawing Border" in readme
     assert "publishes each solved 2x2 estimate as the current online state" in readme
     assert "current 2x2 machine-video transform" in readme
+    assert "typed X/Y millimeter values are then assigned to that rectangle" in readme
+    assert "editing X may estimate Y from the rectangle's video aspect" in readme
+    assert "editing Y remains independent" in readme
     assert "relative update magnitude as the convergence signal" in readme_flat
-    assert "every later solved estimate updates the provisional" in readme
+    assert "every later solved estimate updates the provisional" in readme_flat
     assert "seeded video border is operator-adjustable as a rectangle" in readme
     assert "top-right handle to resize it while it remains rectangular" in readme
     assert "Changing the declared width/height also re-locks" in readme
@@ -792,6 +807,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
     assert "Every later solved estimate updates the provisional Drawing Border" in contract_flat
+    assert "operator can type explicit X and Y millimeter values" in contract
+    assert "Y remains independently editable" in contract
     assert "seeded video border" in contract_flat
     assert "resize it while it remains rectangular" in contract
     assert "release to re-lock border registration" in contract
@@ -801,7 +818,9 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "Update magnitude is the convergence signal" in plan
     assert "accepted-estimate gate" in plan
     assert "Every later solved estimate updates the provisional Drawing Border" in plan_flat
-    assert "video Drawing Border remains operator-adjustable as a" in plan
+    assert "assign typed X/Y" in plan
+    assert "editing Y remains independent" in plan
+    assert "video Drawing Border remains operator-adjustable as a" in plan_flat
     assert "Plotter Video has no separate grid overlay" in plan
     assert "bottom-left border corner is logical `(0,0)`" in plan
     assert "correct perspective" not in readme + contract + plan

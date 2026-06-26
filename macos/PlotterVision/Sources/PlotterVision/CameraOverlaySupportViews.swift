@@ -404,6 +404,35 @@ func visualFieldRectangleCornersFromCurrentBounds(_ corners: [ManualFiducialPoin
     )
 }
 
+func visualFieldVideoAspectYPerX(
+    corners: [ManualFiducialPoint],
+    videoSize: CGSize
+) -> Double? {
+    visualFieldVideoAspectYPerX(
+        cameraCorners: orderedVisualFieldCorners(corners).map(\.cameraPoint),
+        videoSize: videoSize
+    )
+}
+
+func visualFieldVideoAspectYPerX(
+    cameraCorners: [CGPoint],
+    videoSize: CGSize
+) -> Double? {
+    guard cameraCorners.count == 4,
+          let minX = cameraCorners.map(\.x).min(),
+          let maxX = cameraCorners.map(\.x).max(),
+          let minY = cameraCorners.map(\.y).min(),
+          let maxY = cameraCorners.map(\.y).max() else {
+        return nil
+    }
+    let videoWidth = max(Double(videoSize.width), 1.0)
+    let videoHeight = max(Double(videoSize.height), 1.0)
+    let widthPixels = Double(maxX - minX) * videoWidth
+    let heightPixels = Double(maxY - minY) * videoHeight
+    guard widthPixels > 0.000_001, heightPixels > 0.000_001 else { return nil }
+    return heightPixels / widthPixels
+}
+
 func visualFieldRectangleMoved(
     _ corners: [ManualFiducialPoint],
     cameraDelta: CGPoint

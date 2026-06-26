@@ -92,13 +92,14 @@ The fixed-camera workflow is:
    preexisting field lock, or machine workspace proof. Update magnitude is the convergence signal;
    residuals and field-corner precision are diagnostics.
 5. Set Drawing Border from the current camera/video basis. The seeded border uses the learned 2x2
-   transform and the Setup panel's physical field width/height, defaulting to 200 mm x 150 mm, with
-   the longer dimension on visual `+X`. The video Drawing Border remains operator-adjustable as a
-   rectangle while setup is open: drag the border to move it, drag the top-right handle to resize it
-   while it remains rectangular, and release to re-lock border registration using the adjusted
-   corners. Every later solved estimate updates the provisional Drawing Border until the operator
-   locks it. Updating the declared dimensions re-locks the current Drawing Border instead of forcing reset
-   and reseed. There is still no separate
+   transform to fit a provisional video rectangle, then lets the operator assign typed X/Y
+   millimeter dimensions to that rectangle, defaulting to 200 mm x 150 mm. Editing X may estimate Y
+   from the rectangle's video aspect, and editing Y remains independent. The video Drawing Border
+   remains operator-adjustable as a rectangle while setup is open: drag the border to move it, drag
+   the top-right handle to resize it while it remains rectangular, and release to re-lock border
+   registration using the adjusted corners. Every later solved estimate updates the provisional
+   Drawing Border until the operator locks it. Updating the declared dimensions re-locks the current
+   Drawing Border instead of forcing reset and reseed. There is still no separate
    accepted-estimate gate behind the current online machine-video transform.
 6. Validate Motion by commanding field-target moves through the inverse relative model using setup
    relative jogs that bypass absolute workspace projection. The model may swap axes, reverse signs,

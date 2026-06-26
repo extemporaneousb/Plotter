@@ -523,7 +523,8 @@ struct ContentView: View {
             hasPaperLock: bridge.hasPaperLock,
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
-            capDetected: currentCarriageMarker != nil
+            capDetected: currentCarriageMarker != nil,
+            fieldAspectYPerX: currentVisualFieldAspectYPerX
         )
     }
 
@@ -1457,15 +1458,22 @@ struct ContentView: View {
     }
 
     private var desiredVisualFieldWidthMm: Double {
-        min(400.0, max(40.0, workspace.visualFieldWidthMm))
+        min(1000.0, max(1.0, workspace.visualFieldWidthMm))
     }
 
     private var desiredVisualFieldHeightMm: Double {
-        min(desiredVisualFieldWidthMm, min(300.0, max(30.0, workspace.visualFieldHeightMm)))
+        min(1000.0, max(1.0, workspace.visualFieldHeightMm))
     }
 
     private var desiredVisualFieldSizeLabel: String {
         String(format: "%.0fx%.0f", desiredVisualFieldWidthMm, desiredVisualFieldHeightMm)
+    }
+
+    private var currentVisualFieldAspectYPerX: Double? {
+        visualFieldVideoAspectYPerX(
+            corners: editableVisualFieldCorners,
+            videoSize: plotterCamera.videoSize
+        )
     }
 
     @MainActor
@@ -3202,6 +3210,7 @@ struct ContentView: View {
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
             capDetected: currentCarriageMarker != nil,
+            fieldAspectYPerX: currentVisualFieldAspectYPerX,
             fieldWidthMm: $workspace.visualFieldWidthMm,
             fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,
