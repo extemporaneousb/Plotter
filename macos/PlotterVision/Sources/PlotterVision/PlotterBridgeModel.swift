@@ -1901,6 +1901,43 @@ final class PlotterBridgeModel: ObservableObject {
         diagnosticsEvent("expected_path_replayed", ["length_mm": length, "segments": expectedPathSegments.count], snapshot: true)
     }
 
+    func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot]) {
+        guard corners.count >= 4, visualFieldWidthMm > 0, visualFieldHeightMm > 0 else {
+            expectedPathSegments = []
+            pathRevealProgress = 1.0
+            pathAnimationStatus = "IDLE"
+            return
+        }
+        let closed = Array(corners.prefix(4)) + [corners[0]]
+        expectedPathSegments = zip(closed, closed.dropFirst()).map { start, end in
+            ExpectedPathSegment(
+                startNorm: [
+                    start.x / visualFieldWidthMm,
+                    start.y / visualFieldHeightMm
+                ],
+                endNorm: [
+                    end.x / visualFieldWidthMm,
+                    end.y / visualFieldHeightMm
+                ],
+                startMachineMm: [],
+                endMachineMm: [],
+                lengthMm: hypot(end.x - start.x, end.y - start.y)
+            )
+        }
+        pathRevealProgress = 1.0
+        pathAnimationStatus = "FRAME"
+        previewStatus = "SIM FRAME"
+        diagnosticsEvent(
+            "setup_field_frame_expected_path_ready",
+            [
+                "segments": expectedPathSegments.count,
+                "field_width_mm": visualFieldWidthMm,
+                "field_height_mm": visualFieldHeightMm
+            ],
+            snapshot: true
+        )
+    }
+
     func jog(axis: String, distanceMm: Double) async {
         await runMachineCommand(action: manualJogWorkspaceOverride ? "jog override" : "jog") {
             try await client.jog(

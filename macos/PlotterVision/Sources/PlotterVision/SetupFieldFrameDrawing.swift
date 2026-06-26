@@ -15,6 +15,7 @@ extension ContentView {
             return
         }
 
+        bridge.showSetupFieldFrameExpectedPath(corners: corners)
         bridge.drawVerifyStatus = "DRAW RUN"
         bridge.drawVerifyKind = "setup_field_frame"
         bridge.drawVerifyLabel = "Draw Frame"

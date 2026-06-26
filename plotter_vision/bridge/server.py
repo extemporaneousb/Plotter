@@ -4519,6 +4519,9 @@ class PlotterBridge:
         previous: VisualReadinessState | None = None,
         cap_to_tip_model: CapToTipModel | None = None,
     ) -> DrawingSafeZone:
+        if registration is not None:
+            return self._visual_field_safe_zone(registration)
+
         readiness_zone = self._policy_safe_zone_or_none(
             previous.safe_zone if previous is not None else None
         )
@@ -4534,9 +4537,6 @@ class PlotterBridge:
                 return binding_zone
             if cap_to_tip_model is None:
                 cap_to_tip_model = binding.cap_to_tip_model
-
-        if registration is not None:
-            return self._visual_field_safe_zone(registration)
 
         return self._drawing_safe_zone(
             machine=machine,

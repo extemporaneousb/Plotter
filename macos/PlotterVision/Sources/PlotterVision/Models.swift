@@ -611,6 +611,7 @@ struct MachineVideoAgreementSample: Equatable {
     let observedDxNorm: Double
     let observedDyNorm: Double
     let observedDistanceNorm: Double
+    let afterCameraPoint: CGPoint
     var residualNorm: Double = 0.0
     let strength: Double
 

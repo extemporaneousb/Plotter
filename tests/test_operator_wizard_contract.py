@@ -79,6 +79,8 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "Drawing Checkout" not in setup_panel
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
+    assert "Field Grid" in plotter_panel
+    assert "Calibrated Grid" not in plotter_panel
     assert "PortraitPanel(" in face_panel
     assert "CameraLayoutMode" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert "CameraSelector(camera: plotterCamera)" in content
@@ -477,6 +479,7 @@ def test_old_binding_runner_is_not_active_setup() -> None:
 
 def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
@@ -497,12 +500,15 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "solvePaperHomographyFromWizard" not in content
     assert "CLICK FIELD CORNERS" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert "struct VisualFieldEditLayer" in support
+    assert "let isVisible: Bool" in support
     assert "plotterViewportPointFromCameraNorm" in support
     assert "plotterCameraNormFromViewPoint" in support
-    assert "visualFieldRectangleCornersFromCurrentBounds" in content
+    assert "visualFieldRectangleCornersFromCurrentBounds" in content + field_seed_geometry
     assert "visualFieldRectangleMoved" in support
     assert "visualFieldRectangleResizedFromTopRight" in support
     assert "topRightResizeGesture" in support
+    assert "LIVE MACHINE-VIDEO ESTIMATE" in support
+    assert "if isVisible, orderedCorners.count == 4" in support
     assert "updatedCorners(" not in support
     assert "ForEach(Array(viewCorners.enumerated())" not in support
     assert "VisualFieldEditLayer(" in content
@@ -623,10 +629,14 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
 
 def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     models = _read(SWIFT_DIR / "Models.swift")
     readme = _read(ROOT / "README.md")
     contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
     plan = _read(ROOT / "docs" / "REPOSITORY_PLAN.md")
+    readme_flat = " ".join(readme.split())
+    contract_flat = " ".join(contract.split())
+    plan_flat = " ".join(plan.split())
 
     assert "private var visualFieldOverlayTransform: PaperRegistrationSnapshot?" in content
     overlay_gate = content.split("private var visualFieldOverlayTransform", 1)[1].split(
@@ -650,6 +660,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "model.isPrecisionConverged" not in agreement_probe
     assert "model.isOnlineEstimateUsable" not in agreement_probe
     assert "machineVideoAgreementModel = model" in agreement_probe
+    assert "updateLiveMachineVideoFieldFrame(from: model, center: sample.afterCameraPoint)" in agreement_probe
+    assert "afterCameraPoint: after.cameraPoint" in content
     solve_block = agreement_probe.split("if let model = MachineVideoAgreementModel.solve", 1)[1].split(
         "updateMachineVideoAgreementSummary",
         1,
@@ -684,8 +696,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "guard let model else" in probe_vectors
     assert "model.isOnlineEstimateUsable" not in probe_vectors
 
-    field_seed = content.split("private func seededFieldCorners", 1)[1].split(
-        "private func pointInsideCameraBounds",
+    field_seed = field_seed_geometry.split("func seededFieldCorners", 1)[1].split(
+        "func manualFieldPoints",
         1,
     )[0]
     assert "model.xBasisDxNorm * fieldWidthMm" in field_seed
@@ -695,17 +707,31 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "desiredVisualFieldWidthMm" in content
     assert "desiredVisualFieldHeightMm" in content
     assert "fitFieldCenter" in field_seed
-    assert "halfWidth *= 0.92" not in content
-    assert "halfHeight = halfWidth * 0.75" not in content
+    assert "halfWidth *= 0.92" not in content + field_seed_geometry
+    assert "halfHeight = halfWidth * 0.75" not in content + field_seed_geometry
+    live_update = content.split("private func updateLiveMachineVideoFieldFrame", 1)[1].split(
+        "private func relockEditableVisualField",
+        1,
+    )[0]
+    assert "workspace.setupWindowActive" in live_update
+    assert "manualFiducials = corners" in live_update
 
-    assert "before drawing any field box or grid" in readme
+    frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
+    bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    assert "bridge.showSetupFieldFrameExpectedPath(corners: corners)" in frame_drawing
+    assert "func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot])" in bridge_model
+    assert '"setup_field_frame_expected_path_ready"' in bridge_model
+
+    assert "before drawing any locked field box or field grid" in readme
     assert "publishes each solved 2x2 estimate as the current online state" in readme
     assert "current 2x2 machine-video transform" in readme
-    assert "relative update magnitude as the convergence signal" in readme
+    assert "relative update magnitude as the convergence signal" in readme_flat
+    assert "every later solved estimate updates the provisional" in readme
     assert "seeded video field box is operator-adjustable as a rectangle" in readme
     assert "top-right handle to resize it while it remains rectangular" in readme
     assert "Changing the declared width/height also re-locks" in readme
-    assert "before drawing any field box or grid" in contract
+    assert "cap and tip are treated as colocated until explicit binding evidence" in readme
+    assert "before drawing any locked field box or field grid" in contract
     assert "There is no identity matrix as calibration evidence" in contract
     assert "reports update magnitude as the" in contract
     assert "magnitude approaching zero" in contract
@@ -713,14 +739,19 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
-    assert "seeded video field" in contract
+    assert "Every later solved estimate updates the provisional video field frame" in contract_flat
+    assert "seeded video field" in contract_flat
     assert "resize it while it remains rectangular" in contract
     assert "release to re-lock field registration" in contract
-    assert "before drawing any field box or grid" in plan
+    assert "cap and tip are colocated until explicit binding evidence" in contract
+    assert "before drawing any locked field box" in plan
     assert "first empirical 2x2 estimate" in plan
     assert "Update magnitude is the convergence signal" in plan
     assert "accepted-estimate gate" in plan
+    assert "Every later solved estimate updates the provisional video field frame" in plan_flat
     assert "video field box remains operator-adjustable as a" in plan
+    assert "Plotter Video Field Grid is a display-only rendering" in plan
+    assert "not a second calibration frame" in plan
     assert "correct perspective" not in readme + contract + plan
 
 
@@ -766,6 +797,8 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "point.x - zoomOffset.width - center.x" in support
 
     assert "panelSectionTitle(\"Viewport\")" in plotter_panel
+    assert "Field Grid" in plotter_panel
+    assert "Calibrated Grid" not in plotter_panel
     assert "Original Video" in plotter_panel
     assert "Fit Field" in plotter_panel
     assert "Zoom In" not in plotter_panel

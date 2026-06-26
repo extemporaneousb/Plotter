@@ -22,7 +22,7 @@ struct MeasurementOverlay: View {
 
             if let paperTransform {
                 if showGrid {
-                    drawPaperCoordinateGrid(paperTransform, mapper: mapper, in: &context)
+                    drawFieldCoordinateGrid(paperTransform, mapper: mapper, in: &context)
                 }
                 drawPaperDrawingRegion(paperTransform, mapper: mapper, in: &context)
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
@@ -46,7 +46,7 @@ struct MeasurementOverlay: View {
         .allowsHitTesting(false)
     }
 
-    private func drawPaperCoordinateGrid(
+    private func drawFieldCoordinateGrid(
         _ registration: PaperRegistrationSnapshot,
         mapper: OverlayMapper,
         in context: inout GraphicsContext
@@ -87,7 +87,7 @@ struct MeasurementOverlay: View {
         guard showMeasurements else { return }
 
         if let origin = paperToCameraPoint(CGPoint(x: 0, y: 0), registration: registration) {
-            let label = Text(String(format: "CAL mm grid %.0fmm", stepMm))
+            let label = Text(String(format: "FIELD mm grid %.0fmm", stepMm))
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(color.opacity(0.96))
             context.draw(label, at: mapper.point(origin), anchor: .bottomLeading)

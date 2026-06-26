@@ -47,16 +47,18 @@ The normal development target is the fixed-camera drawing loop:
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-4. Run the machine-video agreement probe before drawing any field box or grid. The app first measures
-   cap jitter, then sends adaptive relative machine vectors on X, Y, and diagonals without requiring
-   homing, axis-model trust, absolute machine-position clearance, or a preexisting visual field. The
-   loop publishes each solved 2x2 estimate as the current online state, uses the latest estimate to
-   prioritize later minibatches, and tracks the relative update magnitude as the convergence signal.
+4. Run the machine-video agreement probe before drawing any locked field box or field grid. The app
+   first measures cap jitter, then sends adaptive relative machine vectors on X, Y, and diagonals
+   without requiring homing, axis-model trust, absolute machine-position clearance, or a preexisting
+   visual field. The loop publishes each solved 2x2 estimate as the current online state, uses the
+   latest estimate to prioritize later minibatches, and tracks the relative update magnitude as the
+   convergence signal.
    Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the learned matrix.
 5. Define Drawing Field from the current 2x2 machine-video transform. The app places a provisional
    field by projecting the learned machine `+X` and `+Y` basis vectors using the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm. Residuals and field-corner
-   precision remain visible diagnostics, but they do not create a second accepted-estimate gate.
+   precision remain visible diagnostics, and every later solved estimate updates the provisional
+   video frame until the operator locks the field. They do not create a second accepted-estimate gate.
    The seeded video field box is operator-adjustable as a rectangle: drag the box to move it, drag
    the top-right handle to resize it while it remains rectangular, and release to re-lock field
    registration using the adjusted corners. Changing the declared width/height also re-locks the
@@ -66,7 +68,8 @@ The normal development target is the fixed-camera drawing loop:
    Success for this milestone means the green cap can be moved predictably inside the user-defined
    field.
 7. Persist the field registration, cap observation, and relative motion model as the current setup
-   authority. Cap-to-tip offset, ink observations, and actual drawing execution are future work.
+   authority. During setup the cap and tip are treated as colocated until explicit binding evidence
+   proves otherwise. Cap-to-tip offset, ink observations, and actual drawing execution are future work.
 8. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
    currently removed from the operator UI until the next real drawing surface is defined.
 
@@ -324,10 +327,11 @@ Interpretation rules:
   gates.
 
 In the app, use Setup as the only setup path: green cap confirmation starts Machine-Video Agreement,
-Machine-Video Agreement seeds the operator-selected drawing field size, and Validate Motion proves
-that the cap can be sent to visual-field targets by applying the inverse relative motion model. The
-active setup UI keeps the seeded video field box editable and re-locks adjusted corners through field
-registration. Bridge previews for future drawing work still simulate command streams before execution.
+Machine-Video Agreement updates the provisional operator-selected drawing field size as each solved
+estimate improves, and Validate Motion proves that the cap can be sent to visual-field targets by
+applying the inverse relative motion model. The active setup UI keeps the bridge-locked video field
+box editable and re-locks adjusted corners through field registration. Bridge previews for future
+drawing work still simulate command streams before execution.
 Capability-check examples remain
 available as backend bridge tests, but the current operator setup flow stops at predictable cap motion.
 Stop the background preview bridge with:
@@ -343,11 +347,12 @@ field registration. The controller's `G53` machine coordinates may still be disp
 diagnostics, but homing state, `axis_model_trusted`, and absolute machine workspace bounds are not
 Visual Field Setup authority. The learned 2x2 relative model may swap axes, reverse signs, rotate, or
 skew machine motion relative to the video field as long as it is stable, invertible, and validated by
-observed cap motion. The setup UI must not draw the field frame or millimeter grid until
-Machine-Video Agreement has produced a current estimate and seeded field registration; strict 2 mm
-field-corner precision remains visible as a refinement metric rather than the only way to use the
-estimate. Restart the bridge after model changes so the running process picks up the current
-transform.
+observed cap motion. The setup UI must not draw a bridge-locked field frame or Field Grid until
+Machine-Video Agreement has produced a current estimate and seeded field registration; the
+provisional setup frame may update from each current estimate before the lock, but it is not movement
+authority. Strict 2 mm field-corner precision remains visible as a refinement metric rather than the
+only way to use the estimate. Restart the bridge after model changes so the running process picks up
+the current transform.
 
 Real motion is still gated:
 

@@ -84,7 +84,8 @@ The fixed-camera workflow is:
 1. Start the app.
 2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-4. Run Machine-Video Agreement from the current cap location before drawing any field box or grid.
+4. Run Machine-Video Agreement from the current cap location before drawing any locked field box or
+   field grid.
    Calibration measures cap jitter, runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to create the
    first empirical 2x2 estimate, then uses every later solved estimate to choose subsequent
    X/Y/diagonal vectors without requiring homing, axis-model trust, absolute `MPos` clearance, a
@@ -95,7 +96,8 @@ The fixed-camera workflow is:
    the longer dimension on visual `+X`. The video field box remains operator-adjustable as a
    rectangle while setup is open: drag the box to move it, drag the top-right handle to resize it
    while it remains rectangular, and release to re-lock field registration using the adjusted
-   corners. Updating the declared dimensions re-locks the current field box instead of forcing reset
+   corners. Every later solved estimate updates the provisional video field frame until the operator
+   locks the field. Updating the declared dimensions re-locks the current field box instead of forcing reset
    and reseed. There is still no separate
    accepted-estimate gate behind the current online machine-video transform.
 6. Validate Motion by commanding field-target moves through the inverse relative model using setup
@@ -103,7 +105,8 @@ The fixed-camera workflow is:
    rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.
 7. Treat field registration, cap localization, and a valid relative motion model as the setup
-   authority for this milestone. Cap-to-tip offset, ink observations, and real drawing remain future
+   authority for this milestone. During setup, the cap and tip are colocated until explicit binding
+   evidence proves otherwise. Cap-to-tip offset, ink observations, and real drawing remain future
    work.
 8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
    are currently backend tests only and are not exposed in the operator UI.
@@ -138,6 +141,9 @@ and transforms:
 | Drawing/logical millimeters | Python drawing/planning | Future shape-language coordinates used by `plotter_vision.drawing`. |
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation/FOV zoom and overlay rendering only; it is not motion authority. |
+
+The Plotter Video Field Grid is a display-only rendering of the current or locked visual field. It is
+not a second calibration frame, not a movement boundary, and not separate safety authority.
 
 The bridge still has shape and capability-test routes for backend validation, but the current macOS
 operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route

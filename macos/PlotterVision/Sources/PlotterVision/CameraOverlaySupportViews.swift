@@ -204,6 +204,7 @@ struct VisualFieldEditLayer: View {
     let corners: [ManualFiducialPoint]
     let fieldWidthMm: Double
     let fieldHeightMm: Double
+    let isVisible: Bool
     let isActive: Bool
     let onUpdate: ([ManualFiducialPoint], Bool) -> Void
 
@@ -215,7 +216,7 @@ struct VisualFieldEditLayer: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if isActive, orderedCorners.count == 4 {
+            if isVisible, orderedCorners.count == 4 {
                 let viewCorners = orderedCorners.map {
                     plotterViewportPointFromCameraNorm(
                         $0.cameraPoint,
@@ -225,10 +226,16 @@ struct VisualFieldEditLayer: View {
                     )
                 }
                 ZStack {
-                    editableFieldPolygon(points: viewCorners)
-                        .fill(Color.cyan.opacity(0.001))
-                        .contentShape(editableFieldPolygon(points: viewCorners))
-                        .gesture(moveGesture(in: geometry.size))
+                    if isActive {
+                        editableFieldPolygon(points: viewCorners)
+                            .fill(Color.cyan.opacity(0.001))
+                            .contentShape(editableFieldPolygon(points: viewCorners))
+                            .gesture(moveGesture(in: geometry.size))
+                    } else {
+                        editableFieldPolygon(points: viewCorners)
+                            .fill(Color.cyan.opacity(0.001))
+                            .allowsHitTesting(false)
+                    }
 
                     Canvas { context, _ in
                         var path = editableFieldPolygon(points: viewCorners).path(in: .zero)
@@ -237,7 +244,8 @@ struct VisualFieldEditLayer: View {
                         context.stroke(path, with: .color(.cyan.opacity(0.92)), lineWidth: 3.0)
                         context.stroke(path, with: .color(.black.opacity(0.75)), lineWidth: 1.0)
 
-                        let label = Text(String(format: "FIELD %.0fx%.0f mm  DRAG BOX / TOP-RIGHT RESIZE; RELEASE RE-LOCKS", fieldWidthMm, fieldHeightMm))
+                        let interaction = isActive ? "DRAG BOX / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" : "LIVE MACHINE-VIDEO ESTIMATE"
+                        let label = Text(String(format: "FIELD %.0fx%.0f mm  %@", fieldWidthMm, fieldHeightMm, interaction))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.cyan.opacity(0.96))
                         if let topLeft = viewCorners.min(by: { $0.y < $1.y }) {
@@ -250,7 +258,7 @@ struct VisualFieldEditLayer: View {
                     }
                     .allowsHitTesting(false)
 
-                    if viewCorners.indices.contains(visualFieldTopRightCornerIndex) {
+                    if isActive, viewCorners.indices.contains(visualFieldTopRightCornerIndex) {
                         let point = viewCorners[visualFieldTopRightCornerIndex]
                         Circle()
                             .fill(Color.black.opacity(0.68))

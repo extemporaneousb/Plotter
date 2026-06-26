@@ -17,7 +17,13 @@ from plotter_vision.bridge.server import (
     _make_handler,
 )
 from plotter_vision.calibration.probe_evidence import VisualProbeRun
+from plotter_vision.calibration.readiness import (
+    DrawingSafeZone,
+    SafeZoneMarginsMM,
+    VisualReadinessState,
+)
 from plotter_vision.config import MachineConfig
+from plotter_vision.drawing import DrawingFrameMM
 
 
 def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: Path) -> None:
@@ -42,6 +48,42 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert readiness["relative_motion_model"] is None
         assert readiness["visual_ready_to_plot"] is False
         assert any("Motion calibration" in blocker for blocker in readiness["blockers"])
+
+
+def test_setup_safe_zone_uses_current_visual_field_not_stale_tool_offset(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_field(client)
+        stale_zone = DrawingSafeZone.from_frame(
+            drawing_frame=DrawingFrameMM(
+                origin_x_mm=0.0,
+                origin_y_mm=0.0,
+                width_mm=200.0,
+                height_mm=150.0,
+            ),
+            margins_mm=SafeZoneMarginsMM(left=80.0, right=80.0, bottom=60.0, top=60.0),
+            extra_padding_mm=40.0,
+            cap_to_tip_offset_x_mm=25.0,
+            cap_to_tip_offset_y_mm=-20.0,
+        )
+        readiness_path = tmp_path / "calibration" / "latest_visual_readiness.json"
+        readiness_path.parent.mkdir(parents=True, exist_ok=True)
+        readiness_path.write_text(
+            VisualReadinessState(safe_zone=stale_zone).model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+        observed = _observe_cap(client, x=10.0, y=10.0)
+
+    readiness = observed["readiness"]
+    zone = readiness["safe_zone"]
+    assert readiness["cap_inside_safe_zone"] is True
+    assert zone["extra_padding_mm"] == pytest.approx(5.0)
+    assert zone["cap_to_tip_offset_x_mm"] == pytest.approx(0.0)
+    assert zone["cap_to_tip_offset_y_mm"] == pytest.approx(0.0)
+    assert zone["paper_min_x_norm"] == pytest.approx(5.0 / 200.0)
+    assert zone["paper_min_y_norm"] == pytest.approx(5.0 / 150.0)
 
 
 @pytest.mark.parametrize(
