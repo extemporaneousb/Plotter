@@ -22,7 +22,6 @@ struct MeasurementOverlay: View {
             if let paperTransform {
                 drawDrawingBorder(paperTransform, mapper: mapper, in: &context)
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
-                drawVisualMoveIntent(registration: paperTransform, mapper: mapper, in: &context)
             }
 
             drawBindingMarkPreview(mapper: mapper, in: &context)
@@ -37,6 +36,10 @@ struct MeasurementOverlay: View {
 
             for track in motionTracks {
                 draw(track: track, mapper: mapper, in: &context)
+            }
+
+            if let paperTransform {
+                drawVisualMoveIntent(registration: paperTransform, mapper: mapper, in: &context)
             }
         }
         .allowsHitTesting(false)
@@ -346,14 +349,7 @@ struct MeasurementOverlay: View {
 
         let start = mapper.point(cameraStart)
         guard let endPaperMm = visualMoveIntent.endPaperMm else {
-            context.fill(
-                Path(ellipseIn: CGRect(x: start.x - 8, y: start.y - 8, width: 16, height: 16)),
-                with: .color(.black.opacity(0.82))
-            )
-            context.fill(
-                Path(ellipseIn: CGRect(x: start.x - 5, y: start.y - 5, width: 10, height: 10)),
-                with: .color(.orange.opacity(0.98))
-            )
+            drawVisualMoveIntentAnchor(at: start, in: &context)
             guard showMeasurements else { return }
             drawOverlayLabel(
                 "\(visualMoveIntent.label) \(visualMoveIntent.detail)",
@@ -392,10 +388,7 @@ struct MeasurementOverlay: View {
         )
 
         drawArrowHead(start: start, end: end, color: .orange, in: &context)
-        context.fill(
-            Path(ellipseIn: CGRect(x: start.x - 5, y: start.y - 5, width: 10, height: 10)),
-            with: .color(.white.opacity(0.96))
-        )
+        drawVisualMoveIntentAnchor(at: start, in: &context)
         context.fill(
             Path(ellipseIn: CGRect(x: end.x - 6, y: end.y - 6, width: 12, height: 12)),
             with: .color(.orange.opacity(0.98))
@@ -408,6 +401,23 @@ struct MeasurementOverlay: View {
             foreground: .orange.opacity(0.98),
             font: .system(size: 11, weight: .bold, design: .monospaced),
             in: &context
+        )
+    }
+
+    private func drawVisualMoveIntentAnchor(at point: CGPoint, in context: inout GraphicsContext) {
+        context.fill(
+            Path(ellipseIn: CGRect(x: point.x - 13, y: point.y - 13, width: 26, height: 26)),
+            with: .color(.black.opacity(0.78))
+        )
+        context.stroke(
+            Path(ellipseIn: CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)),
+            with: .color(.orange.opacity(0.98)),
+            lineWidth: 5.2
+        )
+        context.stroke(
+            Path(ellipseIn: CGRect(x: point.x - 6.5, y: point.y - 6.5, width: 13, height: 13)),
+            with: .color(.white.opacity(0.96)),
+            lineWidth: 2.4
         )
     }
 

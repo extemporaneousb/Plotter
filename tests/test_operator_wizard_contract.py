@@ -912,6 +912,11 @@ def test_visual_move_intent_is_projected_on_video() -> None:
     assert "MOVE \\(label)" in content
     assert "drawVisualMoveIntent" in overlay
     assert "drawArrowHead" in overlay
+    assert "drawVisualMoveIntentAnchor" in overlay
+    canvas_body = overlay.split("Canvas { context, size in", 1)[1].split(".allowsHitTesting", 1)[0]
+    assert canvas_body.rfind("drawVisualMoveIntent") > canvas_body.find(
+        "draw(carriageMarker: carriageMarker"
+    )
 
 
 def test_main_window_placement_only_filters_main_window_candidates() -> None:
