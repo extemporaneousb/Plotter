@@ -54,11 +54,12 @@ The normal development target is the fixed-camera drawing loop:
    latest estimate to prioritize later minibatches, and tracks the relative update magnitude as the
    convergence signal.
    Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the learned matrix.
-5. Set Drawing Border from the current 2x2 machine-video transform. The app places a provisional
-   border by projecting the learned machine `+X` and `+Y` basis vectors using the Setup panel's
-   physical field width and height, defaulting to 200 mm x 150 mm. Residuals and field-corner
-   precision remain visible diagnostics, and every later solved estimate updates the provisional
-   Drawing Border until the operator locks it. They do not create a second accepted-estimate gate.
+5. Set Drawing Border from the current 2x2 machine-video transform. The app uses the latest
+   machine-video basis to estimate scale and fit a provisional video rectangle, but the Setup
+   panel's declared field width is visual `+X` and the declared field height is visual `+Y`,
+   defaulting to 200 mm x 150 mm. Residuals and field-corner precision remain visible diagnostics,
+   and every later solved estimate updates the provisional Drawing Border until the operator locks
+   it. They do not create a second accepted-estimate gate.
    The seeded video border is operator-adjustable as a rectangle: drag the border to move it, drag
    the top-right handle to resize it while it remains rectangular, and release to re-lock Drawing
    Border registration using the adjusted corners. Changing the declared width/height also re-locks

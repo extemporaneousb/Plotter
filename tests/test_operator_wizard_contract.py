@@ -480,7 +480,6 @@ def test_old_binding_runner_is_not_active_setup() -> None:
 
 def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
-    field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
@@ -504,7 +503,7 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "let isVisible: Bool" in support
     assert "plotterViewportPointFromCameraNorm" in support
     assert "plotterCameraNormFromViewPoint" in support
-    assert "visualFieldRectangleCornersFromCurrentBounds" in content + field_seed_geometry
+    assert "visualFieldRectangleCornersFromCurrentBounds" in support
     assert "visualFieldRectangleMoved" in support
     assert "visualFieldRectangleResizedFromTopRight" in support
     assert "cornerResizeGesture(cornerID:" not in support
@@ -728,10 +727,17 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         "func manualFieldPoints",
         1,
     )[0]
-    assert "model.xBasisDxNorm * fieldWidthMm" in field_seed
-    assert "model.xBasisDyNorm * fieldWidthMm" in field_seed
-    assert "model.yBasisDxNorm * fieldHeightMm" in field_seed
-    assert "model.yBasisDyNorm * fieldHeightMm" in field_seed
+    assert "visualFieldAxisAlignedSpan" in field_seed_geometry
+    assert "let horizontalScale = max(abs(model.xBasisDxNorm), abs(model.yBasisDxNorm))" in field_seed_geometry
+    assert "let verticalScale = max(abs(model.xBasisDyNorm), abs(model.yBasisDyNorm))" in field_seed_geometry
+    assert "horizontalScale * fieldWidthMm" in field_seed_geometry
+    assert "verticalScale * fieldHeightMm" in field_seed_geometry
+    assert "model.xBasisDxNorm * fieldWidthMm" not in field_seed
+    assert "model.xBasisDyNorm * fieldWidthMm" not in field_seed
+    assert "model.yBasisDxNorm * fieldHeightMm" not in field_seed
+    assert "model.yBasisDyNorm * fieldHeightMm" not in field_seed
+    assert "return manualFieldPoints(cameraCorners: corners)" in field_seed
+    assert "visualFieldRectangleCornersFromCurrentBounds(manualFieldPoints(cameraCorners: corners))" not in field_seed
     assert "desiredVisualFieldWidthMm" in content
     assert "desiredVisualFieldHeightMm" in content
     assert "fitFieldCenter" in field_seed

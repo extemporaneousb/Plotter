@@ -8,20 +8,15 @@ extension ContentView {
         fieldWidthMm: Double,
         fieldHeightMm: Double
     ) -> [ManualFiducialPoint]? {
-        let xVector = CGVector(
-            dx: CGFloat(model.xBasisDxNorm * fieldWidthMm),
-            dy: CGFloat(model.xBasisDyNorm * fieldWidthMm)
-        )
-        let yVector = CGVector(
-            dx: CGFloat(model.yBasisDxNorm * fieldHeightMm),
-            dy: CGFloat(model.yBasisDyNorm * fieldHeightMm)
-        )
-        guard hypot(xVector.dx, xVector.dy) > 0.000_001,
-              hypot(yVector.dx, yVector.dy) > 0.000_001 else {
+        guard let span = visualFieldAxisAlignedSpan(
+            from: model,
+            fieldWidthMm: fieldWidthMm,
+            fieldHeightMm: fieldHeightMm
+        ) else {
             return nil
         }
         let margin = 0.08
-        let offsets = fieldCornerOffsets(xVector: xVector, yVector: yVector)
+        let offsets = fieldCornerOffsets(widthNorm: span.width, heightNorm: span.height)
         guard let fittedCenter = fitFieldCenter(
             preferredCenter: center,
             offsets: offsets,
@@ -33,7 +28,7 @@ extension ContentView {
             CGPoint(x: fittedCenter.x + $0.dx, y: fittedCenter.y + $0.dy)
         }
         guard corners.allSatisfy({ pointInsideCameraBounds($0, margin: margin) }) else { return nil }
-        return visualFieldRectangleCornersFromCurrentBounds(manualFieldPoints(cameraCorners: corners))
+        return manualFieldPoints(cameraCorners: corners)
     }
 
     func manualFieldPoints(cameraCorners: [CGPoint]) -> [ManualFiducialPoint] {
@@ -51,17 +46,30 @@ extension ContentView {
     }
 }
 
+private func visualFieldAxisAlignedSpan(
+    from model: MachineVideoAgreementModel,
+    fieldWidthMm: Double,
+    fieldHeightMm: Double
+) -> CGSize? {
+    let horizontalScale = max(abs(model.xBasisDxNorm), abs(model.yBasisDxNorm))
+    let verticalScale = max(abs(model.xBasisDyNorm), abs(model.yBasisDyNorm))
+    let widthNorm = CGFloat(horizontalScale * fieldWidthMm)
+    let heightNorm = CGFloat(verticalScale * fieldHeightMm)
+    guard widthNorm > 0.000_001, heightNorm > 0.000_001 else { return nil }
+    return CGSize(width: widthNorm, height: heightNorm)
+}
+
 private func fieldCornerOffsets(
-    xVector: CGVector,
-    yVector: CGVector
+    widthNorm: CGFloat,
+    heightNorm: CGFloat
 ) -> [CGVector] {
-    let halfX = CGVector(dx: xVector.dx * 0.5, dy: xVector.dy * 0.5)
-    let halfY = CGVector(dx: yVector.dx * 0.5, dy: yVector.dy * 0.5)
+    let halfWidth = widthNorm * 0.5
+    let halfHeight = heightNorm * 0.5
     return [
-        CGVector(dx: -halfX.dx - halfY.dx, dy: -halfX.dy - halfY.dy),
-        CGVector(dx: halfX.dx - halfY.dx, dy: halfX.dy - halfY.dy),
-        CGVector(dx: halfX.dx + halfY.dx, dy: halfX.dy + halfY.dy),
-        CGVector(dx: -halfX.dx + halfY.dx, dy: -halfX.dy + halfY.dy)
+        CGVector(dx: -halfWidth, dy: -halfHeight),
+        CGVector(dx: halfWidth, dy: -halfHeight),
+        CGVector(dx: halfWidth, dy: halfHeight),
+        CGVector(dx: -halfWidth, dy: halfHeight)
     ]
 }
 
