@@ -755,6 +755,13 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert "bridge.showSetupFieldFrameExpectedPath(corners: corners)" in frame_drawing
+    assert "model.machineDelta(forPaperDx: paperDx, paperDy: paperDy)" in frame_drawing
+    assert "let machineStepCount = Int(ceil(machineDistance / frameMachineSegmentLimitMm()))" in frame_drawing
+    assert "bridge.machineMaxJogMm * 0.80" in frame_drawing
+    assert '"max_machine_segment_mm": frameMachineSegmentLimitMm()' in frame_drawing
+    assert '"setup_field_frame_residual_measured"' in frame_drawing
+    assert '"closure_residual_mm": residualMm' in frame_drawing
+    assert '"setup_field_frame_residual_unavailable"' in frame_drawing
     assert "func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot])" in bridge_model
     assert '"setup_field_frame_expected_path_ready"' in bridge_model
     assert "drawDrawingBorder" in overlay

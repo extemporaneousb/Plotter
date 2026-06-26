@@ -2021,7 +2021,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func waitForGreenCapPaperObservation(
+    func waitForGreenCapPaperObservation(
         afterFrame: Int? = nil,
         minimumFrameAdvance: Int = 1,
         timeoutSeconds: Double
