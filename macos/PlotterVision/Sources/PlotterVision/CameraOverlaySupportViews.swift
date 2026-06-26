@@ -237,7 +237,7 @@ struct VisualFieldEditLayer: View {
                         context.stroke(path, with: .color(.cyan.opacity(0.92)), lineWidth: 3.0)
                         context.stroke(path, with: .color(.black.opacity(0.75)), lineWidth: 1.0)
 
-                        let label = Text(String(format: "FIELD %.0fx%.0f mm  DRAG/RESIZE; RELEASE RE-LOCKS", fieldWidthMm, fieldHeightMm))
+                        let label = Text(String(format: "FIELD %.0fx%.0f mm  DRAG BOX / TOP-RIGHT RESIZE; RELEASE RE-LOCKS", fieldWidthMm, fieldHeightMm))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.cyan.opacity(0.96))
                         if let topLeft = viewCorners.min(by: { $0.y < $1.y }) {
@@ -250,7 +250,8 @@ struct VisualFieldEditLayer: View {
                     }
                     .allowsHitTesting(false)
 
-                    ForEach(Array(viewCorners.enumerated()), id: \.offset) { index, point in
+                    if viewCorners.indices.contains(visualFieldTopRightCornerIndex) {
+                        let point = viewCorners[visualFieldTopRightCornerIndex]
                         Circle()
                             .fill(Color.black.opacity(0.68))
                             .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
@@ -258,8 +259,8 @@ struct VisualFieldEditLayer: View {
                             .frame(width: 26, height: 26)
                             .position(point)
                             .contentShape(Circle())
-                            .gesture(cornerGesture(index: index, in: geometry.size))
-                            .help("Drag field corner \(index + 1) and release to re-lock")
+                            .gesture(topRightResizeGesture(in: geometry.size))
+                            .help("Drag the top-right field corner to resize; release to re-lock")
                     }
                 }
             }
@@ -289,15 +290,7 @@ struct VisualFieldEditLayer: View {
                 )
                 let dx = current.x - start.x
                 let dy = current.y - start.y
-                onUpdate(
-                    base.map {
-                        updatedFieldPoint(
-                            $0,
-                            cameraPoint: CGPoint(x: $0.cameraPoint.x + dx, y: $0.cameraPoint.y + dy)
-                        )
-                    },
-                    false
-                )
+                onUpdate(visualFieldRectangleMoved(base, cameraDelta: CGPoint(x: dx, y: dy)), false)
             }
             .onEnded { value in
                 let base = dragStartCorners ?? orderedCorners
@@ -316,35 +309,26 @@ struct VisualFieldEditLayer: View {
                 )
                 let dx = current.x - start.x
                 let dy = current.y - start.y
-                onUpdate(
-                    base.map {
-                        updatedFieldPoint(
-                            $0,
-                            cameraPoint: CGPoint(x: $0.cameraPoint.x + dx, y: $0.cameraPoint.y + dy)
-                        )
-                    },
-                    true
-                )
+                onUpdate(visualFieldRectangleMoved(base, cameraDelta: CGPoint(x: dx, y: dy)), true)
             }
     }
 
-    private func cornerGesture(index: Int, in viewSize: CGSize) -> some Gesture {
+    private func topRightResizeGesture(in viewSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let base = dragStartCorners ?? orderedCorners
                 dragStartCorners = base
-                onUpdate(updatedCorners(base, index: index, value: value.location, viewSize: viewSize), false)
+                onUpdate(resizedRectangle(base, value: value.location, viewSize: viewSize), false)
             }
             .onEnded { value in
                 let base = dragStartCorners ?? orderedCorners
                 dragStartCorners = nil
-                onUpdate(updatedCorners(base, index: index, value: value.location, viewSize: viewSize), true)
+                onUpdate(resizedRectangle(base, value: value.location, viewSize: viewSize), true)
             }
     }
 
-    private func updatedCorners(
+    private func resizedRectangle(
         _ base: [ManualFiducialPoint],
-        index: Int,
         value: CGPoint,
         viewSize: CGSize
     ) -> [ManualFiducialPoint] {
@@ -354,24 +338,7 @@ struct VisualFieldEditLayer: View {
             videoSize: videoSize,
             settings: settings
         )
-        return base.enumerated().map { offset, corner in
-            offset == index ? updatedFieldPoint(corner, cameraPoint: cameraPoint) : corner
-        }
-    }
-
-    private func updatedFieldPoint(
-        _ corner: ManualFiducialPoint,
-        cameraPoint: CGPoint
-    ) -> ManualFiducialPoint {
-        let clamped = CGPoint(
-            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
-        )
-        return ManualFiducialPoint(
-            id: corner.id,
-            point: CGPoint(x: clamped.x, y: 1.0 - clamped.y),
-            cameraPoint: clamped
-        )
+        return visualFieldRectangleResizedFromTopRight(base, topRightCameraPoint: cameraPoint)
     }
 }
 
@@ -407,6 +374,139 @@ func visualFieldCornersAreConvex(_ corners: [ManualFiducialPoint]) -> Bool {
 
 private func visualFieldCornerTurn(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+private let minimumVisualFieldRectangleSpanNorm: CGFloat = 0.01
+private let visualFieldTopRightCornerIndex = 2
+
+func visualFieldRectangleCornersFromCurrentBounds(_ corners: [ManualFiducialPoint]) -> [ManualFiducialPoint] {
+    let ordered = orderedVisualFieldCorners(corners)
+    guard let bounds = visualFieldCameraBounds(ordered) else { return corners }
+    return visualFieldRectangleCorners(
+        matching: ordered,
+        minX: bounds.minX,
+        minY: bounds.minY,
+        maxX: bounds.maxX,
+        maxY: bounds.maxY
+    )
+}
+
+func visualFieldRectangleMoved(
+    _ corners: [ManualFiducialPoint],
+    cameraDelta: CGPoint
+) -> [ManualFiducialPoint] {
+    let ordered = orderedVisualFieldCorners(corners)
+    guard let bounds = visualFieldCameraBounds(ordered) else { return corners }
+    let dx = clampCGFloat(cameraDelta.x, min: -bounds.minX, max: 1.0 - bounds.maxX)
+    let dy = clampCGFloat(cameraDelta.y, min: -bounds.minY, max: 1.0 - bounds.maxY)
+    return visualFieldRectangleCorners(
+        matching: ordered,
+        minX: bounds.minX + dx,
+        minY: bounds.minY + dy,
+        maxX: bounds.maxX + dx,
+        maxY: bounds.maxY + dy
+    )
+}
+
+func visualFieldRectangleResizedFromTopRight(
+    _ corners: [ManualFiducialPoint],
+    topRightCameraPoint: CGPoint
+) -> [ManualFiducialPoint] {
+    let ordered = orderedVisualFieldCorners(corners)
+    guard let bounds = visualFieldCameraBounds(ordered) else { return corners }
+
+    let anchorX = clampCGFloat(
+        bounds.minX,
+        min: 0.0,
+        max: 1.0 - minimumVisualFieldRectangleSpanNorm
+    )
+    let anchorY = clampCGFloat(
+        bounds.maxY,
+        min: minimumVisualFieldRectangleSpanNorm,
+        max: 1.0
+    )
+    let maxX = clampCGFloat(
+        topRightCameraPoint.x,
+        min: anchorX + minimumVisualFieldRectangleSpanNorm,
+        max: 1.0
+    )
+    let minY = clampCGFloat(
+        topRightCameraPoint.y,
+        min: 0.0,
+        max: anchorY - minimumVisualFieldRectangleSpanNorm
+    )
+
+    return visualFieldRectangleCorners(
+        matching: ordered,
+        minX: anchorX,
+        minY: minY,
+        maxX: maxX,
+        maxY: anchorY
+    )
+}
+
+private func orderedVisualFieldCorners(_ corners: [ManualFiducialPoint]) -> [ManualFiducialPoint] {
+    Array(corners.sorted { $0.id < $1.id }.prefix(4))
+}
+
+private func visualFieldCameraBounds(_ corners: [ManualFiducialPoint]) -> CGRect? {
+    let ordered = orderedVisualFieldCorners(corners)
+    guard ordered.count == 4,
+          let minX = ordered.map(\.cameraPoint.x).min(),
+          let maxX = ordered.map(\.cameraPoint.x).max(),
+          let minY = ordered.map(\.cameraPoint.y).min(),
+          let maxY = ordered.map(\.cameraPoint.y).max() else {
+        return nil
+    }
+    guard maxX - minX >= 0.0, maxY - minY >= 0.0 else { return nil }
+    return CGRect(
+        x: minX,
+        y: minY,
+        width: maxX - minX,
+        height: maxY - minY
+    )
+}
+
+private func visualFieldRectangleCorners(
+    matching orderedCorners: [ManualFiducialPoint],
+    minX: CGFloat,
+    minY: CGFloat,
+    maxX: CGFloat,
+    maxY: CGFloat
+) -> [ManualFiducialPoint] {
+    guard orderedCorners.count == 4 else { return orderedCorners }
+    let clampedMinX = clampCGFloat(minX, min: 0.0, max: 1.0 - minimumVisualFieldRectangleSpanNorm)
+    let clampedMaxX = clampCGFloat(maxX, min: clampedMinX + minimumVisualFieldRectangleSpanNorm, max: 1.0)
+    let clampedMinY = clampCGFloat(minY, min: 0.0, max: 1.0 - minimumVisualFieldRectangleSpanNorm)
+    let clampedMaxY = clampCGFloat(maxY, min: clampedMinY + minimumVisualFieldRectangleSpanNorm, max: 1.0)
+    let cameraPoints = [
+        CGPoint(x: clampedMinX, y: clampedMaxY),
+        CGPoint(x: clampedMaxX, y: clampedMaxY),
+        CGPoint(x: clampedMaxX, y: clampedMinY),
+        CGPoint(x: clampedMinX, y: clampedMinY)
+    ]
+    return zip(orderedCorners, cameraPoints).map { corner, cameraPoint in
+        visualFieldPoint(corner, cameraPoint: cameraPoint)
+    }
+}
+
+private func visualFieldPoint(
+    _ corner: ManualFiducialPoint,
+    cameraPoint: CGPoint
+) -> ManualFiducialPoint {
+    let clamped = CGPoint(
+        x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
+        y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
+    )
+    return ManualFiducialPoint(
+        id: corner.id,
+        point: CGPoint(x: clamped.x, y: 1.0 - clamped.y),
+        cameraPoint: clamped
+    )
+}
+
+private func clampCGFloat(_ value: CGFloat, min minimum: CGFloat, max maximum: CGFloat) -> CGFloat {
+    Swift.min(maximum, Swift.max(minimum, value))
 }
 
 struct CameraPlaceholder: View {

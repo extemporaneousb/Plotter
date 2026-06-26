@@ -59,9 +59,10 @@ The app-first drawing flow is:
    physical field width and height, defaulting to 200 mm x 150 mm, with the larger declared dimension
    on visual `+X`. Residuals and field-corner precision remain quality diagnostics, but setup must
    not discard the current transform behind a second accepted-estimate gate. The seeded video field
-   box is operator-adjustable: drag the box to move it, drag corners to resize or correct perspective,
-   and release to re-lock field registration using the adjusted corners. Changing field dimensions
-   re-locks the current video field instead of forcing reset and reseed.
+   box is operator-adjustable as a rectangle: drag the box to move it, drag the top-right handle to
+   resize it while it remains rectangular, and release to re-lock field registration using the
+   adjusted corners. Changing field dimensions re-locks the current video field instead of forcing
+   reset and reseed.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    These validation moves are setup relative jogs and must not be blocked by absolute `MPos`
    workspace projection. Success for this milestone means predictable green-cap motion in the

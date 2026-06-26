@@ -499,6 +499,12 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "struct VisualFieldEditLayer" in support
     assert "plotterViewportPointFromCameraNorm" in support
     assert "plotterCameraNormFromViewPoint" in support
+    assert "visualFieldRectangleCornersFromCurrentBounds" in content
+    assert "visualFieldRectangleMoved" in support
+    assert "visualFieldRectangleResizedFromTopRight" in support
+    assert "topRightResizeGesture" in support
+    assert "updatedCorners(" not in support
+    assert "ForEach(Array(viewCorners.enumerated())" not in support
     assert "VisualFieldEditLayer(" in content
     assert "editableVisualFieldCorners" in content
     assert "updateEditableVisualFieldCorners" in content
@@ -521,7 +527,7 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "Stored visual field in use" not in content
     assert "FIELD run machine-video agreement before drawing field box" in content
     assert 'FIELD \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
-    assert "drag/resize in video to re-lock" in content
+    assert "drag box/top-right resize in video to re-lock" in content
     assert ".disabled(hasPaperLock)" not in wizard
 
 
@@ -696,7 +702,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "publishes each solved 2x2 estimate as the current online state" in readme
     assert "current 2x2 machine-video transform" in readme
     assert "relative update magnitude as the convergence signal" in readme
-    assert "seeded video field box is operator-adjustable" in readme
+    assert "seeded video field box is operator-adjustable as a rectangle" in readme
+    assert "top-right handle to resize it while it remains rectangular" in readme
     assert "Changing the declared width/height also re-locks" in readme
     assert "before drawing any field box or grid" in contract
     assert "There is no identity matrix as calibration evidence" in contract
@@ -707,12 +714,14 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
     assert "seeded video field" in contract
+    assert "resize it while it remains rectangular" in contract
     assert "release to re-lock field registration" in contract
     assert "before drawing any field box or grid" in plan
     assert "first empirical 2x2 estimate" in plan
     assert "Update magnitude is the convergence signal" in plan
     assert "accepted-estimate gate" in plan
-    assert "video field box remains operator-adjustable" in plan
+    assert "video field box remains operator-adjustable as a" in plan
+    assert "correct perspective" not in readme + contract + plan
 
 
 def test_operator_log_replaces_bottom_status_bar() -> None:

@@ -57,9 +57,10 @@ The normal development target is the fixed-camera drawing loop:
    field by projecting the learned machine `+X` and `+Y` basis vectors using the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm. Residuals and field-corner
    precision remain visible diagnostics, but they do not create a second accepted-estimate gate.
-   The seeded video field box is operator-adjustable: drag the box to move it, drag corners to
-   resize or correct perspective, and release to re-lock field registration using the adjusted
-   corners. Changing the declared width/height also re-locks the current video field.
+   The seeded video field box is operator-adjustable as a rectangle: drag the box to move it, drag
+   the top-right handle to resize it while it remains rectangular, and release to re-lock field
+   registration using the adjusted corners. Changing the declared width/height also re-locks the
+   current video field.
 6. Validate Motion by commanding cap motion to visual-field targets using the learned inverse
    relative model through setup relative jogs, not absolute workspace-projected drawing moves.
    Success for this milestone means the green cap can be moved predictably inside the user-defined

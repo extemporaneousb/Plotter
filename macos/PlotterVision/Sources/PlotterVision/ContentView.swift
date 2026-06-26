@@ -1502,7 +1502,7 @@ struct ContentView: View {
             CGPoint(x: fittedCenter.x + $0.dx, y: fittedCenter.y + $0.dy)
         }
         guard corners.allSatisfy({ pointInsideCameraBounds($0, margin: margin) }) else { return nil }
-        return manualFieldPoints(cameraCorners: corners)
+        return visualFieldRectangleCornersFromCurrentBounds(manualFieldPoints(cameraCorners: corners))
     }
 
     private func fieldCornerOffsets(
@@ -3286,7 +3286,7 @@ struct ContentView: View {
     }
 
     private var wizardFiducialDetail: String {
-        if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) locked; drag/resize in video to re-lock" }
+        if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) locked; drag box/top-right resize in video to re-lock" }
         if machineVideoAgreementModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
         return "Hidden until first machine-video estimate exists"
     }
@@ -3370,7 +3370,7 @@ struct ContentView: View {
             if !bridge.hasPaperLock {
                 return "Run machine-video agreement. The field box is hidden until the online +X/+Y estimate is usable."
             }
-            return "Drag or resize the field box if needed, then run non-homed relative motion calibration in that field."
+            return "Drag the field box or its top-right resize handle if needed, then run non-homed relative motion calibration in that field."
         }
         if visualMotionValidated {
             return "Motion calibration is validated for green-cap movement inside the field."
