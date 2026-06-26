@@ -244,8 +244,8 @@ struct VisualFieldEditLayer: View {
                         context.stroke(path, with: .color(.cyan.opacity(0.92)), lineWidth: 3.0)
                         context.stroke(path, with: .color(.black.opacity(0.75)), lineWidth: 1.0)
 
-                        let interaction = isActive ? "DRAG BOX / DRAG ANY CORNER; RELEASE RE-LOCKS" : "LIVE MACHINE-VIDEO ESTIMATE"
-                        let label = Text(String(format: "FIELD %.0fx%.0f mm  %@", fieldWidthMm, fieldHeightMm, interaction))
+                        let interaction = isActive ? "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" : "LIVE MACHINE-VIDEO ESTIMATE"
+                        let label = Text(String(format: "DRAWING BORDER %.0fx%.0f mm  %@", fieldWidthMm, fieldHeightMm, interaction))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.cyan.opacity(0.96))
                         if let topLeft = viewCorners.min(by: { $0.y < $1.y }) {
@@ -258,18 +258,17 @@ struct VisualFieldEditLayer: View {
                     }
                     .allowsHitTesting(false)
 
-                    if isActive {
-                        ForEach(Array(viewCorners.enumerated()), id: \.offset) { index, point in
-                            Circle()
-                                .fill(Color.black.opacity(0.68))
-                                .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
-                                .overlay(Circle().fill(Color.white.opacity(0.92)).frame(width: 6, height: 6))
-                                .frame(width: 26, height: 26)
-                                .position(point)
-                                .contentShape(Circle())
-                                .gesture(cornerResizeGesture(cornerID: index + 1, in: geometry.size))
-                                .help("Drag any field corner to resize; release to re-lock")
-                        }
+                    if isActive, viewCorners.indices.contains(visualFieldTopRightCornerIndex) {
+                        let point = viewCorners[visualFieldTopRightCornerIndex]
+                        Circle()
+                            .fill(Color.black.opacity(0.68))
+                            .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
+                            .overlay(Circle().fill(Color.white.opacity(0.92)).frame(width: 6, height: 6))
+                            .frame(width: 26, height: 26)
+                            .position(point)
+                            .contentShape(Circle())
+                            .gesture(topRightResizeGesture(in: geometry.size))
+                            .help("Drag the top-right drawing border corner to resize; release to re-lock")
                     }
                 }
             }
@@ -322,33 +321,30 @@ struct VisualFieldEditLayer: View {
             }
     }
 
-    private func cornerResizeGesture(cornerID: Int, in viewSize: CGSize) -> some Gesture {
+    private func topRightResizeGesture(in viewSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let base = dragStartCorners ?? orderedCorners
                 dragStartCorners = base
-                onUpdate(resizedRectangle(base, cornerID: cornerID, value: value.location, viewSize: viewSize), false)
+                let cameraPoint = plotterCameraNormFromViewPoint(
+                    value.location,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                onUpdate(visualFieldRectangleResizedFromTopRight(base, cameraPoint: cameraPoint), false)
             }
             .onEnded { value in
                 let base = dragStartCorners ?? orderedCorners
                 dragStartCorners = nil
-                onUpdate(resizedRectangle(base, cornerID: cornerID, value: value.location, viewSize: viewSize), true)
+                let cameraPoint = plotterCameraNormFromViewPoint(
+                    value.location,
+                    viewSize: viewSize,
+                    videoSize: videoSize,
+                    settings: settings
+                )
+                onUpdate(visualFieldRectangleResizedFromTopRight(base, cameraPoint: cameraPoint), true)
             }
-    }
-
-    private func resizedRectangle(
-        _ base: [ManualFiducialPoint],
-        cornerID: Int,
-        value: CGPoint,
-        viewSize: CGSize
-    ) -> [ManualFiducialPoint] {
-        let cameraPoint = plotterCameraNormFromViewPoint(
-            value,
-            viewSize: viewSize,
-            videoSize: videoSize,
-            settings: settings
-        )
-        return visualFieldRectangleResized(base, cornerID: cornerID, cameraPoint: cameraPoint)
     }
 }
 
@@ -387,6 +383,7 @@ private func visualFieldCornerTurn(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> 
 }
 
 private let minimumVisualFieldRectangleSpanNorm: CGFloat = 0.01
+private let visualFieldTopRightCornerIndex = 2
 
 func visualFieldRectangleCornersFromCurrentBounds(_ corners: [ManualFiducialPoint]) -> [ManualFiducialPoint] {
     let ordered = orderedVisualFieldCorners(corners)
@@ -417,42 +414,18 @@ func visualFieldRectangleMoved(
     )
 }
 
-func visualFieldRectangleResized(
+func visualFieldRectangleResizedFromTopRight(
     _ corners: [ManualFiducialPoint],
-    cornerID: Int,
     cameraPoint: CGPoint
 ) -> [ManualFiducialPoint] {
     let ordered = orderedVisualFieldCorners(corners)
     guard let bounds = visualFieldCameraBounds(ordered) else { return corners }
-
-    var minX = bounds.minX
-    var minY = bounds.minY
-    var maxX = bounds.maxX
-    var maxY = bounds.maxY
-
-    switch cornerID {
-    case 1:
-        minX = clampCGFloat(cameraPoint.x, min: 0.0, max: bounds.maxX - minimumVisualFieldRectangleSpanNorm)
-        minY = clampCGFloat(cameraPoint.y, min: 0.0, max: bounds.maxY - minimumVisualFieldRectangleSpanNorm)
-    case 2:
-        maxX = clampCGFloat(cameraPoint.x, min: bounds.minX + minimumVisualFieldRectangleSpanNorm, max: 1.0)
-        minY = clampCGFloat(cameraPoint.y, min: 0.0, max: bounds.maxY - minimumVisualFieldRectangleSpanNorm)
-    case 3:
-        maxX = clampCGFloat(cameraPoint.x, min: bounds.minX + minimumVisualFieldRectangleSpanNorm, max: 1.0)
-        maxY = clampCGFloat(cameraPoint.y, min: bounds.minY + minimumVisualFieldRectangleSpanNorm, max: 1.0)
-    case 4:
-        minX = clampCGFloat(cameraPoint.x, min: 0.0, max: bounds.maxX - minimumVisualFieldRectangleSpanNorm)
-        maxY = clampCGFloat(cameraPoint.y, min: bounds.minY + minimumVisualFieldRectangleSpanNorm, max: 1.0)
-    default:
-        return corners
-    }
-
     return visualFieldRectangleCorners(
         matching: ordered,
-        minX: minX,
-        minY: minY,
-        maxX: maxX,
-        maxY: maxY
+        minX: bounds.minX,
+        minY: bounds.minY,
+        maxX: clampCGFloat(cameraPoint.x, min: bounds.minX + minimumVisualFieldRectangleSpanNorm, max: 1.0),
+        maxY: clampCGFloat(cameraPoint.y, min: bounds.minY + minimumVisualFieldRectangleSpanNorm, max: 1.0)
     )
 }
 

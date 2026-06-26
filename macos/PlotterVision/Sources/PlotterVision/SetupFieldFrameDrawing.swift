@@ -11,7 +11,7 @@ extension ContentView {
             return
         }
         guard let startCorner = corners.first else {
-            calibrationStatusText = "FIELD frame draw blocked: field frame is too small"
+            calibrationStatusText = "BORDER draw blocked: Drawing Border is too small"
             return
         }
 
@@ -21,7 +21,7 @@ extension ContentView {
         bridge.drawVerifyLabel = "Draw Frame"
         bridge.drawVerifyCommandId = ""
         bridge.drawVerifyPlanHash = ""
-        bridge.drawVerifyDetail = "Drawing validated field frame"
+        bridge.drawVerifyDetail = "Drawing validated Drawing Border"
         bridge.recordOperatorEvent(
             "setup_field_frame_started",
             details: [
@@ -70,7 +70,7 @@ extension ContentView {
         let status = bridge.isMachineAlarm || bridge.shortStatus == "ERR" ? "ERR" : "DONE"
         bridge.drawVerifyStatus = status == "DONE" ? "DRAW DONE" : "DRAW ERR"
         bridge.drawVerifyDetail = status == "DONE"
-            ? "Validated field frame drawn \(segmentCount)s"
+            ? "Validated Drawing Border drawn \(segmentCount)s"
             : "Frame draw finished with machine error"
         calibrationStatusText = status == "DONE"
             ? "FIELD frame drawn"

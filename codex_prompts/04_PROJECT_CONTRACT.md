@@ -47,7 +47,7 @@ The app-first drawing flow is:
 1. Start the app against a preview or hardware-standby bridge.
 2. Open Visual Field Setup.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-4. Run a machine-video agreement probe before drawing any locked field box or field grid. The probe
+4. Run a machine-video agreement probe before locking or drawing the Drawing Border. The probe
    first measures cap jitter, then runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to get the first
    empirical 2x2 machine-to-video estimate. There is no identity matrix as calibration evidence; before that first
    minibatch the prior is simply no model. Every subsequent solved estimate becomes the current online
@@ -55,14 +55,14 @@ The app-first drawing flow is:
    weaker learned basis and keep refining the matrix. The loop reports update magnitude as the
    convergence signal. Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the
    learned matrix.
-5. Define Drawing Field from the current 2x2 transform. The seeded field uses the Setup panel's
+5. Set Drawing Border from the current 2x2 transform. The seeded border uses the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm, with the larger declared dimension
    on visual `+X`. Residuals and field-corner precision remain quality diagnostics, but setup must
    not discard the current transform behind a second accepted-estimate gate. Every later solved
-   estimate updates the provisional video field frame until the operator locks the field. The seeded
-   video field box is operator-adjustable as a rectangle: drag the box to move it, drag the
-   top-right handle to resize it while it remains rectangular, and release to re-lock field registration using the
-   adjusted corners. Changing field dimensions re-locks the current video field instead of forcing
+   estimate updates the provisional Drawing Border until the operator locks it. The seeded video
+   border is operator-adjustable as a rectangle: drag the border to move it, drag the top-right
+   handle to resize it while it remains rectangular, and release to re-lock border registration using the
+   adjusted corners. Changing field dimensions re-locks the current Drawing Border instead of forcing
    reset and reseed.
 6. Validate Motion by moving the cap to visual-field targets through the learned inverse model.
    These validation moves are setup relative jogs and must not be blocked by absolute `MPos`
@@ -83,12 +83,13 @@ Cap-only motion is relative session evidence. For this milestone, the bridge is 
 visual field is registered, the cap is localized in that field, and the learned 2x2 relative motion
 model is stable, invertible, and validated by observed cap movement. Machine axes may be swapped,
 rotated, skewed, or sign-reversed relative to the video field. Swift observations are evidence;
-Python decides whether the field, cap, and motion model are valid. During setup, no bridge-locked
-field frame or Field Grid should be drawn until Machine-Video Agreement has produced a current 2x2
-estimate and seeds field registration from that matrix and the operator-selected physical field
-dimensions. The provisional setup frame may update from each current estimate before the lock, but it
-is not movement authority. The UI should show update magnitude, residuals, and field-corner precision
-as diagnostics, with update magnitude approaching zero as the convergence signal.
+Python decides whether the border, cap, and motion model are valid. During setup, no bridge-locked
+Drawing Border should be drawn until Machine-Video Agreement has produced a current 2x2 estimate and
+seeds border registration from that matrix and the operator-selected physical dimensions. The
+provisional Drawing Border may update from each current estimate before the lock, but it is not
+movement authority until registered. There is no separate plotter-video grid overlay. The UI should
+show update magnitude, residuals, and field-corner precision as diagnostics, with update magnitude
+approaching zero as the convergence signal.
 
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned

@@ -200,7 +200,6 @@ windows:
     decision: keep
     cleanup: preserve_shared_code
     controls:
-      - { id: field_grid, label: Field Grid, type: toggle, decision: keep, cleanup: display_only_visual_field_grid }
       - { id: measurements, label: Measurements, type: toggle, decision: keep, cleanup: preserve_shared_code }
       - { id: segmentation, label: Segmentation, type: toggle, decision: keep, cleanup: preserve_shared_code }
       - { id: motion_detection, label: Motion Detection, type: toggle, decision: keep, cleanup: preserve_shared_code }

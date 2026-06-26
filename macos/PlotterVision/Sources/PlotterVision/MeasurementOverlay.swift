@@ -13,7 +13,6 @@ struct MeasurementOverlay: View {
     let pathRevealProgress: Double
     let videoSize: CGSize
     let previewMode: CameraPreviewMode
-    let showGrid: Bool
     let showMeasurements: Bool
 
     var body: some View {
@@ -21,10 +20,7 @@ struct MeasurementOverlay: View {
             let mapper = OverlayMapper(viewSize: size, videoSize: videoSize, previewMode: previewMode)
 
             if let paperTransform {
-                if showGrid {
-                    drawFieldCoordinateGrid(paperTransform, mapper: mapper, in: &context)
-                }
-                drawPaperDrawingRegion(paperTransform, mapper: mapper, in: &context)
+                drawDrawingBorder(paperTransform, mapper: mapper, in: &context)
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
                 drawVisualMoveIntent(registration: paperTransform, mapper: mapper, in: &context)
             }
@@ -46,58 +42,7 @@ struct MeasurementOverlay: View {
         .allowsHitTesting(false)
     }
 
-    private func drawFieldCoordinateGrid(
-        _ registration: PaperRegistrationSnapshot,
-        mapper: OverlayMapper,
-        in context: inout GraphicsContext
-    ) {
-        let widthMm = registration.paperSizeMm.width
-        let heightMm = registration.paperSizeMm.height
-        guard widthMm > 0, heightMm > 0 else { return }
-
-        let stepMm = majorPaperGridStep(widthMm: widthMm, heightMm: heightMm)
-        let color = Color(red: 1.0, green: 0.25, blue: 0.72)
-        var grid = Path()
-
-        var xMm = 0.0
-        while xMm <= widthMm + 0.001 {
-            let xNorm = CGFloat(xMm / widthMm)
-            if let start = paperToCameraPoint(CGPoint(x: xNorm, y: 0), registration: registration),
-               let end = paperToCameraPoint(CGPoint(x: xNorm, y: 1), registration: registration) {
-                grid.move(to: mapper.point(start))
-                grid.addLine(to: mapper.point(end))
-            }
-            xMm += stepMm
-        }
-
-        var yMm = 0.0
-        while yMm <= heightMm + 0.001 {
-            let yNorm = CGFloat(yMm / heightMm)
-            if let start = paperToCameraPoint(CGPoint(x: 0, y: yNorm), registration: registration),
-               let end = paperToCameraPoint(CGPoint(x: 1, y: yNorm), registration: registration) {
-                grid.move(to: mapper.point(start))
-                grid.addLine(to: mapper.point(end))
-            }
-            yMm += stepMm
-        }
-
-        context.stroke(grid, with: .color(.black.opacity(0.70)), lineWidth: 4.0)
-        context.stroke(grid, with: .color(color.opacity(0.74)), lineWidth: 1.25)
-
-        guard showMeasurements else { return }
-
-        if let origin = paperToCameraPoint(CGPoint(x: 0, y: 0), registration: registration) {
-            drawOverlayLabel(
-                String(format: "FIELD mm grid %.0fmm", stepMm),
-                at: mapper.point(origin),
-                anchor: .bottomLeading,
-                foreground: color.opacity(0.96),
-                in: &context
-            )
-        }
-    }
-
-    private func drawPaperDrawingRegion(
+    private func drawDrawingBorder(
         _ registration: PaperRegistrationSnapshot,
         mapper: OverlayMapper,
         in context: inout GraphicsContext
@@ -148,7 +93,7 @@ struct MeasurementOverlay: View {
 
         drawOverlayLabel(
             String(
-                format: "DRAWING REGION %.0f x %.0f mm",
+                format: "DRAWING BORDER %.0f x %.0f mm",
                 registration.paperSizeMm.width,
                 registration.paperSizeMm.height
             ),
@@ -803,13 +748,6 @@ private func paperToCameraPoint(
         return nil
     }
     return CGPoint(x: CGFloat(cameraX), y: CGFloat(cameraY))
-}
-
-private func majorPaperGridStep(widthMm: Double, heightMm: Double) -> Double {
-    let maxDimension = max(widthMm, heightMm)
-    if maxDimension >= 450 { return 50.0 }
-    if maxDimension >= 220 { return 25.0 }
-    return 10.0
 }
 
 private func visibleNormalizedPoint(_ point: NormPoint) -> CGPoint? {

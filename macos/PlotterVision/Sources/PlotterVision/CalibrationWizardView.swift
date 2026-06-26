@@ -83,7 +83,7 @@ struct CalibrationWizardView: View {
         VStack(alignment: .leading, spacing: 5) {
             CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
             CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-            CalibrationWizardStepRow(index: 3, title: "Define Drawing Field", detail: fiducialDetail, status: fiducialStatus)
+            CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
             CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
         }
     }
@@ -155,7 +155,7 @@ struct CalibrationWizardView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(drawFrameEnabled ? .green : .gray)
                 .disabled(!drawFrameEnabled)
-                .help(drawFrameDisabledReason ?? "Draw the validated safe field frame")
+                .help(drawFrameDisabledReason ?? "Draw the validated Drawing Border")
             }
 
             Button("Reset", action: reset)

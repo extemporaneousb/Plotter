@@ -84,20 +84,20 @@ The fixed-camera workflow is:
 1. Start the app.
 2. Open Setup. The Setup button opens or closes a separate setup window.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
-4. Run Machine-Video Agreement from the current cap location before drawing any locked field box or
-   field grid.
+4. Run Machine-Video Agreement from the current cap location before locking or drawing the Drawing
+   Border.
    Calibration measures cap jitter, runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to create the
    first empirical 2x2 estimate, then uses every later solved estimate to choose subsequent
    X/Y/diagonal vectors without requiring homing, axis-model trust, absolute `MPos` clearance, a
    preexisting field lock, or machine workspace proof. Update magnitude is the convergence signal;
    residuals and field-corner precision are diagnostics.
-5. Define Drawing Field from the current camera/video basis. The seeded field uses the learned 2x2
+5. Set Drawing Border from the current camera/video basis. The seeded border uses the learned 2x2
    transform and the Setup panel's physical field width/height, defaulting to 200 mm x 150 mm, with
-   the longer dimension on visual `+X`. The video field box remains operator-adjustable as a
-   rectangle while setup is open: drag the box to move it, drag the top-right handle to resize it
-   while it remains rectangular, and release to re-lock field registration using the adjusted
-   corners. Every later solved estimate updates the provisional video field frame until the operator
-   locks the field. Updating the declared dimensions re-locks the current field box instead of forcing reset
+   the longer dimension on visual `+X`. The video Drawing Border remains operator-adjustable as a
+   rectangle while setup is open: drag the border to move it, drag the top-right handle to resize it
+   while it remains rectangular, and release to re-lock border registration using the adjusted
+   corners. Every later solved estimate updates the provisional Drawing Border until the operator
+   locks it. Updating the declared dimensions re-locks the current Drawing Border instead of forcing reset
    and reseed. There is still no separate
    accepted-estimate gate behind the current online machine-video transform.
 6. Validate Motion by commanding field-target moves through the inverse relative model using setup
@@ -137,13 +137,14 @@ and transforms:
 | --- | --- | --- |
 | Camera image space | Swift observes; Python persists evidence | Raw points, contours, cap detections, and ink marks. |
 | Visual field space | Python bridge/calibration | User-defined drawing field from clicked camera corners and known physical dimensions. |
-| Observed field millimeters | Python calibration/readiness | Green-cap observations and residuals in the active field frame. |
+| Observed field millimeters | Python calibration/readiness | Green-cap observations and residuals in the active Drawing Border frame. |
 | Drawing/logical millimeters | Python drawing/planning | Future shape-language coordinates used by `plotter_vision.drawing`. |
 | Machine coordinates | Python bridge/machine/motion | Controller coordinates behind planning and safety gates. |
 | Display space | Swift | Fit/fill/rotation/FOV zoom and overlay rendering only; it is not motion authority. |
 
-The Plotter Video Field Grid is a display-only rendering of the current or locked visual field. It is
-not a second calibration frame, not a movement boundary, and not separate safety authority.
+The Plotter Video has no separate grid overlay for setup. The Drawing Border is the only setup
+rectangle overlay, the bottom-left border corner is logical `(0,0)`, and that same registered border
+is the geometry Draw Frame traces.
 
 The bridge still has shape and capability-test routes for backend validation, but the current macOS
 operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route

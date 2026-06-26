@@ -35,10 +35,6 @@ struct PlotterVideoPanel: View {
     private var overlayControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             panelSectionTitle("Overlays")
-            Toggle("Field Grid", isOn: Binding(
-                get: { workspace.plotterCamera.showGrid },
-                set: { workspace.plotterCamera.showGrid = $0 }
-            ))
             Toggle("Measurements", isOn: Binding(
                 get: { workspace.plotterCamera.showMeasurements },
                 set: { workspace.plotterCamera.showMeasurements = $0 }

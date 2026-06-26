@@ -43,7 +43,6 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var changeReportInterval = 1.25 {
         didSet { updateSettings { $0.changeReportInterval = changeReportInterval } }
     }
-    @Published var showGrid = false
     @Published var showMeasurements = true
     @Published var availableCameras: [CameraDeviceOption] = []
     @Published var selectedCameraID = ""
@@ -100,7 +99,6 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         case .face:
             segmentationEnabled = false
             changeDetectionEnabled = false
-            showGrid = false
             showMeasurements = false
             updateSettings {
                 $0.enabled = false

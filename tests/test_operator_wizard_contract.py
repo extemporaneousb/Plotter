@@ -79,8 +79,9 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "Drawing Checkout" not in setup_panel
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
-    assert "Field Grid" in plotter_panel
+    assert "Field Grid" not in plotter_panel
     assert "Calibrated Grid" not in plotter_panel
+    assert "showGrid" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert "PortraitPanel(" in face_panel
     assert "CameraLayoutMode" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     assert "CameraSelector(camera: plotterCamera)" in content
@@ -354,7 +355,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Visual Field Setup" in wizard
     assert 'title: "Confirm Green Cap"' in wizard
     assert 'title: "Machine-Video Agreement"' in wizard
-    assert 'title: "Define Drawing Field"' in wizard
+    assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
     assert "@Binding var fieldWidthMm" in wizard
     assert "@Binding var fieldHeightMm" in wizard
@@ -505,16 +506,15 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "plotterCameraNormFromViewPoint" in support
     assert "visualFieldRectangleCornersFromCurrentBounds" in content + field_seed_geometry
     assert "visualFieldRectangleMoved" in support
-    assert "visualFieldRectangleResized(" in support
-    assert "visualFieldRectangleResizedFromTopRight" not in support
-    assert "cornerResizeGesture(cornerID:" in support
-    assert "topRightResizeGesture" not in support
-    assert "visualFieldTopRightCornerIndex" not in support
-    assert "DRAG BOX / DRAG ANY CORNER; RELEASE RE-LOCKS" in support
+    assert "visualFieldRectangleResizedFromTopRight" in support
+    assert "cornerResizeGesture(cornerID:" not in support
+    assert "topRightResizeGesture" in support
+    assert "visualFieldTopRightCornerIndex" in support
+    assert "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" in support
     assert "LIVE MACHINE-VIDEO ESTIMATE" in support
     assert "if isVisible, orderedCorners.count == 4" in support
     assert "updatedCorners(" not in support
-    assert "ForEach(Array(viewCorners.enumerated()), id: \\.offset)" in support
+    assert "ForEach(Array(viewCorners.enumerated()), id: \\.offset)" not in support
     corner_order = support.split("let cameraPoints = [", 1)[1].split("]", 1)[0]
     expected_order = [
         "CGPoint(x: clampedMinX, y: clampedMinY)",
@@ -531,23 +531,23 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "scheduleEditableVisualFieldRelock" in content
     assert "relockEditableVisualField" in content
     assert "visualFieldCornersAreConvex" in content
-    assert "FIELD edit blocked: corners must form a convex box" in content
-    assert "field_adjusted_from_video_box_blocked" in content
-    assert "field_adjusted_from_video_box" in content
+    assert "BORDER edit blocked: corners must form a convex rectangle" in content
+    assert "drawing_border_adjusted_blocked" in content
+    assert "drawing_border_adjusted" in content
     assert "bridge.registerPaperHomography(" in content
-    assert "FIELD re-locking adjusted" in content
-    assert "FIELD adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) box locked" in content
+    assert "BORDER re-locking adjusted" in content
+    assert "BORDER adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) drawing border locked" in content
     assert "Run Motion Calibration" in content
-    assert "CAL motion calibration using adjusted field box" in content
+    assert "CAL motion calibration using adjusted drawing border" in content
     assert "resetCalibrationSetup()" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Visual Field Setup" in wizard
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
     assert "Stored visual field in use" not in content
-    assert "FIELD run machine-video agreement before drawing field box" in content
-    assert 'FIELD \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
-    assert "drag box/top-right resize in video to re-lock" in content
+    assert "BORDER run machine-video agreement before drawing border" in content
+    assert 'BORDER \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
+    assert "DRAG BORDER / TOP-RIGHT RESIZE" in support
     assert ".disabled(hasPaperLock)" not in wizard
 
 
@@ -561,7 +561,7 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
 
     assert 'title: "Confirm Green Cap"' in wizard
     assert 'title: "Machine-Video Agreement"' in wizard
-    assert 'title: "Define Drawing Field"' in wizard
+    assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
     assert 'title: "Fiducials"' not in wizard
     assert 'title: "Drawing Calibration"' not in wizard
@@ -732,40 +732,51 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
 
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
     bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert "bridge.showSetupFieldFrameExpectedPath(corners: corners)" in frame_drawing
     assert "func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot])" in bridge_model
     assert '"setup_field_frame_expected_path_ready"' in bridge_model
+    assert "drawDrawingBorder" in overlay
+    assert "DRAWING BORDER %.0f x %.0f mm" in overlay
+    assert "drawFieldCoordinateGrid" not in overlay
+    assert "majorPaperGridStep" not in overlay
+    assert "showGrid" not in overlay
+    assert "relativeMotionModel: BridgeRelativeMotionModel?" in bridge_client
+    assert "var visualMotionModel: VisualMotionModel?" in bridge_client
+    assert "applyPersistedVisualReadiness(await bridge.refreshVisualReadinessStatus())" in content
+    assert "BORDER loaded saved motion transform" in content
 
-    assert "before drawing any locked field box or field grid" in readme
+    assert "before locking or drawing the Drawing Border" in readme
     assert "publishes each solved 2x2 estimate as the current online state" in readme
     assert "current 2x2 machine-video transform" in readme
     assert "relative update magnitude as the convergence signal" in readme_flat
     assert "every later solved estimate updates the provisional" in readme
-    assert "seeded video field box is operator-adjustable as a rectangle" in readme
+    assert "seeded video border is operator-adjustable as a rectangle" in readme
     assert "top-right handle to resize it while it remains rectangular" in readme
     assert "Changing the declared width/height also re-locks" in readme
     assert "cap and tip are treated as colocated until explicit binding evidence" in readme
-    assert "before drawing any locked field box or field grid" in contract
+    assert "before locking or drawing the Drawing Border" in contract
     assert "There is no identity matrix as calibration evidence" in contract
     assert "reports update magnitude as the" in contract
-    assert "magnitude approaching zero" in contract
+    assert "magnitude approaching zero" in contract_flat
     assert "uses every later solved estimate" in plan
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
     assert "Every subsequent solved estimate becomes the current online" in contract
     assert "later relative vectors are chosen from that latest estimate" in contract
-    assert "Every later solved estimate updates the provisional video field frame" in contract_flat
-    assert "seeded video field" in contract_flat
+    assert "Every later solved estimate updates the provisional Drawing Border" in contract_flat
+    assert "seeded video border" in contract_flat
     assert "resize it while it remains rectangular" in contract
-    assert "release to re-lock field registration" in contract
+    assert "release to re-lock border registration" in contract
     assert "cap and tip are colocated until explicit binding evidence" in contract
-    assert "before drawing any locked field box" in plan
+    assert "before locking or drawing the Drawing Border" in plan_flat
     assert "first empirical 2x2 estimate" in plan
     assert "Update magnitude is the convergence signal" in plan
     assert "accepted-estimate gate" in plan
-    assert "Every later solved estimate updates the provisional video field frame" in plan_flat
-    assert "video field box remains operator-adjustable as a" in plan
-    assert "Plotter Video Field Grid is a display-only rendering" in plan
-    assert "not a second calibration frame" in plan
+    assert "Every later solved estimate updates the provisional Drawing Border" in plan_flat
+    assert "video Drawing Border remains operator-adjustable as a" in plan
+    assert "Plotter Video has no separate grid overlay" in plan
+    assert "bottom-left border corner is logical `(0,0)`" in plan
     assert "correct perspective" not in readme + contract + plan
 
 
@@ -795,7 +806,7 @@ def test_plotter_video_defaults_keep_visual_processing_overlays_off() -> None:
 
     assert "@Published var segmentationEnabled = false" in camera_model
     assert "@Published var changeDetectionEnabled = false" in camera_model
-    assert "@Published var showGrid = false" in camera_model
+    assert "showGrid" not in camera_model
     assert "var enabled = false" in models
     assert "var greenMarkerEnabled = true" in models
     assert "var changeEnabled = false" in models
@@ -810,7 +821,7 @@ def test_plotter_video_defaults_keep_visual_processing_overlays_off() -> None:
         "private func resetCapMarkerColor",
         1,
     )[0]
-    assert "plotterCamera.showGrid = false" in reset_visual_controls
+    assert "plotterCamera.showGrid" not in reset_visual_controls
     assert "plotterCamera.showMeasurements = true" in reset_visual_controls
     assert "plotterCamera.segmentationEnabled = false" in reset_visual_controls
     assert "plotterCamera.changeDetectionEnabled = false" in reset_visual_controls
@@ -844,7 +855,7 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "point.x - zoomOffset.width - center.x" in support
 
     assert "panelSectionTitle(\"Viewport\")" in plotter_panel
-    assert "Field Grid" in plotter_panel
+    assert "Field Grid" not in plotter_panel
     assert "Calibrated Grid" not in plotter_panel
     assert "Original Video" in plotter_panel
     assert "Fit Field" in plotter_panel

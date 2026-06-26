@@ -1005,8 +1005,41 @@ struct BridgeVisualReadinessState: Decodable, Equatable {
     let probeObservationCount: Int
     let probeRmsResidualMm: Double?
     let probeMaxResidualMm: Double?
+    let motionModelValid: Bool?
+    let relativeMotionModel: BridgeRelativeMotionModel?
+    let motionModelBlockers: [String]?
     let visualReadyToPlot: Bool
     let blockers: [String]
+}
+
+struct BridgeRelativeMotionModel: Decodable, Equatable {
+    let schemaVersion: Int?
+    let artifactType: String?
+    let machineToFieldMatrix: [[Double]]
+    let fieldToMachineMatrix: [[Double]]
+    let determinant: Double
+    let sampleCount: Int
+    let rmsResidualMm: Double
+    let p95ResidualMm: Double?
+    let maxResidualMm: Double
+
+    var visualMotionModel: VisualMotionModel? {
+        guard machineToFieldMatrix.count == 2,
+              machineToFieldMatrix[0].count == 2,
+              machineToFieldMatrix[1].count == 2 else {
+            return nil
+        }
+        let model = VisualMotionModel(
+            xBasisDx: machineToFieldMatrix[0][0],
+            xBasisDy: machineToFieldMatrix[1][0],
+            yBasisDx: machineToFieldMatrix[0][1],
+            yBasisDy: machineToFieldMatrix[1][1],
+            rmsResidualMm: rmsResidualMm,
+            maxResidualMm: maxResidualMm,
+            sampleCount: sampleCount
+        )
+        return model.isUsable ? model : nil
+    }
 }
 
 struct BridgeVisualCapObservation: Decodable, Equatable {

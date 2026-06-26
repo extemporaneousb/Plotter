@@ -42,6 +42,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
+    @Published var latestVisualReadiness: BridgeVisualReadinessState?
     @Published var visualCenterDotStatus = "VIS --"
     @Published var visualBindingStatus = "BIND --"
     @Published var visualBindingDetail = "No binding observations"
@@ -988,6 +989,32 @@ final class PlotterBridgeModel: ObservableObject {
         } catch {
             paperTransformStatus = "FIELD ?"
             diagnosticsEvent("paper_status_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func refreshVisualReadinessStatus() async -> BridgeVisualReadinessState? {
+        guard isOnline, !isCalibrating else { return latestVisualReadiness }
+        do {
+            let response = try await client.visualReadinessStatus()
+            latestVisualReadiness = response.readiness
+            adaptiveProbeStatus = response.status == "ready" ? "PROBE READY" : "PROBE BLOCK"
+            if let blockers = response.readiness?.blockers, !blockers.isEmpty {
+                statusText = blockers.joined(separator: ", ")
+            }
+            diagnosticsEvent(
+                "visual_readiness_refreshed",
+                [
+                    "status": response.status,
+                    "motion_model_valid": response.readiness?.motionModelValid ?? false,
+                    "has_relative_motion_model": response.readiness?.relativeMotionModel != nil,
+                    "blockers": response.readiness?.blockers ?? []
+                ],
+                snapshot: true
+            )
+            return response.readiness
+        } catch {
+            diagnosticsEvent("visual_readiness_refresh_failed", errorPayload(error), snapshot: true)
+            return latestVisualReadiness
         }
     }
 

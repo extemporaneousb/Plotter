@@ -171,6 +171,7 @@ struct ContentView: View {
             await bridge.waitForOwnedBridgeStartup()
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
+            applyPersistedVisualReadiness(await bridge.refreshVisualReadinessStatus())
             var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -313,7 +314,6 @@ struct ContentView: View {
                         pathRevealProgress: bridge.pathRevealProgress,
                         videoSize: plotterCamera.videoSize,
                         previewMode: plotterViewport.previewMode,
-                        showGrid: plotterCamera.showGrid,
                         showMeasurements: plotterCamera.showMeasurements
                     )
 
@@ -712,13 +712,12 @@ struct ContentView: View {
             manualPenMode = false
             manualFiducialMode = false
             manualCapColorMode = false
-            plotterCamera.showGrid = true
 
             await bridge.refreshMachineStatus()
-            calibrationStatusText = "CAL motion calibration using adjusted field box"
+            calibrationStatusText = "CAL motion calibration using adjusted drawing border"
             frameLearning = FrameLearningState(
                 status: "LEARN",
-                detail: "Sampling motion in adjusted visual field",
+                detail: "Sampling motion in adjusted drawing border",
                 sampleCount: 0,
                 xPixelsPerMm: agreement.xBasisLengthNorm,
                 yPixelsPerMm: agreement.yBasisLengthNorm,
@@ -746,7 +745,6 @@ struct ContentView: View {
         manualPenMode = false
         manualFiducialMode = false
         manualCapColorMode = false
-        plotterCamera.showGrid = false
 
         await bridge.refreshMachineStatus()
 
@@ -1415,8 +1413,7 @@ struct ContentView: View {
 
         manualFiducials = corners
         manualFiducialMode = false
-        plotterCamera.showGrid = true
-        calibrationStatusText = "FIELD seeded from machine-video agreement; locking \(desiredVisualFieldSizeLabel)"
+        calibrationStatusText = "BORDER seeded from machine-video agreement; locking \(desiredVisualFieldSizeLabel)"
         guard let response = await bridge.registerPaperHomography(
             fiducials: corners,
             paperWidthMm: fieldWidthMm,
@@ -1429,7 +1426,7 @@ struct ContentView: View {
         }
 
         focusPlotterVideoOnPaper(source: "machine_video_agreement_field_seeded")
-        calibrationStatusText = "FIELD \(desiredVisualFieldSizeLabel) locked from machine-video agreement"
+        calibrationStatusText = "BORDER \(desiredVisualFieldSizeLabel) locked from machine-video agreement"
         bridge.recordOperatorEvent(
             "field_seeded_from_machine_video_agreement",
             details: [
@@ -1457,7 +1454,6 @@ struct ContentView: View {
             return
         }
         manualFiducials = corners
-        plotterCamera.showGrid = true
     }
 
     private var desiredVisualFieldWidthMm: Double {
@@ -1470,6 +1466,41 @@ struct ContentView: View {
 
     private var desiredVisualFieldSizeLabel: String {
         String(format: "%.0fx%.0f", desiredVisualFieldWidthMm, desiredVisualFieldHeightMm)
+    }
+
+    @MainActor
+    private func applyPersistedVisualReadiness(_ readiness: BridgeVisualReadinessState?) {
+        guard let readiness,
+              readiness.motionModelValid == true,
+              readiness.paperRegistrationId == bridge.paperRegistrationSnapshot?.registrationId,
+              let persistedModel = readiness.relativeMotionModel?.visualMotionModel else {
+            return
+        }
+        guard frameLearning.status == "IDLE" || frameLearning.status == "AGREE" || frameLearning.status == "BLOCK" else {
+            return
+        }
+        guard visualMotionModel != persistedModel else { return }
+
+        visualMotionModel = persistedModel
+        visualMotionSamples = []
+        frameLearning = FrameLearningState(
+            status: "VALIDATED",
+            detail: "Loaded saved drawing-border motion model",
+            sampleCount: persistedModel.sampleCount,
+            xPixelsPerMm: hypot(persistedModel.xBasisDx, persistedModel.xBasisDy),
+            yPixelsPerMm: hypot(persistedModel.yBasisDx, persistedModel.yBasisDy),
+            lastPins: bridge.machinePins
+        )
+        calibrationStatusText = "BORDER loaded saved motion transform"
+        bridge.recordOperatorEvent(
+            "drawing_border_motion_model_loaded",
+            details: [
+                "registration_id": readiness.paperRegistrationId ?? "",
+                "sample_count": persistedModel.sampleCount,
+                "rms_residual_mm": persistedModel.rmsResidualMm,
+                "max_residual_mm": persistedModel.maxResidualMm
+            ]
+        )
     }
 
     private var editableVisualFieldCorners: [ManualFiducialPoint] {
@@ -1494,13 +1525,12 @@ struct ContentView: View {
 
     private func blockInvalidVisualFieldCorners(source: String) {
         fieldRelockTask?.cancel()
-        plotterCamera.showGrid = false
         bridge.clearBindingMarkPreviewOverlay()
         frameLearning.status = "BLOCK"
-        frameLearning.detail = "Adjusted field corners are concave"
-        calibrationStatusText = "FIELD edit blocked: corners must form a convex box"
+        frameLearning.detail = "Adjusted drawing border is concave"
+        calibrationStatusText = "BORDER edit blocked: corners must form a convex rectangle"
         bridge.recordOperatorEvent(
-            "field_adjusted_from_video_box_blocked",
+            "drawing_border_adjusted_blocked",
             details: ["source": source, "reason": "concave_corners"]
         )
     }
@@ -1565,7 +1595,7 @@ struct ContentView: View {
         if frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATED" {
             frameLearning = FrameLearningState(
                 status: "AGREE",
-                detail: "Field edited; run motion calibration against the adjusted field",
+                detail: "Drawing border edited; run motion calibration against the adjusted border",
                 sampleCount: machineVideoAgreementSamples.count,
                 xPixelsPerMm: machineVideoAgreementModel?.xBasisLengthNorm ?? frameLearning.xPixelsPerMm,
                 yPixelsPerMm: machineVideoAgreementModel?.yBasisLengthNorm ?? frameLearning.yPixelsPerMm,
@@ -1574,16 +1604,15 @@ struct ContentView: View {
         }
 
         manualFiducials = ordered
-        plotterCamera.showGrid = true
-        calibrationStatusText = "FIELD re-locking adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) box"
+        calibrationStatusText = "BORDER re-locking adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) drawing border"
         guard let response = await bridge.registerPaperHomography(
             fiducials: ordered,
             paperWidthMm: fieldWidthMm,
             paperHeightMm: fieldHeightMm
         ), response.registration != nil else {
             frameLearning.status = "BLOCK"
-            frameLearning.detail = bridge.statusText.isEmpty ? "Adjusted field registration failed" : bridge.statusText
-            calibrationStatusText = "FIELD edit blocked: \(frameLearning.detail)"
+            frameLearning.detail = bridge.statusText.isEmpty ? "Adjusted drawing border registration failed" : bridge.statusText
+            calibrationStatusText = "BORDER edit blocked: \(frameLearning.detail)"
             return
         }
 
@@ -1595,9 +1624,9 @@ struct ContentView: View {
             )
         }
 
-        calibrationStatusText = "FIELD adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) box locked"
+        calibrationStatusText = "BORDER adjusted \(Int(fieldWidthMm))x\(Int(fieldHeightMm)) drawing border locked"
         bridge.recordOperatorEvent(
-            "field_adjusted_from_video_box",
+            "drawing_border_adjusted",
             details: [
                 "source": source,
                 "field_width_mm": fieldWidthMm,
@@ -2439,7 +2468,7 @@ struct ContentView: View {
         guard bridge.hasPaperLock else { return "visual field missing" }
         guard visualMotionModel?.isUsable == true else { return "motion model not usable" }
         guard currentGreenCapFieldMappedReady else { return greenCapFieldMappingDetail }
-        guard validatedFieldFrameCorners != nil else { return "field frame is too small" }
+        guard validatedFieldFrameCorners != nil else { return "Drawing Border is too small" }
         if !bridge.canRunSetupRelativeMotionCommand { return bridge.motionGateMessage }
         if bridge.isMachineAlarm { return "machine alarm" }
         if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
@@ -3298,9 +3327,9 @@ struct ContentView: View {
         }
         if frameLearning.status != "MEASURED" && !visualMotionValidated {
             if !bridge.hasPaperLock {
-                return "Run machine-video agreement. The field box is hidden until the online +X/+Y estimate is usable."
+                return "Run machine-video agreement. The Drawing Border is hidden until the online +X/+Y estimate is usable."
             }
-            return "Drag the field box or its top-right resize handle if needed, then run non-homed relative motion calibration in that field."
+            return "Drag the Drawing Border or its top-right resize handle if needed, then run non-homed relative motion calibration in that border."
         }
         if visualMotionValidated {
             return "Motion calibration is validated for green-cap movement inside the field."
@@ -3421,7 +3450,7 @@ struct ContentView: View {
             return
         }
         guard let corners = validatedFieldFrameCorners else {
-            calibrationStatusText = "FIELD frame draw blocked: field frame is too small"
+            calibrationStatusText = "BORDER draw blocked: Drawing Border is too small"
             return
         }
         Task {
@@ -3520,7 +3549,7 @@ struct ContentView: View {
                 ? "FIELD show green cap in camera"
                 : "FIELD confirm green cap"
         } else if frameLearning.status != "MEASURED" {
-            calibrationStatusText = "FIELD run machine-video agreement before drawing field box"
+            calibrationStatusText = "BORDER run machine-video agreement before drawing border"
         } else {
             calibrationStatusText = "FIELD motion measured; validate motion"
         }
@@ -3809,7 +3838,6 @@ struct ContentView: View {
         plotterViewport.videoFilter = .normal
         plotterViewport.resetFOV()
         plotterOverlay.opacity = 0.38
-        plotterCamera.showGrid = false
         plotterCamera.showMeasurements = true
         plotterCamera.segmentationEnabled = false
         plotterCamera.changeDetectionEnabled = false
