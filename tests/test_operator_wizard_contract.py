@@ -505,12 +505,26 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "plotterCameraNormFromViewPoint" in support
     assert "visualFieldRectangleCornersFromCurrentBounds" in content + field_seed_geometry
     assert "visualFieldRectangleMoved" in support
-    assert "visualFieldRectangleResizedFromTopRight" in support
-    assert "topRightResizeGesture" in support
+    assert "visualFieldRectangleResized(" in support
+    assert "visualFieldRectangleResizedFromTopRight" not in support
+    assert "cornerResizeGesture(cornerID:" in support
+    assert "topRightResizeGesture" not in support
+    assert "visualFieldTopRightCornerIndex" not in support
+    assert "DRAG BOX / DRAG ANY CORNER; RELEASE RE-LOCKS" in support
     assert "LIVE MACHINE-VIDEO ESTIMATE" in support
     assert "if isVisible, orderedCorners.count == 4" in support
     assert "updatedCorners(" not in support
-    assert "ForEach(Array(viewCorners.enumerated())" not in support
+    assert "ForEach(Array(viewCorners.enumerated()), id: \\.offset)" in support
+    corner_order = support.split("let cameraPoints = [", 1)[1].split("]", 1)[0]
+    expected_order = [
+        "CGPoint(x: clampedMinX, y: clampedMinY)",
+        "CGPoint(x: clampedMaxX, y: clampedMinY)",
+        "CGPoint(x: clampedMaxX, y: clampedMaxY)",
+        "CGPoint(x: clampedMinX, y: clampedMaxY)",
+    ]
+    assert [corner_order.index(point) for point in expected_order] == sorted(
+        corner_order.index(point) for point in expected_order
+    )
     assert "VisualFieldEditLayer(" in content
     assert "editableVisualFieldCorners" in content
     assert "updateEditableVisualFieldCorners" in content
@@ -771,6 +785,39 @@ def test_operator_log_replaces_bottom_status_bar() -> None:
     assert "workspace.appendOperatorLog(status, source: \"Bridge\"" in content
     assert "Operator Log" in log_panel
     assert "textSelection(.enabled)" in log_panel
+
+
+def test_plotter_video_defaults_keep_visual_processing_overlays_off() -> None:
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    measurement = _read(SWIFT_DIR / "MeasurementOverlay.swift")
+
+    assert "@Published var segmentationEnabled = false" in camera_model
+    assert "@Published var changeDetectionEnabled = false" in camera_model
+    assert "@Published var showGrid = false" in camera_model
+    assert "var enabled = false" in models
+    assert "var greenMarkerEnabled = true" in models
+    assert "var changeEnabled = false" in models
+
+    capture_output = camera_model.split("func captureOutput", 1)[1].split(
+        "private func configureAndStart",
+        1,
+    )[0]
+    assert "snapshot.enabled || snapshot.greenMarkerEnabled || snapshot.changeEnabled" in capture_output
+
+    reset_visual_controls = content.split("private func resetVisualControls", 1)[1].split(
+        "private func resetCapMarkerColor",
+        1,
+    )[0]
+    assert "plotterCamera.showGrid = false" in reset_visual_controls
+    assert "plotterCamera.showMeasurements = true" in reset_visual_controls
+    assert "plotterCamera.segmentationEnabled = false" in reset_visual_controls
+    assert "plotterCamera.changeDetectionEnabled = false" in reset_visual_controls
+
+    assert "private func drawOverlayLabel" in measurement
+    assert "Path(roundedRect: rect, cornerRadius: rect.height / 2)" in measurement
+    assert 'drawOverlayLabel(\n            "0,0"' in measurement
 
 
 def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:

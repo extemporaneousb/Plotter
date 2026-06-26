@@ -87,10 +87,13 @@ struct MeasurementOverlay: View {
         guard showMeasurements else { return }
 
         if let origin = paperToCameraPoint(CGPoint(x: 0, y: 0), registration: registration) {
-            let label = Text(String(format: "FIELD mm grid %.0fmm", stepMm))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(color.opacity(0.96))
-            context.draw(label, at: mapper.point(origin), anchor: .bottomLeading)
+            drawOverlayLabel(
+                String(format: "FIELD mm grid %.0fmm", stepMm),
+                at: mapper.point(origin),
+                anchor: .bottomLeading,
+                foreground: color.opacity(0.96),
+                in: &context
+            )
         }
     }
 
@@ -143,16 +146,17 @@ struct MeasurementOverlay: View {
 
         guard showMeasurements else { return }
 
-        let label = Text(
+        drawOverlayLabel(
             String(
                 format: "DRAWING REGION %.0f x %.0f mm",
                 registration.paperSizeMm.width,
                 registration.paperSizeMm.height
-            )
+            ),
+            at: mapper.point(cameraCorners[3]),
+            anchor: .bottomLeading,
+            foreground: color.opacity(0.98),
+            in: &context
         )
-        .font(.system(size: 10, weight: .bold, design: .monospaced))
-        .foregroundStyle(color.opacity(0.98))
-        context.draw(label, at: mapper.point(cameraCorners[3]), anchor: .bottomLeading)
 
         drawFieldAxis(
             start: mapper.point(cameraCorners[0]),
@@ -168,10 +172,14 @@ struct MeasurementOverlay: View {
             color: .green,
             in: &context
         )
-        let origin = Text("0,0")
-            .font(.system(size: 11, weight: .black, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.98))
-        context.draw(origin, at: mapper.point(cameraCorners[0]), anchor: .topTrailing)
+        drawOverlayLabel(
+            "0,0",
+            at: mapper.point(cameraCorners[0]),
+            anchor: .topTrailing,
+            foreground: .white.opacity(0.98),
+            font: .system(size: 11, weight: .black, design: .monospaced),
+            in: &context
+        )
     }
 
     private func drawFieldAxis(
@@ -200,10 +208,14 @@ struct MeasurementOverlay: View {
             style: StrokeStyle(lineWidth: 4.0, lineCap: .round, lineJoin: .round)
         )
         drawArrowHead(start: start, end: axisEnd, color: color, in: &context)
-        let axisLabel = Text(label)
-            .font(.system(size: 10, weight: .black, design: .monospaced))
-            .foregroundStyle(color.opacity(0.98))
-        context.draw(axisLabel, at: axisEnd, anchor: .bottomLeading)
+        drawOverlayLabel(
+            label,
+            at: axisEnd,
+            anchor: .bottomLeading,
+            foreground: color.opacity(0.98),
+            font: .system(size: 10, weight: .black, design: .monospaced),
+            in: &context
+        )
     }
 
     private func drawExpectedPath(
@@ -271,11 +283,13 @@ struct MeasurementOverlay: View {
             return
         }
 
-        let label = Text("EXPECTED")
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(.yellow.opacity(0.9 * plotterOverlay.opacity))
         let point = mapper.point(cameraStart)
-        context.draw(label, at: CGPoint(x: point.x + 8, y: point.y - 10), anchor: .leading)
+        drawOverlayLabel(
+            "EXPECTED",
+            at: CGPoint(x: point.x + 8, y: point.y - 10),
+            foreground: .yellow.opacity(0.9 * plotterOverlay.opacity),
+            in: &context
+        )
     }
 
     private func drawBindingMarkPreview(mapper: OverlayMapper, in context: inout GraphicsContext) {
@@ -338,26 +352,28 @@ struct MeasurementOverlay: View {
 
             guard showMeasurements else { continue }
 
-            let label = Text(
+            drawOverlayLabel(
                 String(
                     format: "%@ %.0f,%.0f",
                     point.pointId,
                     point.paperMm.x,
                     point.paperMm.y
-                )
+                ),
+                at: CGPoint(x: center.x + 14, y: center.y - 13),
+                foreground: pointColor.opacity(0.96),
+                in: &context
             )
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(pointColor.opacity(0.96))
-            context.draw(label, at: CGPoint(x: center.x + 14, y: center.y - 13), anchor: .leading)
         }
 
         guard showMeasurements, let first = bindingMarkPreviewPoints.first else { return }
         let anchor = mapper.point(normalizedPoint(first.cameraNorm))
         let suffix = hiddenProjectionCount > 0 ? String(format: "  HIDDEN:%d", hiddenProjectionCount) : ""
-        let label = Text("BIND MARKS\(suffix)")
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(pathColor.opacity(0.96))
-        context.draw(label, at: CGPoint(x: anchor.x + 14, y: anchor.y + 14), anchor: .leading)
+        drawOverlayLabel(
+            "BIND MARKS\(suffix)",
+            at: CGPoint(x: anchor.x + 14, y: anchor.y + 14),
+            foreground: pathColor.opacity(0.96),
+            in: &context
+        )
     }
 
     private var revealedLengthMm: Double {
@@ -394,10 +410,13 @@ struct MeasurementOverlay: View {
                 with: .color(.orange.opacity(0.98))
             )
             guard showMeasurements else { return }
-            let label = Text("\(visualMoveIntent.label) \(visualMoveIntent.detail)")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(.orange.opacity(0.98))
-            context.draw(label, at: CGPoint(x: start.x + 14, y: start.y - 12), anchor: .leading)
+            drawOverlayLabel(
+                "\(visualMoveIntent.label) \(visualMoveIntent.detail)",
+                at: CGPoint(x: start.x + 14, y: start.y - 12),
+                foreground: .orange.opacity(0.98),
+                font: .system(size: 11, weight: .bold, design: .monospaced),
+                in: &context
+            )
             return
         }
         let endNorm = CGPoint(
@@ -438,10 +457,13 @@ struct MeasurementOverlay: View {
         )
 
         guard showMeasurements else { return }
-        let label = Text("\(visualMoveIntent.label) \(visualMoveIntent.detail)")
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .foregroundStyle(.orange.opacity(0.98))
-        context.draw(label, at: CGPoint(x: end.x + 14, y: end.y - 12), anchor: .leading)
+        drawOverlayLabel(
+            "\(visualMoveIntent.label) \(visualMoveIntent.detail)",
+            at: CGPoint(x: end.x + 14, y: end.y - 12),
+            foreground: .orange.opacity(0.98),
+            font: .system(size: 11, weight: .bold, design: .monospaced),
+            in: &context
+        )
     }
 
     private func drawArrowHead(
@@ -519,11 +541,14 @@ struct MeasurementOverlay: View {
 
         guard showMeasurements else { return }
 
-        let label = Text(String(format: "#%02d %@", index + 1, segment.label))
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(color)
         let labelPoint = CGPoint(x: max(8, rect.minX + 4), y: max(14, rect.minY - 9))
-        context.draw(label, at: labelPoint, anchor: .leading)
+        drawOverlayLabel(
+            String(format: "#%02d %@", index + 1, segment.label),
+            at: labelPoint,
+            foreground: color,
+            font: .system(size: 10, weight: .semibold, design: .monospaced),
+            in: &context
+        )
     }
 
     private func draw(carriageMarker: CarriageMarker, mapper: OverlayMapper, in context: inout GraphicsContext) {
@@ -551,10 +576,12 @@ struct MeasurementOverlay: View {
 
         guard showMeasurements else { return }
 
-        let label = Text(carriageMarker.label)
-            .font(.system(size: 10, weight: .bold, design: .monospaced))
-            .foregroundStyle(color.opacity(0.98))
-        context.draw(label, at: CGPoint(x: center.x + 14, y: center.y + 12), anchor: .leading)
+        drawOverlayLabel(
+            carriageMarker.label,
+            at: CGPoint(x: center.x + 14, y: center.y + 12),
+            foreground: color.opacity(0.98),
+            in: &context
+        )
     }
 
     private func draw(track: MotionTrack, mapper: OverlayMapper, in context: inout GraphicsContext) {
@@ -598,16 +625,22 @@ struct MeasurementOverlay: View {
 
         guard showMeasurements else { return }
 
-        let label = Text(track.label)
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .foregroundStyle(color)
         let labelPoint = CGPoint(x: max(10, rect.minX + 5), y: min(rect.maxY + 13, mapper.viewBottom - 18))
-        context.draw(label, at: labelPoint, anchor: .leading)
+        drawOverlayLabel(
+            track.label,
+            at: labelPoint,
+            foreground: color,
+            font: .system(size: 11, weight: .bold, design: .monospaced),
+            in: &context
+        )
 
-        let detail = Text(String(format: "cells:%03d age:%02d", track.changedCells, track.ageReports))
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.74))
-        context.draw(detail, at: CGPoint(x: labelPoint.x, y: labelPoint.y + 13), anchor: .leading)
+        drawOverlayLabel(
+            String(format: "cells:%03d age:%02d", track.changedCells, track.ageReports),
+            at: CGPoint(x: labelPoint.x, y: labelPoint.y + 13),
+            foreground: .white.opacity(0.74),
+            font: .system(size: 9, weight: .semibold, design: .monospaced),
+            in: &context
+        )
     }
 
     private func overlayColor(for kind: SegmentKind, index: Int) -> Color {
@@ -620,6 +653,64 @@ struct MeasurementOverlay: View {
             return .pink
         case .contour:
             return .orange
+        }
+    }
+
+    private func drawOverlayLabel(
+        _ text: String,
+        at point: CGPoint,
+        anchor: OverlayLabelAnchor = .leading,
+        foreground: Color,
+        font: Font = .system(size: 10, weight: .bold, design: .monospaced),
+        in context: inout GraphicsContext
+    ) {
+        let rect = overlayLabelRect(text, at: point, anchor: anchor)
+        context.fill(
+            Path(roundedRect: rect, cornerRadius: rect.height / 2),
+            with: .color(.black.opacity(0.68))
+        )
+        context.stroke(
+            Path(roundedRect: rect, cornerRadius: rect.height / 2),
+            with: .color(.white.opacity(0.18)),
+            lineWidth: 0.8
+        )
+        let label = Text(text)
+            .font(font)
+            .foregroundStyle(foreground)
+        context.draw(label, at: point, anchor: anchor.unitPoint)
+    }
+
+    private func overlayLabelRect(
+        _ text: String,
+        at point: CGPoint,
+        anchor: OverlayLabelAnchor
+    ) -> CGRect {
+        let width = max(28.0, CGFloat(text.count) * 6.5 + 14.0)
+        let height = 18.0
+        switch anchor {
+        case .leading:
+            return CGRect(x: point.x - 7.0, y: point.y - height / 2, width: width, height: height)
+        case .bottomLeading:
+            return CGRect(x: point.x - 7.0, y: point.y - height, width: width, height: height)
+        case .topTrailing:
+            return CGRect(x: point.x - width + 7.0, y: point.y, width: width, height: height)
+        }
+    }
+}
+
+private enum OverlayLabelAnchor {
+    case leading
+    case bottomLeading
+    case topTrailing
+
+    var unitPoint: UnitPoint {
+        switch self {
+        case .leading:
+            return .leading
+        case .bottomLeading:
+            return .bottomLeading
+        case .topTrailing:
+            return .topTrailing
         }
     }
 }

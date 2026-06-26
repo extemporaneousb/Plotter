@@ -3809,11 +3809,11 @@ struct ContentView: View {
         plotterViewport.videoFilter = .normal
         plotterViewport.resetFOV()
         plotterOverlay.opacity = 0.38
-        plotterCamera.showGrid = true
+        plotterCamera.showGrid = false
         plotterCamera.showMeasurements = true
-        plotterCamera.segmentationEnabled = true
-        plotterCamera.changeDetectionEnabled = true
-        faceCamera.segmentationEnabled = true
+        plotterCamera.segmentationEnabled = false
+        plotterCamera.changeDetectionEnabled = false
+        faceCamera.segmentationEnabled = false
         showImageProcessingPanel = true
         calibrationStatusText = "VIS controls reset"
     }

@@ -2,13 +2,13 @@ import CoreGraphics
 import Foundation
 
 struct AnalyzerSettings: Equatable {
-    var enabled = true
+    var enabled = false
     var sensitivity = 0.68
     var minAreaRatio = 0.0008
     var maxSegments = 54
     var greenMarkerEnabled = true
     var capMarkerColorTarget: CapMarkerColorTarget?
-    var changeEnabled = true
+    var changeEnabled = false
     var changeSensitivity = 0.56
     var changeReportInterval = 1.25
     var minChangedCells = 5

@@ -86,9 +86,10 @@ actual pen marks.
 
 The plotter-camera FOV zoom in the macOS app is a persisted Swift viewport transform for operator
 inspection. It does not crop bridge geometry, promote trust, or change machine authority. Current
-segmentation and motion detection run in `CameraModel` on the full camera frame; adding a processing
-ROI would be a separate app-side observation change and must keep Python-owned safety and calibration
-authority intact.
+segmentation and motion detection run in `CameraModel` on the full camera frame when the operator
+enables those visual overlays. They are off by default; green-cap tracking stays active because
+Visual Field Setup uses that observation stream. Adding a processing ROI would be a separate
+app-side observation change and must keep Python-owned safety and calibration authority intact.
 
 ## Calibration Evidence
 

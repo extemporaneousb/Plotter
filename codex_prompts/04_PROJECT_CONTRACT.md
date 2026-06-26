@@ -93,8 +93,9 @@ as diagnostics, with update magnitude approaching zero as the convergence signal
 Swift plotter-camera FOV zoom is persisted operator viewport state only. It may change what the
 operator sees on screen, but it must not crop bridge geometry, promote trust, or alter Python-owned
 calibration and execution authority. Current segmentation and motion detection occur in
-`CameraModel` on the full camera frame; processing ROI is a separate Swift observation feature if it
-is added later.
+`CameraModel` on the full camera frame when explicitly enabled for visual inspection. They are off
+by default, while green-cap tracking stays active for Visual Field Setup. Processing ROI is a
+separate Swift observation feature if it is added later.
 
 ## Core entities
 

@@ -149,9 +149,10 @@ The bridge still has shape and capability-test routes for backend validation, bu
 operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route
 through `DrawingProgram` preview and execution rather than reintroducing ad hoc example buttons.
 
-Current plotter segmentation and motion detection run in `CameraModel` against the full camera frame.
-Restricting processing to a region of interest would be an explicit Swift observation change, not a
-side effect of operator zoom.
+Current plotter segmentation and motion detection run in `CameraModel` against the full camera frame
+when explicitly enabled for visual inspection. They are off by default, while green-cap tracking
+stays active for Visual Field Setup. Restricting processing to a region of interest would be an
+explicit Swift observation change, not a side effect of operator zoom.
 
 Cap-marker evidence is session evidence. Motion Calibration measures relative carriage motion in the
 registered visual field; cap-only visibility is not enough, and the accepted probe observations must

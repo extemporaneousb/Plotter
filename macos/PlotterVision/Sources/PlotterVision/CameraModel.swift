@@ -14,8 +14,14 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var isRunning = false
     @Published var isReceivingFrames = false
     @Published var isPaused = false
-    @Published var segmentationEnabled = true {
-        didSet { updateSettings { $0.enabled = segmentationEnabled } }
+    @Published var segmentationEnabled = false {
+        didSet {
+            updateSettings { $0.enabled = segmentationEnabled }
+            if !segmentationEnabled {
+                segments = []
+                stats.segmentCount = 0
+            }
+        }
     }
     @Published var sensitivity = 0.68 {
         didSet { updateSettings { $0.sensitivity = sensitivity } }
@@ -23,8 +29,13 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var minAreaRatio = 0.0008 {
         didSet { updateSettings { $0.minAreaRatio = minAreaRatio } }
     }
-    @Published var changeDetectionEnabled = true {
-        didSet { updateSettings { $0.changeEnabled = changeDetectionEnabled } }
+    @Published var changeDetectionEnabled = false {
+        didSet {
+            updateSettings { $0.changeEnabled = changeDetectionEnabled }
+            if !changeDetectionEnabled {
+                resetChangeBaseline(updateStatus: false)
+            }
+        }
     }
     @Published var changeSensitivity = 0.56 {
         didSet { updateSettings { $0.changeSensitivity = changeSensitivity } }
@@ -32,7 +43,7 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
     @Published var changeReportInterval = 1.25 {
         didSet { updateSettings { $0.changeReportInterval = changeReportInterval } }
     }
-    @Published var showGrid = true
+    @Published var showGrid = false
     @Published var showMeasurements = true
     @Published var availableCameras: [CameraDeviceOption] = []
     @Published var selectedCameraID = ""
