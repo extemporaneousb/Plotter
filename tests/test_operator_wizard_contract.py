@@ -509,7 +509,21 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "visualFieldRectangleResizedFromTopRight" in support
     assert "cornerResizeGesture(cornerID:" not in support
     assert "topRightResizeGesture" in support
+    assert "private func topRightResizeHandle" in support
     assert "visualFieldTopRightCornerIndex" in support
+    assert ".coordinateSpace(name: visualFieldEditLayerCoordinateSpace)" in support
+    assert "DragGesture(minimumDistance: 0, coordinateSpace: .named(visualFieldEditLayerCoordinateSpace))" in support
+    handle_section = support.split("private func topRightResizeHandle", 1)[1].split(
+        "private func topRightResizeGesture",
+        1,
+    )[0]
+    assert ".frame(width: visualFieldResizeHandleDiameter, height: visualFieldResizeHandleDiameter)" in handle_section
+    assert ".contentShape(Circle())" in handle_section
+    assert ".gesture(topRightResizeGesture(in: viewSize))" in handle_section
+    assert ".position(point)" in handle_section
+    assert handle_section.index(".contentShape(Circle())") < handle_section.index(
+        ".gesture(topRightResizeGesture(in: viewSize))"
+    ) < handle_section.index(".position(point)")
     assert "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" in support
     assert "LIVE MACHINE-VIDEO ESTIMATE" in support
     assert "if isVisible, orderedCorners.count == 4" in support

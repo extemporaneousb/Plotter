@@ -260,17 +260,10 @@ struct VisualFieldEditLayer: View {
 
                     if isActive, viewCorners.indices.contains(visualFieldTopRightCornerIndex) {
                         let point = viewCorners[visualFieldTopRightCornerIndex]
-                        Circle()
-                            .fill(Color.black.opacity(0.68))
-                            .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
-                            .overlay(Circle().fill(Color.white.opacity(0.92)).frame(width: 6, height: 6))
-                            .frame(width: 26, height: 26)
-                            .position(point)
-                            .contentShape(Circle())
-                            .gesture(topRightResizeGesture(in: geometry.size))
-                            .help("Drag the top-right drawing border corner to resize; release to re-lock")
+                        topRightResizeHandle(at: point, viewSize: geometry.size)
                     }
                 }
+                .coordinateSpace(name: visualFieldEditLayerCoordinateSpace)
             }
         }
     }
@@ -321,8 +314,20 @@ struct VisualFieldEditLayer: View {
             }
     }
 
+    private func topRightResizeHandle(at point: CGPoint, viewSize: CGSize) -> some View {
+        Circle()
+            .fill(Color.black.opacity(0.68))
+            .overlay(Circle().stroke(Color.cyan.opacity(0.98), lineWidth: 3))
+            .overlay(Circle().fill(Color.white.opacity(0.92)).frame(width: 6, height: 6))
+            .frame(width: visualFieldResizeHandleDiameter, height: visualFieldResizeHandleDiameter)
+            .contentShape(Circle())
+            .gesture(topRightResizeGesture(in: viewSize))
+            .help("Drag the top-right drawing border corner to resize; release to re-lock")
+            .position(point)
+    }
+
     private func topRightResizeGesture(in viewSize: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(visualFieldEditLayerCoordinateSpace))
             .onChanged { value in
                 let base = dragStartCorners ?? orderedCorners
                 dragStartCorners = base
@@ -384,6 +389,8 @@ private func visualFieldCornerTurn(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> 
 
 private let minimumVisualFieldRectangleSpanNorm: CGFloat = 0.01
 private let visualFieldTopRightCornerIndex = 2
+private let visualFieldResizeHandleDiameter: CGFloat = 26
+private let visualFieldEditLayerCoordinateSpace = "VisualFieldEditLayerCoordinateSpace"
 
 func visualFieldRectangleCornersFromCurrentBounds(_ corners: [ManualFiducialPoint]) -> [ManualFiducialPoint] {
     let ordered = orderedVisualFieldCorners(corners)
