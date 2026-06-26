@@ -1562,12 +1562,29 @@ struct ContentView: View {
         Array(corners.sorted { $0.id < $1.id }.prefix(4))
     }
 
+    private func blockInvalidVisualFieldCorners(source: String) {
+        fieldRelockTask?.cancel()
+        plotterCamera.showGrid = false
+        bridge.clearBindingMarkPreviewOverlay()
+        frameLearning.status = "BLOCK"
+        frameLearning.detail = "Adjusted field corners are concave"
+        calibrationStatusText = "FIELD edit blocked: corners must form a convex box"
+        bridge.recordOperatorEvent(
+            "field_adjusted_from_video_box_blocked",
+            details: ["source": source, "reason": "concave_corners"]
+        )
+    }
+
     @MainActor
     private func updateEditableVisualFieldCorners(_ corners: [ManualFiducialPoint], commit: Bool) {
         let ordered = orderedManualFieldCorners(corners)
         guard ordered.count == 4 else { return }
         manualFiducials = ordered
         if commit {
+            guard visualFieldCornersAreConvex(ordered) else {
+                blockInvalidVisualFieldCorners(source: "field_box_drag_released")
+                return
+            }
             scheduleEditableVisualFieldRelock(source: "field_box_drag_released", delayNanoseconds: 0)
         }
     }
@@ -1577,6 +1594,10 @@ struct ContentView: View {
         delayNanoseconds: UInt64 = 220_000_000
     ) {
         guard workspace.setupWindowActive, editableVisualFieldCorners.count == 4 else { return }
+        guard visualFieldCornersAreConvex(editableVisualFieldCorners) else {
+            blockInvalidVisualFieldCorners(source: source)
+            return
+        }
         fieldRelockTask?.cancel()
         let corners = editableVisualFieldCorners
         let widthMm = desiredVisualFieldWidthMm
@@ -1604,6 +1625,10 @@ struct ContentView: View {
     ) async {
         let ordered = orderedManualFieldCorners(corners)
         guard ordered.count == 4 else { return }
+        guard visualFieldCornersAreConvex(ordered) else {
+            blockInvalidVisualFieldCorners(source: source)
+            return
+        }
 
         visualMotionModel = nil
         visualMotionSamples = []

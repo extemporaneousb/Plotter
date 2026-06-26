@@ -193,6 +193,11 @@ def _validate_observed_corner_quad(corner_observations: list[PaperCornerObservat
             "Observed visual field corners form a crossed quadrilateral. "
             "Click corners in BL, BR, TR, TL order."
         )
+    if not _is_strictly_convex_quad(points):
+        raise ValueError(
+            "Observed visual field corners form a concave quadrilateral. "
+            "Drag field corners so the selected visual field is convex."
+        )
 
 
 def _signed_area(points: list[tuple[float, float]]) -> float:
@@ -221,6 +226,18 @@ def _orientation(
     c: tuple[float, float],
 ) -> float:
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _is_strictly_convex_quad(points: list[tuple[float, float]]) -> bool:
+    if len(points) != 4:
+        return False
+    turns = [
+        _orientation(points[index], points[(index + 1) % 4], points[(index + 2) % 4])
+        for index in range(4)
+    ]
+    if any(abs(turn) < 1e-6 for turn in turns):
+        return False
+    return all(turn > 0 for turn in turns) or all(turn < 0 for turn in turns)
 
 
 def _common_optional_value(values: list[str | None]) -> str | None:

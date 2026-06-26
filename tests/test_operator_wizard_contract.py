@@ -504,6 +504,9 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "updateEditableVisualFieldCorners" in content
     assert "scheduleEditableVisualFieldRelock" in content
     assert "relockEditableVisualField" in content
+    assert "visualFieldCornersAreConvex" in content
+    assert "FIELD edit blocked: corners must form a convex box" in content
+    assert "field_adjusted_from_video_box_blocked" in content
     assert "field_adjusted_from_video_box" in content
     assert "bridge.registerPaperHomography(" in content
     assert "FIELD re-locking adjusted" in content

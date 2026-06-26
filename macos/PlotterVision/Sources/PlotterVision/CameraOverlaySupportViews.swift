@@ -390,6 +390,25 @@ struct VisualFieldEditPolygonShape: Shape {
     }
 }
 
+func visualFieldCornersAreConvex(_ corners: [ManualFiducialPoint]) -> Bool {
+    let ordered = Array(corners.sorted { $0.id < $1.id }.prefix(4))
+    guard ordered.count == 4 else { return false }
+    let points = ordered.map(\.cameraPoint)
+    let turns = points.indices.map { index in
+        visualFieldCornerTurn(
+            points[index],
+            points[(index + 1) % points.count],
+            points[(index + 2) % points.count]
+        )
+    }
+    guard turns.allSatisfy({ abs($0) >= 0.000_001 }) else { return false }
+    return turns.allSatisfy { $0 > 0 } || turns.allSatisfy { $0 < 0 }
+}
+
+private func visualFieldCornerTurn(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
 struct CameraPlaceholder: View {
     @ObservedObject var camera: CameraModel
 

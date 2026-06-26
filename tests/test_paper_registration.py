@@ -120,6 +120,52 @@ def test_visual_field_registration_rejects_crossed_corner_order() -> None:
         )
 
 
+def test_visual_field_registration_rejects_concave_corner_order() -> None:
+    with pytest.raises(ValueError, match="concave quadrilateral"):
+        build_paper_frame_registration(
+            [
+                PaperCornerObservation(
+                    corner=corner,  # type: ignore[arg-type]
+                    expected_paper_norm=paper_corner_norm(corner),  # type: ignore[arg-type]
+                    observed_norm=CameraPointNorm(x=x, y=y),
+                )
+                for corner, x, y in [
+                    ("bottom_left", 0.10, 0.10),
+                    ("bottom_right", 0.90, 0.10),
+                    ("top_right", 0.45, 0.20),
+                    ("top_left", 0.10, 0.90),
+                ]
+            ],
+            paper_width_mm=DEFAULT_FIELD_WIDTH_MM,
+            paper_height_mm=DEFAULT_FIELD_HEIGHT_MM,
+        )
+
+
+def test_visual_field_registration_allows_reflected_convex_field() -> None:
+    registration = build_paper_frame_registration(
+        [
+            PaperCornerObservation(
+                corner=corner,  # type: ignore[arg-type]
+                expected_paper_norm=paper_corner_norm(corner),  # type: ignore[arg-type]
+                observed_norm=CameraPointNorm(x=x, y=y),
+            )
+            for corner, x, y in [
+                ("bottom_left", 0.12, 0.86),
+                ("bottom_right", 0.18, 0.14),
+                ("top_right", 0.82, 0.12),
+                ("top_left", 0.86, 0.84),
+            ]
+        ],
+        paper_width_mm=DEFAULT_FIELD_WIDTH_MM,
+        paper_height_mm=DEFAULT_FIELD_HEIGHT_MM,
+    )
+
+    assert registration.status == "locked"
+    bottom_left = registration.paper_mm_to_camera_norm(PaperPointMM(x=0.0, y=0.0))
+    assert bottom_left.x == pytest.approx(0.12, abs=1e-12)
+    assert bottom_left.y == pytest.approx(0.86, abs=1e-12)
+
+
 def test_visual_field_registration_rejects_degenerate_corners() -> None:
     with pytest.raises(ValueError, match="degenerate"):
         build_paper_frame_registration(
