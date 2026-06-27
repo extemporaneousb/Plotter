@@ -192,7 +192,7 @@ func currentRequiredBridgeApiVersion() -> Int {
        let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
         return parsed
     }
-    return 3
+    return 4
 }
 
 func normalizedBuildId(_ value: String?) -> String? {
@@ -590,7 +590,7 @@ struct PaperSizeSnapshot: Decodable {
     let height: Double
 }
 
-struct HomographySnapshot: Decodable {
+struct HomographySnapshot: Decodable, Equatable {
     let coefficients: [Double]
 }
 
@@ -983,6 +983,85 @@ struct BridgeBindingResidualSummary: Decodable {
     let nonCollinear: Bool
 }
 
+struct BridgeDrawingFrameEdgeObservationRequest: Encodable {
+    let edgeIndex: Int
+    let expectedStartMm: PaperPointMmSnapshot
+    let expectedEndMm: PaperPointMmSnapshot
+    let observedStartMm: PaperPointMmSnapshot?
+    let observedEndMm: PaperPointMmSnapshot?
+    let sampleCount: Int
+    let detectedSampleCount: Int
+    let greenPixelCount: Int
+    let coverageFraction: Double
+    let rmsExpectedResidualMm: Double?
+    let maxExpectedResidualMm: Double?
+    let fitRmsResidualMm: Double?
+    let angleErrorDeg: Double?
+}
+
+struct BridgeDrawingFrameCornerObservationRequest: Encodable {
+    let cornerIndex: Int
+    let expectedMm: PaperPointMmSnapshot
+    let observedMm: PaperPointMmSnapshot
+    let residualMm: Double
+}
+
+struct BridgeDrawingFrameObservationRequest: Encodable {
+    let commandId: String?
+    let paperRegistrationId: String?
+    let cameraId: String?
+    let cameraName: String?
+    let expectedCornersMm: [PaperPointMmSnapshot]
+    let edges: [BridgeDrawingFrameEdgeObservationRequest]
+    let corners: [BridgeDrawingFrameCornerObservationRequest]
+    let totalGreenPixels: Int
+    let detectedEdgeCount: Int
+    let rmsResidualMm: Double?
+    let maxResidualMm: Double?
+    let cornerRmsResidualMm: Double?
+    let cornerMaxResidualMm: Double?
+    let usable: Bool
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
+struct BridgeDrawingCalibrationResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let calibration: BridgeDrawingCalibrationModel?
+    let calibrationFile: String
+    let observationId: String?
+    let error: String?
+}
+
+struct BridgeDrawingCalibrationModel: Decodable, Equatable {
+    let modelId: String
+    let paperRegistrationId: String
+    let cameraId: String?
+    let cameraName: String?
+    let fieldWidthMm: Double
+    let fieldHeightMm: Double
+    let modelFamily: String
+    let solverKind: String
+    let validationStatus: String
+    let observationCount: Int
+    let usableObservationCount: Int
+    let latestObservationId: String?
+    let expectedToObserved: HomographySnapshot?
+    let observedToExpected: HomographySnapshot?
+    let rmsResidualMm: Double?
+    let maxResidualMm: Double?
+    let cornerRmsResidualMm: Double?
+    let cornerMaxResidualMm: Double?
+    let blockers: [String]
+
+    var statusLabel: String {
+        validationStatus.uppercased().replacingOccurrences(of: "_", with: " ")
+    }
+}
+
 struct BridgeVisualProbeSampleResponse: Decodable {
     let status: String
     let dryRun: Bool
@@ -1222,6 +1301,10 @@ final class PlotterBridgeClient {
         try await get(path: "calibration/binding/status")
     }
 
+    func drawingCalibrationStatus() async throws -> BridgeDrawingCalibrationResponse {
+        try await get(path: "calibration/drawing/status")
+    }
+
     func observeVisualCap(_ request: BridgeVisualCapObservationRequest) async throws -> BridgeVisualReadinessResponse {
         try await post(path: "calibration/pen/observe", request: request)
     }
@@ -1232,6 +1315,12 @@ final class PlotterBridgeClient {
 
     func solveVisualBinding(_ request: BridgeVisualBindingSolveRequest) async throws -> BridgeVisualPositionBindingResponse {
         try await post(path: "calibration/binding/solve", request: request)
+    }
+
+    func observeDrawingFrame(
+        _ request: BridgeDrawingFrameObservationRequest
+    ) async throws -> BridgeDrawingCalibrationResponse {
+        try await post(path: "calibration/drawing/frame-observation", request: request)
     }
 
     func observeVisualProbeSample(_ request: BridgeVisualProbeSampleRequest) async throws -> BridgeVisualProbeSampleResponse {
@@ -1303,6 +1392,10 @@ final class PlotterBridgeClient {
                 throw BridgeClientError.server(error)
             }
             if let failure = try? decoder.decode(BridgeVisualPositionBindingResponse.self, from: data),
+               let error = failure.error {
+                throw BridgeClientError.server(error)
+            }
+            if let failure = try? decoder.decode(BridgeDrawingCalibrationResponse.self, from: data),
                let error = failure.error {
                 throw BridgeClientError.server(error)
             }

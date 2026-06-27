@@ -106,10 +106,12 @@ The fixed-camera workflow is:
    authority for this milestone. During setup, the cap and tip are colocated until explicit binding
    evidence proves otherwise. Cap-to-tip offset, ink observations, and real drawing remain future
    work.
-   The setup `Draw Frame` action is diagnostic: it draws an inset Drawing Border, then compares the
-   expected frame against observed green stroke geometry from the plotter camera when available. The
-   logged edge/corner ink residuals describe draw quality but do not update the motion model by
-   themselves.
+   The setup `Calibrate Drawing` action draws an inset Drawing Border, then compares the expected
+   frame against observed green stroke geometry from the plotter camera when available. The bridge
+   persists those edge/corner ink residuals as `latest_drawing_calibration.json`; the first model is
+   a frame-homography-plus-residual-field correction artifact that can be refined by later
+   inner/outer frames or mark routines. It does not promote full drawing trust until residual
+   thresholds and freshness gates say it is usable.
 8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
    are currently backend tests only and are not exposed in the operator UI.
 
@@ -146,7 +148,7 @@ and transforms:
 
 The Plotter Video has no separate grid overlay for setup. The Drawing Border is the only setup
 rectangle overlay, the bottom-left border corner is logical `(0,0)`, and that same registered border
-is the geometry Draw Frame traces.
+is the geometry Calibrate Drawing traces and evaluates.
 
 The bridge still has shape and capability-test routes for backend validation, but the current macOS
 operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route

@@ -18,13 +18,16 @@ extension ContentView {
         bridge.showSetupFieldFrameExpectedPath(corners: corners)
         bridge.drawVerifyStatus = "DRAW RUN"
         bridge.drawVerifyKind = "setup_field_frame"
-        bridge.drawVerifyLabel = "Draw Frame"
-        bridge.drawVerifyCommandId = ""
+        bridge.drawVerifyLabel = "Calibrate Drawing"
+        bridge.drawVerifyCommandId = "setup-field-frame-\(UUID().uuidString.lowercased())"
         bridge.drawVerifyPlanHash = ""
-        bridge.drawVerifyDetail = "Drawing validated Drawing Border"
+        bridge.drawVerifyDetail = "Drawing expected frame"
+        bridge.drawingCalibrationStatus = "DRAW CAL RUN"
+        bridge.drawingCalibrationDetail = "Drawing expected frame before evaluation"
         bridge.recordOperatorEvent(
             "setup_field_frame_started",
             details: [
+                "command_id": bridge.drawVerifyCommandId,
                 "field_width_mm": bridge.visualFieldWidthMm,
                 "field_height_mm": bridge.visualFieldHeightMm,
                 "inset_mm": visualFieldFrameInsetMm,
@@ -302,18 +305,31 @@ extension ContentView {
             details["weak_reason"] = "insufficient_detected_edges"
         }
         bridge.recordOperatorEvent(eventName, details: details)
+        bridge.drawVerifyStatus = result.isUsable ? "EVAL DONE" : "EVAL WEAK"
+        bridge.drawVerifyDetail = result.summary
+        bridge.drawingCalibrationStatus = result.isUsable ? "DRAW CAL SAVE" : "DRAW CAL WEAK"
+        bridge.drawingCalibrationDetail = result.summary
+        let calibration = await bridge.recordDrawingFrameInspection(
+            result,
+            expectedCorners: expectedCorners,
+            registration: registration,
+            commandId: bridge.drawVerifyCommandId
+        )
 
         if result.isUsable, let rmsResidual = result.rmsResidualMm, let maxResidual = result.maxResidualMm {
             bridge.drawVerifyDetail = String(
-                format: "Frame drawn %ds ink %.1f/%.1fmm %@",
-                segmentCount,
+                format: "Observed frame %.1f/%.1fmm %@",
                 rmsResidual,
                 maxResidual,
                 result.detectedEdgeCount == 4 ? "4 edges" : "\(result.detectedEdgeCount)/4 edges"
             )
-            calibrationStatusText = String(format: "FIELD frame ink residual %.1fmm", rmsResidual)
+            if let calibration {
+                calibrationStatusText = "DRAW calibration \(calibration.statusLabel.lowercased())"
+            } else {
+                calibrationStatusText = String(format: "DRAW observed frame residual %.1fmm", rmsResidual)
+            }
         } else {
-            bridge.drawVerifyDetail = "Frame drawn \(segmentCount)s; ink geometry weak \(result.detectedEdgeCount)/4 edges"
+            bridge.drawVerifyDetail = "Observed frame weak \(result.detectedEdgeCount)/4 edges"
             calibrationStatusText = "FIELD frame ink geometry weak"
         }
 
@@ -335,6 +351,8 @@ extension ContentView {
                 "model_max_residual_mm": model.maxResidualMm
             ]
         )
+        bridge.drawingCalibrationStatus = "DRAW CAL BLOCK"
+        bridge.drawingCalibrationDetail = "Observed frame unavailable: \(reason)"
     }
 
     @MainActor

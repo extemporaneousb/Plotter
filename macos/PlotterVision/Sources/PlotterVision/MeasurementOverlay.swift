@@ -6,6 +6,8 @@ struct MeasurementOverlay: View {
     let visualMoveIntent: VisualMoveIntent?
     let motionTracks: [MotionTrack]
     let expectedPathSegments: [ExpectedPathSegment]
+    let expectedPathLabel: String
+    let observedFrameOverlay: DrawingFrameOverlay?
     let bindingMarkPreviewSegments: [BindingMarkPreviewSegment]
     let bindingMarkPreviewPoints: [BindingMarkPreviewPoint]
     let paperTransform: PaperRegistrationSnapshot?
@@ -14,14 +16,18 @@ struct MeasurementOverlay: View {
     let videoSize: CGSize
     let previewMode: CameraPreviewMode
     let showMeasurements: Bool
+    let showDrawingBorder: Bool
 
     var body: some View {
         Canvas { context, size in
             let mapper = OverlayMapper(viewSize: size, videoSize: videoSize, previewMode: previewMode)
 
             if let paperTransform {
-                drawDrawingBorder(paperTransform, mapper: mapper, in: &context)
+                if showDrawingBorder {
+                    drawDrawingBorder(paperTransform, mapper: mapper, in: &context)
+                }
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
+                drawObservedFrame(registration: paperTransform, mapper: mapper, in: &context)
             }
 
             drawBindingMarkPreview(mapper: mapper, in: &context)
@@ -200,8 +206,13 @@ struct MeasurementOverlay: View {
 
         context.stroke(
             path,
+            with: .color(.black.opacity(0.88 * plotterOverlay.opacity)),
+            style: StrokeStyle(lineWidth: 7.2, lineCap: .round, lineJoin: .round, dash: [10, 4])
+        )
+        context.stroke(
+            path,
             with: .color(.yellow.opacity(0.92 * plotterOverlay.opacity)),
-            style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round, dash: [8, 5])
+            style: StrokeStyle(lineWidth: 3.8, lineCap: .round, lineJoin: .round, dash: [10, 4])
         )
 
         for segment in expectedPathSegments {
@@ -225,7 +236,8 @@ struct MeasurementOverlay: View {
             )
         }
 
-        guard showMeasurements, let first = expectedPathSegments.first,
+        guard (showMeasurements || expectedPathLabel != "EXPECTED"),
+              let first = expectedPathSegments.first,
               let start = normalizedPoint(first.startNorm),
               let cameraStart = paperToCameraPoint(start, registration: registration) else {
             return
@@ -233,9 +245,84 @@ struct MeasurementOverlay: View {
 
         let point = mapper.point(cameraStart)
         drawOverlayLabel(
-            "EXPECTED",
+            expectedPathLabel,
             at: CGPoint(x: point.x + 8, y: point.y - 10),
             foreground: .yellow.opacity(0.9 * plotterOverlay.opacity),
+            in: &context
+        )
+    }
+
+    private func drawObservedFrame(
+        registration: PaperRegistrationSnapshot,
+        mapper: OverlayMapper,
+        in context: inout GraphicsContext
+    ) {
+        guard let observedFrameOverlay, observedFrameOverlay.isVisible else { return }
+        let color = Color(red: 0.14, green: 1.0, blue: 0.42)
+        var path = Path()
+        var drawnSegmentCount = 0
+        for edge in observedFrameOverlay.observedEdges {
+            guard let start = paperMmToCameraPoint(edge.observedStartMm, registration: registration),
+                  let end = paperMmToCameraPoint(edge.observedEndMm, registration: registration) else {
+                continue
+            }
+            path.move(to: mapper.point(start))
+            path.addLine(to: mapper.point(end))
+            drawnSegmentCount += 1
+        }
+
+        if drawnSegmentCount == 0, observedFrameOverlay.observedCornersMm.count >= 4 {
+            let cameraCorners = observedFrameOverlay.observedCornersMm.compactMap {
+                paperMmToCameraPoint($0, registration: registration)
+            }
+            if cameraCorners.count >= 4 {
+                path.move(to: mapper.point(cameraCorners[0]))
+                for corner in cameraCorners.dropFirst() {
+                    path.addLine(to: mapper.point(corner))
+                }
+                path.closeSubpath()
+                drawnSegmentCount = cameraCorners.count
+            }
+        }
+
+        guard drawnSegmentCount > 0 else { return }
+        context.stroke(
+            path,
+            with: .color(.black.opacity(0.90)),
+            style: StrokeStyle(lineWidth: 8.8, lineCap: .round, lineJoin: .round)
+        )
+        context.stroke(
+            path,
+            with: .color(color.opacity(0.96)),
+            style: StrokeStyle(lineWidth: 4.4, lineCap: .round, lineJoin: .round)
+        )
+
+        for corner in observedFrameOverlay.observedCornersMm {
+            guard let camera = paperMmToCameraPoint(corner, registration: registration) else { continue }
+            let center = mapper.point(camera)
+            context.fill(
+                Path(ellipseIn: CGRect(x: center.x - 5.5, y: center.y - 5.5, width: 11, height: 11)),
+                with: .color(color.opacity(0.96))
+            )
+            context.stroke(
+                Path(ellipseIn: CGRect(x: center.x - 9, y: center.y - 9, width: 18, height: 18)),
+                with: .color(.black.opacity(0.78)),
+                lineWidth: 2.2
+            )
+        }
+
+        let anchorMm = observedFrameOverlay.observedCornersMm.first
+            ?? observedFrameOverlay.observedEdges.first?.observedStartMm
+        guard let anchorMm,
+              let anchor = paperMmToCameraPoint(anchorMm, registration: registration) else {
+            return
+        }
+        let labelPoint = mapper.point(anchor)
+        let residual = observedFrameOverlay.rmsResidualMm.map { String(format: " %.1fmm", $0) } ?? ""
+        drawOverlayLabel(
+            "Observed frame\(residual)",
+            at: CGPoint(x: labelPoint.x + 8, y: labelPoint.y + 16),
+            foreground: color.opacity(0.98),
             in: &context
         )
     }
@@ -758,6 +845,22 @@ private func paperToCameraPoint(
         return nil
     }
     return CGPoint(x: CGFloat(cameraX), y: CGFloat(cameraY))
+}
+
+private func paperMmToCameraPoint(
+    _ paperMm: PaperPointMmSnapshot,
+    registration: PaperRegistrationSnapshot
+) -> CGPoint? {
+    guard registration.paperSizeMm.width > 0, registration.paperSizeMm.height > 0 else {
+        return nil
+    }
+    return paperToCameraPoint(
+        CGPoint(
+            x: paperMm.x / registration.paperSizeMm.width,
+            y: paperMm.y / registration.paperSizeMm.height
+        ),
+        registration: registration
+    )
 }
 
 private func visibleNormalizedPoint(_ point: NormPoint) -> CGPoint? {

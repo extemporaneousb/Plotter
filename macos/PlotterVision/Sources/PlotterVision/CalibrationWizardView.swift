@@ -11,6 +11,8 @@ struct CalibrationWizardView: View {
     let visualCalibrationStatus: CalibrationWizardStepStatus
     let bindingDetail: String
     let bindingStatus: CalibrationWizardStepStatus
+    let drawingCalibrationDetail: String
+    let drawingCalibrationStatus: CalibrationWizardStepStatus
     let primaryActionTitle: String
     let primaryActionEnabled: Bool
     let primaryActionDisabledReason: String?
@@ -86,6 +88,7 @@ struct CalibrationWizardView: View {
             CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
             CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
             CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
+            CalibrationWizardStepRow(index: 5, title: "Calibrate Drawing", detail: drawingCalibrationDetail, status: drawingCalibrationStatus)
         }
     }
 
@@ -168,14 +171,14 @@ struct CalibrationWizardView: View {
             if drawFrameVisible {
                 Button(action: drawFrame) {
                     Label(
-                        "Draw Frame",
+                        "Calibrate Drawing",
                         systemImage: drawFrameEnabled ? "rectangle" : "lock.fill"
                     )
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(drawFrameEnabled ? .green : .gray)
                 .disabled(!drawFrameEnabled)
-                .help(drawFrameDisabledReason ?? "Draw the validated Drawing Border")
+                .help(drawFrameDisabledReason ?? "Draw, evaluate, and persist drawing calibration")
             }
 
             Button("Reset", action: reset)

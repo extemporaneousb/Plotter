@@ -40,6 +40,12 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var faceContourPreviewOverlay: FaceContourPreviewOverlay?
     @Published var portraitContourSettings = PortraitContourSettings()
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
+    @Published var expectedPathRole = ""
+    @Published var expectedPathLabel = "EXPECTED"
+    @Published var observedDrawingFrameOverlay: DrawingFrameOverlay?
+    @Published var drawingCalibrationStatus = "DRAW CAL --"
+    @Published var drawingCalibrationDetail = "No drawing calibration"
+    @Published var latestDrawingCalibration: BridgeDrawingCalibrationModel?
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var latestVisualReadiness: BridgeVisualReadinessState?
@@ -98,6 +104,16 @@ final class PlotterBridgeModel: ObservableObject {
 
     var visualFieldHeightMm: Double {
         paperRegistrationSnapshot?.paperSizeMm.height ?? 150.0
+    }
+
+    var showDrawingBorderOverlay: Bool {
+        if observedDrawingFrameOverlay?.isVisible == true {
+            return false
+        }
+        if expectedPathRole == "setup_field_frame", !expectedPathSegments.isEmpty {
+            return false
+        }
+        return true
     }
     private var lastDiagnosticsMachineSummary = ""
     private var lastDiagnosticsPaperSummary = ""
@@ -228,7 +244,11 @@ final class PlotterBridgeModel: ObservableObject {
             _ = resetVisualCalibrationSession(prefix: "swift-reset")
             drawVerifyStatus = "DRAW --"
             drawVerifyDetail = "No drawing run"
-            expectedPathSegments = []
+            clearExpectedPathOverlay()
+            observedDrawingFrameOverlay = nil
+            latestDrawingCalibration = nil
+            drawingCalibrationStatus = "DRAW CAL --"
+            drawingCalibrationDetail = "No drawing calibration"
             statusText = "Visual setup reset"
             diagnosticsEvent(
                 "visual_setup_reset",
@@ -681,6 +701,12 @@ final class PlotterBridgeModel: ObservableObject {
                 "image_contours": imagePreviewContourCount,
                 "image_bridge_preview_eligible": imagePreviewEligibleForBridgePreview,
                 "expected_path_segments": expectedPathSegments.count,
+                "expected_path_role": expectedPathRole,
+                "observed_frame_visible": observedDrawingFrameOverlay?.isVisible ?? false,
+                "observed_frame_edges": observedDrawingFrameOverlay?.detectedEdgeCount ?? 0,
+                "drawing_calibration": drawingCalibrationStatus,
+                "drawing_calibration_detail": drawingCalibrationDetail,
+                "drawing_calibration_model_id": latestDrawingCalibration?.modelId ?? "",
                 "binding_mark_preview": bindingMarkPreviewStatus,
                 "binding_mark_point_set": bindingMarkPreviewPointSet,
                 "binding_mark_points": bindingMarkPreviewPoints.count,
@@ -1289,6 +1315,7 @@ final class PlotterBridgeModel: ObservableObject {
                 )
             )
             shortStatus = response.dryRun ? "DRY" : (response.status == "completed" ? "DONE" : "ERR")
+            resetExpectedPathRole()
             expectedPathSegments = response.simulation?.previewSegments ?? []
             previewStatus = "SIM \(response.status.uppercased())"
             let drawnLength = response.simulation?.drawnLengthMm ?? response.summary?.drawnLengthMm ?? 0.0
@@ -1391,6 +1418,7 @@ final class PlotterBridgeModel: ObservableObject {
                     maxSegmentMm: 25.0
                 )
             )
+            resetExpectedPathRole()
             expectedPathSegments = response.simulation?.previewSegments ?? []
             let contours = response.portraitSummary?.contourCount ?? 0
             let keptPoints = response.portraitSummary?.keptPointCount ?? 0
@@ -1429,7 +1457,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             return response.status == "ready"
         } catch {
-            expectedPathSegments = []
+            clearExpectedPathOverlay()
             faceContourPreviewOverlay = nil
             imagePreviewContourCount = 0
             imagePreviewEligibleForBridgePreview = false
@@ -1473,6 +1501,7 @@ final class PlotterBridgeModel: ObservableObject {
     func restorePortraitCapture(_ item: PortraitCaptureItem) {
         portraitContourSettings.technique = item.technique
         faceContourPreviewOverlay = item.overlay
+        resetExpectedPathRole()
         expectedPathSegments = item.expectedPathSegments
         imagePreviewStatus = item.status
         imagePreviewDetail = item.detail
@@ -1930,9 +1959,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot]) {
         guard corners.count >= 4, visualFieldWidthMm > 0, visualFieldHeightMm > 0 else {
-            expectedPathSegments = []
-            pathRevealProgress = 1.0
-            pathAnimationStatus = "IDLE"
+            clearExpectedPathOverlay()
             return
         }
         let closed = Array(corners.prefix(4)) + [corners[0]]
@@ -1951,6 +1978,9 @@ final class PlotterBridgeModel: ObservableObject {
                 lengthMm: hypot(end.x - start.x, end.y - start.y)
             )
         }
+        expectedPathRole = "setup_field_frame"
+        expectedPathLabel = "Expected frame"
+        observedDrawingFrameOverlay = nil
         pathRevealProgress = 1.0
         pathAnimationStatus = "FRAME"
         previewStatus = "SIM FRAME"
@@ -1963,6 +1993,19 @@ final class PlotterBridgeModel: ObservableObject {
             ],
             snapshot: true
         )
+    }
+
+    func clearExpectedPathOverlay() {
+        expectedPathSegments = []
+        resetExpectedPathRole()
+        pathRevealProgress = 1.0
+        pathAnimationStatus = "IDLE"
+    }
+
+    private func resetExpectedPathRole() {
+        expectedPathRole = ""
+        expectedPathLabel = "EXPECTED"
+        observedDrawingFrameOverlay = nil
     }
 
     func jog(axis: String, distanceMm: Double) async {
@@ -2733,7 +2776,7 @@ final class PlotterBridgeModel: ObservableObject {
             bindingMarkPreviewPlanHash = response.planHash
             bindingMarkPreviewPointSet = response.pointSet
             drawableSafeZone = response.safeZone
-            expectedPathSegments = []
+            clearExpectedPathOverlay()
             bindingMarkPreviewStatus = String(
                 format: "BIND %@ %dP %dS %@",
                 response.pointSet.uppercased(),
@@ -2804,6 +2847,149 @@ final class PlotterBridgeModel: ObservableObject {
             visualBindingDetail = error.localizedDescription
             visualBindingValid = false
             diagnosticsEvent("visual_binding_status_failed", errorPayload(error), snapshot: false)
+        }
+    }
+
+    func refreshDrawingCalibrationStatus() async -> BridgeDrawingCalibrationModel? {
+        guard isOnline else {
+            drawingCalibrationStatus = "DRAW CAL OFF"
+            drawingCalibrationDetail = "Bridge offline"
+            latestDrawingCalibration = nil
+            return nil
+        }
+        do {
+            let response = try await client.drawingCalibrationStatus()
+            applyDrawingCalibrationResponse(response)
+            diagnosticsEvent(
+                "drawing_model_refreshed",
+                [
+                    "status": response.status,
+                    "model_id": response.calibration?.modelId ?? "",
+                    "solver_kind": response.calibration?.solverKind ?? "",
+                    "usable_observations": response.calibration?.usableObservationCount ?? 0,
+                    "blockers": response.calibration?.blockers ?? []
+                ],
+                snapshot: false
+            )
+            return response.calibration
+        } catch {
+            drawingCalibrationStatus = "DRAW CAL ERR"
+            drawingCalibrationDetail = error.localizedDescription
+            latestDrawingCalibration = nil
+            diagnosticsEvent("drawing_model_refresh_failed", errorPayload(error), snapshot: false)
+            return nil
+        }
+    }
+
+    func recordDrawingFrameInspection(
+        _ result: DrawnFrameInspectionResult,
+        expectedCorners: [PaperPointMmSnapshot],
+        registration: PaperRegistrationSnapshot,
+        commandId: String?
+    ) async -> BridgeDrawingCalibrationModel? {
+        observedDrawingFrameOverlay = DrawingFrameOverlay(
+            expectedCornersMm: expectedCorners,
+            observedCornersMm: result.corners.map(\.observedMm),
+            observedEdges: result.edges.compactMap { edge in
+                guard let start = edge.observedStartMm,
+                      let end = edge.observedEndMm else {
+                    return nil
+                }
+                return DrawingFrameObservedEdgeOverlay(
+                    edgeIndex: edge.edgeIndex,
+                    observedStartMm: start,
+                    observedEndMm: end
+                )
+            },
+            detectedEdgeCount: result.detectedEdgeCount,
+            rmsResidualMm: result.rmsResidualMm,
+            maxResidualMm: result.maxResidualMm,
+            status: result.summary
+        )
+        guard isOnline else {
+            drawingCalibrationStatus = "DRAW CAL OFF"
+            drawingCalibrationDetail = "Observed frame overlay only; bridge offline"
+            return nil
+        }
+        do {
+            let response = try await client.observeDrawingFrame(
+                BridgeDrawingFrameObservationRequest(
+                    commandId: commandId,
+                    paperRegistrationId: registration.registrationId,
+                    cameraId: "plotter-camera",
+                    cameraName: "Plotter Camera",
+                    expectedCornersMm: expectedCorners,
+                    edges: result.edges.map { edge in
+                        BridgeDrawingFrameEdgeObservationRequest(
+                            edgeIndex: edge.edgeIndex,
+                            expectedStartMm: edge.expectedStartMm,
+                            expectedEndMm: edge.expectedEndMm,
+                            observedStartMm: edge.observedStartMm,
+                            observedEndMm: edge.observedEndMm,
+                            sampleCount: edge.sampleCount,
+                            detectedSampleCount: edge.detectedSampleCount,
+                            greenPixelCount: edge.greenPixelCount,
+                            coverageFraction: edge.coverageFraction,
+                            rmsExpectedResidualMm: edge.rmsExpectedResidualMm,
+                            maxExpectedResidualMm: edge.maxExpectedResidualMm,
+                            fitRmsResidualMm: edge.fitRmsResidualMm,
+                            angleErrorDeg: edge.angleErrorDeg
+                        )
+                    },
+                    corners: result.corners.map { corner in
+                        BridgeDrawingFrameCornerObservationRequest(
+                            cornerIndex: corner.cornerIndex,
+                            expectedMm: corner.expectedMm,
+                            observedMm: corner.observedMm,
+                            residualMm: corner.residualMm
+                        )
+                    },
+                    totalGreenPixels: result.totalGreenPixels,
+                    detectedEdgeCount: result.detectedEdgeCount,
+                    rmsResidualMm: result.rmsResidualMm,
+                    maxResidualMm: result.maxResidualMm,
+                    cornerRmsResidualMm: result.cornerRmsResidualMm,
+                    cornerMaxResidualMm: result.cornerMaxResidualMm,
+                    usable: result.isUsable
+                )
+            )
+            applyDrawingCalibrationResponse(response)
+            diagnosticsEvent(
+                "drawing_frame_observation_recorded",
+                [
+                    "status": response.status,
+                    "observation_id": response.observationId ?? "",
+                    "model_id": response.calibration?.modelId ?? "",
+                    "solver_kind": response.calibration?.solverKind ?? "",
+                    "detected_edges": result.detectedEdgeCount,
+                    "usable": result.isUsable,
+                    "blockers": response.calibration?.blockers ?? []
+                ],
+                snapshot: true
+            )
+            return response.calibration
+        } catch {
+            drawingCalibrationStatus = "DRAW CAL ERR"
+            drawingCalibrationDetail = error.localizedDescription
+            diagnosticsEvent("drawing_frame_observation_failed", errorPayload(error), snapshot: true)
+            return nil
+        }
+    }
+
+    private func applyDrawingCalibrationResponse(_ response: BridgeDrawingCalibrationResponse) {
+        latestDrawingCalibration = response.calibration
+        guard let calibration = response.calibration else {
+            drawingCalibrationStatus = response.status == "missing" ? "DRAW CAL --" : "DRAW CAL ERR"
+            drawingCalibrationDetail = response.error ?? "No drawing calibration"
+            return
+        }
+        drawingCalibrationStatus = "DRAW CAL \(calibration.statusLabel)"
+        let residual = calibration.rmsResidualMm.map { String(format: "rms %.1fmm", $0) } ?? "rms --"
+        let maxResidual = calibration.maxResidualMm.map { String(format: "max %.1fmm", $0) } ?? "max --"
+        if let blocker = calibration.blockers.first {
+            drawingCalibrationDetail = "\(residual) \(maxResidual); \(blocker)"
+        } else {
+            drawingCalibrationDetail = "\(residual) \(maxResidual); \(calibration.usableObservationCount) usable frame(s)"
         }
     }
 

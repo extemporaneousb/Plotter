@@ -41,6 +41,13 @@ from plotter_vision.calibration.binding import (
     solve_visual_position_binding,
     upsert_expected_geometry,
 )
+from plotter_vision.calibration.drawing_model import (
+    DrawingCalibrationModel,
+    DrawingFrameCornerObservation,
+    DrawingFrameEdgeObservation,
+    DrawingFrameObservation,
+    build_drawing_calibration_model,
+)
 from plotter_vision.calibration.probe_evidence import (
     VisualProbeCapSnapshot,
     VisualProbeRun,
@@ -120,7 +127,7 @@ from plotter_vision.motion.simulator import (
 
 BindingMarkPointSet = Literal["five"]
 BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
-BRIDGE_API_VERSION = 3
+BRIDGE_API_VERSION = 4
 DEFAULT_DRAWABLE_EXTRA_PADDING_MM = 40.0
 DEFAULT_BINDING_MARK_MAX_SIZE_MM = 14.0
 DEFAULT_BINDING_MARK_OBSERVATION_CLEARANCE_MM = 4.0
@@ -483,6 +490,33 @@ class VisualPositionBindingResponse(BaseModel):
     dry_run: bool
     binding: VisualPositionBinding | None = None
     binding_file: str = ""
+    observation_id: str | None = None
+    error: str | None = None
+
+
+class DrawingFrameObservationRequest(TraceContextFields):
+    command_id: str | None = None
+    paper_registration_id: str | None = None
+    camera_id: str | None = None
+    camera_name: str | None = None
+    expected_corners_mm: list[PaperPointMM] = Field(default_factory=list)
+    edges: list[DrawingFrameEdgeObservation] = Field(default_factory=list)
+    corners: list[DrawingFrameCornerObservation] = Field(default_factory=list)
+    total_green_pixels: int = 0
+    detected_edge_count: int = 0
+    rms_residual_mm: float | None = None
+    max_residual_mm: float | None = None
+    corner_rms_residual_mm: float | None = None
+    corner_max_residual_mm: float | None = None
+    usable: bool = False
+    request_id: str | None = None
+
+
+class DrawingCalibrationResponse(BaseModel):
+    status: str
+    dry_run: bool
+    calibration: DrawingCalibrationModel | None = None
+    calibration_file: str = ""
     observation_id: str | None = None
     error: str | None = None
 
@@ -2200,6 +2234,7 @@ class PlotterBridge:
             self._latest_visual_readiness_path(),
             self._latest_visual_probe_run_path(),
             self._latest_visual_position_binding_path(),
+            self._latest_drawing_calibration_path(),
         ]
         cleared: list[str] = []
         missing: list[str] = []
@@ -2457,6 +2492,109 @@ class PlotterBridge:
                 status="missing",
                 dry_run=self.config.dry_run,
                 binding_file=str(self._latest_visual_position_binding_path()),
+                error=str(exc),
+            )
+
+    def drawing_model_status(self) -> DrawingCalibrationResponse:
+        try:
+            calibration = self._load_latest_drawing_calibration()
+            registration = self._load_latest_paper_registration()
+            if calibration.paper_registration_id != registration.registration_id:
+                raise ValueError("Drawing calibration is stale for the current Drawing Border.")
+            return self._drawing_calibration_response(calibration)
+        except Exception as exc:
+            return DrawingCalibrationResponse(
+                status="missing",
+                dry_run=self.config.dry_run,
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def observe_drawing_frame(
+        self,
+        request: DrawingFrameObservationRequest,
+    ) -> DrawingCalibrationResponse:
+        try:
+            registration = self._load_latest_paper_registration()
+            if (
+                request.paper_registration_id is not None
+                and request.paper_registration_id != registration.registration_id
+            ):
+                raise ValueError(
+                    "Drawing frame observation paper_registration_id does not match the current Drawing Border."
+                )
+
+            observation = DrawingFrameObservation(
+                command_id=request.command_id,
+                paper_registration_id=registration.registration_id,
+                camera_id=request.camera_id or registration.camera_id,
+                camera_name=request.camera_name or registration.camera_name,
+                field_width_mm=registration.paper_size_mm.width,
+                field_height_mm=registration.paper_size_mm.height,
+                expected_corners_mm=request.expected_corners_mm,
+                edges=request.edges,
+                corners=request.corners,
+                total_green_pixels=request.total_green_pixels,
+                detected_edge_count=request.detected_edge_count,
+                rms_residual_mm=request.rms_residual_mm,
+                max_residual_mm=request.max_residual_mm,
+                corner_rms_residual_mm=request.corner_rms_residual_mm,
+                corner_max_residual_mm=request.corner_max_residual_mm,
+                usable=request.usable,
+            )
+            previous = self._load_latest_drawing_calibration_or_none()
+            observations: list[DrawingFrameObservation] = []
+            if (
+                previous is not None
+                and previous.paper_registration_id == registration.registration_id
+                and (previous.camera_id in {None, observation.camera_id} or observation.camera_id is None)
+            ):
+                observations.extend(previous.frame_observations)
+            observations.append(observation)
+            observations = observations[-24:]
+
+            calibration = build_drawing_calibration_model(
+                observations=observations,
+                paper_registration_id=registration.registration_id,
+                camera_id=observation.camera_id,
+                camera_name=observation.camera_name,
+                field_width_mm=registration.paper_size_mm.width,
+                field_height_mm=registration.paper_size_mm.height,
+            )
+            self._save_drawing_calibration(calibration)
+            self.event_log.emit(
+                "calibration.drawing_frame_observed",
+                command_id=observation.command_id or observation.observation_id,
+                status=calibration.validation_status,
+                payload={
+                    "observation_id": observation.observation_id,
+                    "paper_registration_id": registration.registration_id,
+                    "detected_edge_count": observation.detected_edge_count,
+                    "usable": observation.usable,
+                    "rms_residual_mm": observation.rms_residual_mm,
+                    "max_residual_mm": observation.max_residual_mm,
+                    "corner_rms_residual_mm": observation.corner_rms_residual_mm,
+                    "corner_max_residual_mm": observation.corner_max_residual_mm,
+                    "solver_kind": calibration.solver_kind,
+                    "validation_status": calibration.validation_status,
+                    "blockers": calibration.blockers,
+                    "calibration_file": str(self._latest_drawing_calibration_path()),
+                },
+            )
+            return self._drawing_calibration_response(
+                calibration,
+                observation_id=observation.observation_id,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_frame_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                calibration_file=str(self._latest_drawing_calibration_path()),
                 error=str(exc),
             )
 
@@ -4467,6 +4605,30 @@ class PlotterBridge:
         except Exception:
             return None
 
+    def _drawing_calibration_path(self, model_id: str) -> Path:
+        if "/" in model_id or ".." in model_id:
+            raise ValueError("Invalid drawing calibration model_id.")
+        return self.config.calibration_dir / "drawing_calibrations" / f"{model_id}.json"
+
+    def _latest_drawing_calibration_path(self) -> Path:
+        return self.config.calibration_dir / "latest_drawing_calibration.json"
+
+    def _save_drawing_calibration(self, calibration: DrawingCalibrationModel) -> None:
+        calibration.save_json(self._drawing_calibration_path(calibration.model_id))
+        calibration.save_json(self._latest_drawing_calibration_path())
+
+    def _load_latest_drawing_calibration(self) -> DrawingCalibrationModel:
+        path = self._latest_drawing_calibration_path()
+        if not path.exists():
+            raise ValueError("No drawing calibration model has been saved.")
+        return DrawingCalibrationModel.load_json(path)
+
+    def _load_latest_drawing_calibration_or_none(self) -> DrawingCalibrationModel | None:
+        try:
+            return self._load_latest_drawing_calibration()
+        except Exception:
+            return None
+
     def _policy_safe_zone_or_none(
         self,
         safe_zone: DrawingSafeZone | None,
@@ -4619,6 +4781,20 @@ class PlotterBridge:
             dry_run=self.config.dry_run,
             binding=binding,
             binding_file=str(self._latest_visual_position_binding_path()),
+            observation_id=observation_id,
+        )
+
+    def _drawing_calibration_response(
+        self,
+        calibration: DrawingCalibrationModel,
+        *,
+        observation_id: str | None = None,
+    ) -> DrawingCalibrationResponse:
+        return DrawingCalibrationResponse(
+            status=calibration.validation_status,
+            dry_run=self.config.dry_run,
+            calibration=calibration,
+            calibration_file=str(self._latest_drawing_calibration_path()),
             observation_id=observation_id,
         )
 
@@ -5823,6 +5999,11 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.solve_visual_binding,
             lambda response: getattr(response, "status", "") in {"ready", "validated", "collecting", "blocked"},
         ),
+        "/calibration/drawing/frame-observation": PostRoute(
+            DrawingFrameObservationRequest,
+            bridge.observe_drawing_frame,
+            lambda response: getattr(response, "status", "") in {"ready", "needs_more_evidence", "collecting"},
+        ),
         "/calibration/probe/observe": PostRoute(
             VisualProbeSampleObservationRequest,
             bridge.observe_visual_probe_sample,
@@ -5855,6 +6036,9 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed_url.path == "/calibration/binding/status":
                 self._write_model(HTTPStatus.OK, bridge.visual_position_binding_status())
+                return
+            if parsed_url.path == "/calibration/drawing/status":
+                self._write_model(HTTPStatus.OK, bridge.drawing_model_status())
                 return
             if parsed_url.path == "/paper/status":
                 response = bridge.paper_registration_status()

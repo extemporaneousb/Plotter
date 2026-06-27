@@ -34,6 +34,7 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var visualMotionSamples: [VisualMotionSample] = []
     @Published var visualCenterDotTaskActive = false
     @Published var operatorLog: [OperatorLogEntry] = []
+    @Published var setupLogExpanded = false
     @Published var setupSnapshot = SetupPanelSnapshot.idle
     @Published var pendingSetupCommand: SetupPanelCommandRequest?
     @Published var pendingPanelCommand: OperatorPanelCommandRequest?
@@ -113,6 +114,7 @@ final class OperatorWorkspaceState: ObservableObject {
                 "visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0,
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
                 "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
+                "setup_log_expanded": setupLogExpanded,
                 "operator_log_entries": operatorLog.count
             ]
         ]
@@ -156,6 +158,8 @@ struct SetupPanelSnapshot: Equatable {
     var visualCalibrationStatus: CalibrationWizardStepStatus
     var bindingDetail: String
     var bindingStatus: CalibrationWizardStepStatus
+    var drawingCalibrationDetail: String
+    var drawingCalibrationStatus: CalibrationWizardStepStatus
     var primaryActionTitle: String
     var primaryActionEnabled: Bool
     var primaryActionDisabledReason: String?
@@ -178,6 +182,8 @@ struct SetupPanelSnapshot: Equatable {
         visualCalibrationStatus: .pending,
         bindingDetail: "No motion validation",
         bindingStatus: .pending,
+        drawingCalibrationDetail: "No drawing calibration",
+        drawingCalibrationStatus: .pending,
         primaryActionTitle: "Start Setup",
         primaryActionEnabled: true,
         primaryActionDisabledReason: nil,

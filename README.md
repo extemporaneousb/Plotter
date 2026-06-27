@@ -86,11 +86,15 @@ Simulation is not a decorative UI preview. It is the expected pen motion project
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
 
-The setup `Draw Frame` action is a diagnostic bridge into that residual loop. After drawing the
+The setup `Calibrate Drawing` action is the current bridge into that residual loop. After drawing the
 inset Drawing Border, the app records the final cap closure residual and, when the plotter camera has
 a usable frame, detects green stroke pixels near the expected frame, fits observed edge/corner
-geometry, and logs ink residuals against the expected frame. Those measurements evaluate the draw;
-they do not by themselves promote calibration trust or correct future moves.
+geometry, overlays the observed frame against the expected frame, and sends the residual evidence to
+the bridge. The bridge persists `latest_drawing_calibration.json` under the calibration artifact
+directory and loads it on later app startup. The first saved model is a conservative
+frame-homography-plus-residual-field artifact from expected paper millimeters to observed drawn
+millimeters; it is deliberately extensible for later inner/outer frames or mark sets before claiming
+nonlinear correction quality.
 
 The plotter-camera FOV zoom in the macOS app is a persisted Swift viewport transform for operator
 inspection. It does not crop bridge geometry, promote trust, or change machine authority. Current
@@ -109,7 +113,7 @@ The operator sequence should stay explicit:
 | 2 | Machine-Video Agreement Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-video basis | Cap-to-tip offset, ink binding, or drawing authority. |
 | 3 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
-| 5 | Draw Frame diagnostic | Execution transcript, cap closure residual, green frame edge/corner observations, ink residuals against the expected inset frame | A corrected motion model or future drawing trust. |
+| 5 | Calibrate Drawing | Execution transcript, cap closure residual, expected/observed frame overlays, green frame edge/corner observations, persisted drawing-calibration residual model | Full nonlinear drawing correction from one rectangle or future drawing trust without fresh evidence. |
 | 6 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
 
 Swift may collect and display probe samples, residuals, and operator events, but Python owns durable

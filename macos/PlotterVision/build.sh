@@ -76,7 +76,7 @@ if [[ -x /usr/libexec/PlistBuddy ]]; then
   /usr/libexec/PlistBuddy -c "Add :PlotterAppBuildID string $APP_BUILD_ID" "$CONTENTS_DIR/Info.plist"
   /usr/libexec/PlistBuddy -c "Add :PlotterSourceRoot string $REPO_ROOT" "$CONTENTS_DIR/Info.plist"
   /usr/libexec/PlistBuddy -c "Add :PlotterBuiltAt string $APP_BUILT_AT" "$CONTENTS_DIR/Info.plist"
-  /usr/libexec/PlistBuddy -c "Add :PlotterRequiredBridgeAPIVersion integer 3" "$CONTENTS_DIR/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :PlotterRequiredBridgeAPIVersion integer 4" "$CONTENTS_DIR/Info.plist"
 fi
 
 if [[ "$SWIFT_BUILD_SYSTEM" == "swiftpm" ]]; then

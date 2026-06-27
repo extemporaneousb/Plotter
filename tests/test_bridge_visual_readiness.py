@@ -214,6 +214,65 @@ def test_setup_reset_clears_latest_field_cap_and_motion_authority(tmp_path: Path
         assert workflow["readiness"]["motion_model_valid"] is False
 
 
+def test_drawing_frame_observation_persists_drawing_calibration(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+
+        status_code, missing = client.get("/calibration/drawing/status")
+        assert status_code == 200
+        assert missing["status"] == "missing"
+
+        status_code, response = client.post(
+            "/calibration/drawing/frame-observation",
+            _drawing_frame_observation_payload(registration_id=registration_id),
+        )
+        assert status_code == 200
+        assert response["status"] == "ready"
+        assert response["observation_id"].startswith("drawing-frame-")
+        calibration = response["calibration"]
+        assert calibration["artifact_type"] == "drawing_calibration_model"
+        assert calibration["paper_registration_id"] == registration_id
+        assert calibration["solver_kind"] == "corner_homography"
+        assert calibration["usable_observation_count"] == 1
+        assert calibration["expected_to_observed"] is not None
+        assert calibration["blockers"] == []
+        assert (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+
+        status_code, status = client.get("/calibration/drawing/status")
+        assert status_code == 200
+        assert status["status"] == "ready"
+        assert status["calibration"]["latest_observation_id"] == response["observation_id"]
+
+
+def test_setup_reset_clears_latest_drawing_calibration_pointer(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+        status_code, response = client.post(
+            "/calibration/drawing/frame-observation",
+            _drawing_frame_observation_payload(registration_id=registration_id),
+        )
+        assert status_code == 200
+        historical_model = (
+            tmp_path
+            / "calibration"
+            / "drawing_calibrations"
+            / f"{response['calibration']['model_id']}.json"
+        )
+        assert historical_model.exists()
+
+        status_code, reset = client.post("/calibration/setup/reset", {})
+        assert status_code == 200
+        assert reset["status"] == "reset"
+        assert not (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+        assert historical_model.exists()
+
+
 def test_motion_model_valid_does_not_unlock_real_drawing(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(
@@ -368,6 +427,64 @@ def _cap_observation_payload(*, field_x: float, field_y: float) -> dict[str, Any
         "observed_logical_mm": {"x": field_x, "y": field_y},
         "source": "operator_confirmed",
         "confidence": 0.95,
+    }
+
+
+def _drawing_frame_observation_payload(*, registration_id: str) -> dict[str, Any]:
+    expected = [
+        {"x": 8.0, "y": 8.0},
+        {"x": 192.0, "y": 8.0},
+        {"x": 192.0, "y": 142.0},
+        {"x": 8.0, "y": 142.0},
+    ]
+    observed = [
+        {"x": 10.0, "y": 9.0},
+        {"x": 194.0, "y": 9.0},
+        {"x": 193.0, "y": 143.0},
+        {"x": 9.0, "y": 143.0},
+    ]
+    closed_expected = [*expected, expected[0]]
+    closed_observed = [*observed, observed[0]]
+    return {
+        "command_id": "field-frame-test",
+        "paper_registration_id": registration_id,
+        "camera_id": "plotter-camera",
+        "camera_name": "Plotter Camera",
+        "expected_corners_mm": expected,
+        "edges": [
+            {
+                "edge_index": index + 1,
+                "expected_start_mm": closed_expected[index],
+                "expected_end_mm": closed_expected[index + 1],
+                "observed_start_mm": closed_observed[index],
+                "observed_end_mm": closed_observed[index + 1],
+                "sample_count": 80,
+                "detected_sample_count": 70,
+                "green_pixel_count": 400,
+                "coverage_fraction": 0.88,
+                "rms_expected_residual_mm": 1.2,
+                "max_expected_residual_mm": 2.4,
+                "fit_rms_residual_mm": 0.5,
+                "angle_error_deg": 0.8,
+            }
+            for index in range(4)
+        ],
+        "corners": [
+            {
+                "corner_index": index + 1,
+                "expected_mm": expected[index],
+                "observed_mm": observed[index],
+                "residual_mm": 2.2,
+            }
+            for index in range(4)
+        ],
+        "total_green_pixels": 1600,
+        "detected_edge_count": 4,
+        "rms_residual_mm": 1.4,
+        "max_residual_mm": 2.8,
+        "corner_rms_residual_mm": 2.2,
+        "corner_max_residual_mm": 2.4,
+        "usable": True,
     }
 
 

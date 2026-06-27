@@ -179,7 +179,7 @@ def test_draw_verify_portrait_preview_uses_burst_capture_and_bridge_preview_rout
     assert "updatesStatus: false" in content
     assert "PortraitCaptureThumbnail" in portrait_panel
     assert "captureFaceRasterBurst(columns: 28, rows: 36)" in content
-    assert "bridge.expectedPathSegments = []" in content
+    assert "bridge.clearExpectedPathOverlay()" in content
     assert "technique: technique" in content
     assert "portraitContourMonitorEnabled = false" in content
     assert "func captureFaceRasterBurst" in camera_model
@@ -288,11 +288,12 @@ def test_swift_auto_red_fiducial_path_is_removed() -> None:
         assert term not in swift_text
 
 
-def test_bridge_contract_requires_api_3_and_gates_build_mismatch() -> None:
+def test_bridge_contract_requires_api_4_and_gates_build_mismatch() -> None:
     build_script = _read(ROOT / "macos" / "PlotterVision" / "build.sh")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
-    assert "PlotterRequiredBridgeAPIVersion integer 3" in build_script
+    assert "PlotterRequiredBridgeAPIVersion integer 4" in build_script
+    assert "return 4" in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "var hasBridgeContractMismatch" in model
     assert "hasLifecycleBuildMismatch { return \"Motion blocked" in model
     assert "guard let rawVersion = cleanBridgeMetadata(bridgeApiVersion)" in model
@@ -360,6 +361,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
+    assert 'title: "Calibrate Drawing"' in wizard
     assert "let fieldAspectYPerX: Double?" not in wizard
     assert "@Binding var fieldWidthMm" in wizard
     assert "@Binding var fieldHeightMm" in wizard
@@ -392,10 +394,16 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "currentGreenCapCameraObservation" in content
     assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
     assert "Validate Motion" in content
-    assert "Draw Frame" in wizard
+    assert "Calibrate Drawing" in wizard
+    assert "wizardDrawingCalibrationStatus" in content
+    assert "wizardDrawingCalibrationDetail" in content
     assert "wizardDrawFrameVisible" in content
     assert "wizardDrawFrameEnabled" in content
     assert "drawValidatedFieldFrame" in content
+    assert "recordDrawingFrameInspection" in frame_drawing + _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    assert "expectedPathLabel" in _read(SWIFT_DIR / "MeasurementOverlay.swift")
+    assert '"Expected frame"' in _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    assert "Observed frame" in _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert "setupRelativeMove(" in frame_drawing
     assert "motion already validated" not in content
     assert "runFrameLearning()" in content
@@ -443,7 +451,7 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     assert "await bridge.refreshVisualBindingStatus()" not in content
     assert "visual_binding_status_refreshed" in model
     visual_binding_refresh = model.split("func refreshVisualBindingStatus", 1)[1].split(
-        "func observeVisualBindingPoint",
+        "func refreshDrawingCalibrationStatus",
         1,
     )[0]
     assert "snapshot: true" not in visual_binding_refresh
@@ -841,9 +849,10 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "correct perspective" not in readme + contract + plan
 
 
-def test_operator_log_replaces_bottom_status_bar() -> None:
+def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
+    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     support = _read(SWIFT_DIR / "OperatorWindowSupport.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     log_panel = _read(SWIFT_DIR / "OperatorLogPanel.swift")
@@ -853,6 +862,11 @@ def test_operator_log_replaces_bottom_status_bar() -> None:
     assert "OperatorLogPanel" in app_main
     assert 'static let operatorLog = "operator-log"' in support
     assert "appendOperatorLog" in workspace
+    assert "@Published var setupLogExpanded" in workspace
+    assert "SetupLogDisclosure(workspace: workspace)" in setup_panel
+    assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' in setup_panel
+    assert 'label: "Log"' not in content
+    assert "OperatorWindowID.operatorLog" not in content
     assert "workspace.appendOperatorLog(newValue" in content
     assert "workspace.appendOperatorLog(status, source: \"Bridge\"" in content
     assert "Operator Log" in log_panel

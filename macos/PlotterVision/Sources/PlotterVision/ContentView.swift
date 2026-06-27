@@ -172,6 +172,7 @@ struct ContentView: View {
             await bridge.refreshMachineStatus()
             await bridge.refreshPaperStatus()
             applyPersistedVisualReadiness(await bridge.refreshVisualReadinessStatus())
+            _ = await bridge.refreshDrawingCalibrationStatus()
             var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -307,6 +308,8 @@ struct ContentView: View {
                         visualMoveIntent: visualMoveIntent,
                         motionTracks: plotterCamera.motionTracks,
                         expectedPathSegments: bridge.expectedPathSegments,
+                        expectedPathLabel: bridge.expectedPathLabel,
+                        observedFrameOverlay: bridge.observedDrawingFrameOverlay,
                         bindingMarkPreviewSegments: bridge.bindingMarkPreviewSegments,
                         bindingMarkPreviewPoints: bridge.bindingMarkPreviewPoints,
                         paperTransform: visualFieldOverlayTransform,
@@ -314,7 +317,8 @@ struct ContentView: View {
                         pathRevealProgress: bridge.pathRevealProgress,
                         videoSize: plotterCamera.videoSize,
                         previewMode: plotterViewport.previewMode,
-                        showMeasurements: plotterCamera.showMeasurements
+                        showMeasurements: plotterCamera.showMeasurements,
+                        showDrawingBorder: bridge.showDrawingBorderOverlay
                     )
 
                 }
@@ -514,6 +518,8 @@ struct ContentView: View {
             visualCalibrationStatus: wizardMotionProbeStatus,
             bindingDetail: wizardMotionValidationDetail,
             bindingStatus: wizardMotionValidationStatus,
+            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
+            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
@@ -550,7 +556,7 @@ struct ContentView: View {
                 }
             }
 
-            bridge.expectedPathSegments = []
+            bridge.clearExpectedPathOverlay()
             let updated = bridge.updateLivePortraitContourPreview(from: raster, commandId: "portrait-capture-\(UUID().uuidString.lowercased())", settings: settings)
             calibrationStatusText = updated
                 ? "PORTRAIT \(bridge.imagePreviewStatus) \(bridge.imagePreviewDetail)"
@@ -3106,19 +3112,6 @@ struct ContentView: View {
                         beforeOpen: startCalibrationWizard
                     )
                 }
-
-                controlButton(
-                    systemName: "list.bullet.rectangle",
-                    label: "Log",
-                    help: "Open or close the operator log",
-                    isActive: OperatorWindowSupport.isWindowOpen(title: "Log", identifier: OperatorWindowID.operatorLog)
-                ) {
-                    toggleOperatorWindow(
-                        id: OperatorWindowID.operatorLog,
-                        title: "Log",
-                        source: "top_bar"
-                    )
-                }
             }
         }
         .padding(.horizontal, 12)
@@ -3200,6 +3193,8 @@ struct ContentView: View {
             visualCalibrationStatus: wizardMotionProbeStatus,
             bindingDetail: wizardMotionValidationDetail,
             bindingStatus: wizardMotionValidationStatus,
+            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
+            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
             primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
@@ -3248,6 +3243,19 @@ struct ContentView: View {
         }
         if frameLearning.status == "WEAK" || frameLearning.status == "BLOCK" || frameLearning.status == "STOP" {
             return .blocked
+        }
+        return .pending
+    }
+
+    private var wizardDrawingCalibrationStatus: CalibrationWizardStepStatus {
+        if bridge.latestDrawingCalibration?.validationStatus == "ready" {
+            return .done
+        }
+        if bridge.drawingCalibrationStatus.contains("RUN") || bridge.drawingCalibrationStatus.contains("SAVE") {
+            return .active
+        }
+        if visualMotionValidated {
+            return wizardDrawFrameEnabled ? .active : .blocked
         }
         return .pending
     }
@@ -3327,6 +3335,24 @@ struct ContentView: View {
         return "Run machine-video agreement first"
     }
 
+    private var wizardDrawingCalibrationDetail: String {
+        if let calibration = bridge.latestDrawingCalibration {
+            let residual = calibration.rmsResidualMm.map { String(format: "rms %.1fmm", $0) } ?? "rms --"
+            let maxResidual = calibration.maxResidualMm.map { String(format: "max %.1fmm", $0) } ?? "max --"
+            if calibration.validationStatus == "ready" {
+                return "Saved \(calibration.solverKind) \(residual) \(maxResidual)"
+            }
+            if let blocker = calibration.blockers.first {
+                return "\(calibration.statusLabel) \(residual) \(maxResidual); \(blocker)"
+            }
+            return "\(calibration.statusLabel) \(residual) \(maxResidual)"
+        }
+        if visualMotionValidated {
+            return wizardDrawFrameDisabledReason ?? "Draw expected frame, evaluate observed frame, save residual model"
+        }
+        return "Validate motion before drawing calibration"
+    }
+
     private var wizardInstructionText: String {
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil
@@ -3340,7 +3366,7 @@ struct ContentView: View {
             return "Drag the Drawing Border or its top-right resize handle if needed, then run non-homed relative motion calibration in that border."
         }
         if visualMotionValidated {
-            return "Motion calibration is validated for green-cap movement inside the field."
+            return "Motion is validated. Calibrate drawing to compare expected and observed ink geometry."
         }
         if !visualMotionValidated {
             return "Motion calibration is measured. Validate the relative motion model before leaving setup."
@@ -3410,7 +3436,7 @@ struct ContentView: View {
         }
 
         if visualMotionValidated {
-            calibrationStatusText = "FIELD motion validated; draw frame is available"
+            calibrationStatusText = "FIELD motion validated; drawing calibration is available"
             return
         }
 
@@ -3446,19 +3472,19 @@ struct ContentView: View {
 
     private func drawValidatedFieldFrame() {
         guard wizardDrawFrameVisible else {
-            calibrationStatusText = "FIELD frame draw blocked: validate motion first"
+            calibrationStatusText = "DRAW calibration blocked: validate motion first"
             return
         }
         guard wizardDrawFrameEnabled else {
-            calibrationStatusText = "FIELD frame draw blocked: \(wizardDrawFrameDisabledReason ?? "setup not ready")"
+            calibrationStatusText = "DRAW calibration blocked: \(wizardDrawFrameDisabledReason ?? "setup not ready")"
             return
         }
         guard let model = visualMotionModel, model.isUsable else {
-            calibrationStatusText = "FIELD frame draw blocked: motion model not usable"
+            calibrationStatusText = "DRAW calibration blocked: motion model not usable"
             return
         }
         guard let corners = validatedFieldFrameCorners else {
-            calibrationStatusText = "BORDER draw blocked: Drawing Border is too small"
+            calibrationStatusText = "DRAW calibration blocked: Drawing Border is too small"
             return
         }
         Task {

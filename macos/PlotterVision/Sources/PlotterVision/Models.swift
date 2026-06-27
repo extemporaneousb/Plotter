@@ -652,6 +652,26 @@ struct GreenCapPaperObservation: Equatable {
     let strength: Double
 }
 
+struct DrawingFrameObservedEdgeOverlay: Equatable {
+    let edgeIndex: Int
+    let observedStartMm: PaperPointMmSnapshot
+    let observedEndMm: PaperPointMmSnapshot
+}
+
+struct DrawingFrameOverlay: Equatable {
+    let expectedCornersMm: [PaperPointMmSnapshot]
+    let observedCornersMm: [PaperPointMmSnapshot]
+    let observedEdges: [DrawingFrameObservedEdgeOverlay]
+    let detectedEdgeCount: Int
+    let rmsResidualMm: Double?
+    let maxResidualMm: Double?
+    let status: String
+
+    var isVisible: Bool {
+        !observedCornersMm.isEmpty || !observedEdges.isEmpty
+    }
+}
+
 struct GreenCapCameraObservation: Equatable {
     let frameNumber: Int
     let cameraPoint: CGPoint

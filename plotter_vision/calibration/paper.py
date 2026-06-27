@@ -134,8 +134,8 @@ def build_paper_frame_registration(
         for observation in corner_observations
     ]
 
-    paper_to_camera = _solve_homography(paper_points, camera_points)
-    camera_to_paper = _solve_homography(camera_points, paper_points)
+    paper_to_camera = solve_homography(paper_points, camera_points)
+    camera_to_paper = solve_homography(camera_points, paper_points)
 
     residuals: list[float] = []
     for observation in corner_observations:
@@ -250,7 +250,7 @@ def _common_optional_value(values: list[str | None]) -> str | None:
     return None
 
 
-def _solve_homography(
+def solve_homography(
     source_points: list[tuple[float, float]],
     target_points: list[tuple[float, float]],
 ) -> Homography2D:
