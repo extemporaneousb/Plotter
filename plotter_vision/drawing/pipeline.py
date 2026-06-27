@@ -33,6 +33,9 @@ class Simulator(BaseModel):
 
 class PreviewOverlayPrimitive(BaseModel):
     primitive_id: str
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
     command_id: str
     segment_index: int
     start_paper_mm: PaperPointMM
@@ -80,9 +83,10 @@ class VisionObserver(BaseModel):
 class ResidualSolver(BaseModel):
     stage: Literal["residual_solver"] = "residual_solver"
     status: PipelineStageStatus = "pending"
-    model_type: Literal["affine_2d"] = "affine_2d"
+    model_type: Literal["residual_grid_v1"] = "residual_grid_v1"
     observation_count: int = 0
     rms_residual_mm: float | None = None
+    p95_residual_mm: float | None = None
     max_residual_mm: float | None = None
     blockers: list[str] = Field(default_factory=list)
 

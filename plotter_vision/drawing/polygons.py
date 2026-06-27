@@ -61,6 +61,8 @@ class DrawingFrameMM(BaseModel):
 
 
 class PolygonPrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str = "polygon"
     vertices: list[PaperPointNorm]
     shade: float = 0.0
     outline: bool = True
@@ -90,6 +92,8 @@ class PolygonPrimitive(BaseModel):
 
 
 class PointMarkPrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str = "point_mark"
     center: PaperPointNorm
     mark_size_mm: float = 4.0
 
@@ -104,6 +108,8 @@ class PointMarkPrimitive(BaseModel):
 
 
 class PolylinePrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str | None = None
     points: list[PaperPointNorm]
     role: Literal["outline", "hatch", "mark", "contour"] = "contour"
     closed: bool = False
@@ -116,6 +122,8 @@ class PolylinePrimitive(BaseModel):
 
 
 class ContourGroupPrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str = "contour_group"
     contours: list[list[PaperPointNorm]]
 
     @model_validator(mode="after")
@@ -129,6 +137,8 @@ class ContourGroupPrimitive(BaseModel):
 
 
 class SimpleShapePrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str | None = None
     kind: SimpleShapeKind
     center: PaperPointNorm
     size_norm: float = 0.2
@@ -143,12 +153,76 @@ class SimpleShapePrimitive(BaseModel):
         return value
 
 
+class CirclePrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str = "circle"
+    center: PaperPointNorm
+    radius_mm: float
+    segment_count: int = 48
+
+    @field_validator("radius_mm")
+    @classmethod
+    def _validate_radius(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("circle radius_mm must be positive and finite.")
+        return value
+
+    @field_validator("segment_count")
+    @classmethod
+    def _validate_segment_count(cls, value: int) -> int:
+        if value < 8 or value > 240:
+            raise ValueError("circle segment_count must be between 8 and 240.")
+        return value
+
+
+class ArcPrimitive(BaseModel):
+    primitive_id: str | None = None
+    semantic_role: str = "arc"
+    center: PaperPointNorm
+    radius_mm: float
+    start_angle_deg: float
+    end_angle_deg: float
+    segment_count: int = 24
+
+    @field_validator("radius_mm")
+    @classmethod
+    def _validate_radius(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("arc radius_mm must be positive and finite.")
+        return value
+
+    @field_validator("start_angle_deg", "end_angle_deg")
+    @classmethod
+    def _validate_angle(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("arc angles must be finite.")
+        return value
+
+    @field_validator("segment_count")
+    @classmethod
+    def _validate_segment_count(cls, value: int) -> int:
+        if value < 1 or value > 240:
+            raise ValueError("arc segment_count must be between 1 and 240.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_sweep(self) -> ArcPrimitive:
+        sweep = self.end_angle_deg - self.start_angle_deg
+        if abs(sweep) <= 1e-9:
+            raise ValueError("arc sweep must be non-zero.")
+        if abs(sweep) > 360.0:
+            raise ValueError("arc sweep is limited to 360 degrees.")
+        return self
+
+
 class DrawingProgram(BaseModel):
     polygons: list[PolygonPrimitive] = Field(default_factory=list)
     point_marks: list[PointMarkPrimitive] = Field(default_factory=list)
     polylines: list[PolylinePrimitive] = Field(default_factory=list)
     contour_groups: list[ContourGroupPrimitive] = Field(default_factory=list)
     simple_shapes: list[SimpleShapePrimitive] = Field(default_factory=list)
+    circles: list[CirclePrimitive] = Field(default_factory=list)
+    arcs: list[ArcPrimitive] = Field(default_factory=list)
     min_hatch_spacing_mm: float = 1.2
     max_hatch_spacing_mm: float = 9.0
     max_hatch_segments: int = 1200
@@ -169,6 +243,8 @@ class DrawingProgram(BaseModel):
             + len(self.point_marks)
             + len(self.polylines)
             + len(self.simple_shapes)
+            + len(self.circles)
+            + len(self.arcs)
             + sum(len(group.contours) for group in self.contour_groups)
         )
         if primitive_count > self.max_primitive_count:
@@ -182,6 +258,9 @@ class DrawingProgram(BaseModel):
 class PlannedPolyline(BaseModel):
     role: PolylineRole
     points: list[LogicalPointMM]
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
 
     @model_validator(mode="after")
     def _validate_points(self) -> PlannedPolyline:
@@ -198,31 +277,66 @@ def build_polygon_polylines(
     polylines: list[PlannedPolyline] = []
     hatch_count = 0
 
-    for mark in program.point_marks:
-        polylines.extend(_point_mark_polylines(mark=mark, frame=frame))
+    for index, mark in enumerate(program.point_marks, start=1):
+        primitive_id = _primitive_id("point_mark", index, mark.primitive_id)
+        polylines.extend(
+            _point_mark_polylines(
+                mark=mark,
+                frame=frame,
+                primitive_id=primitive_id,
+                semantic_role=mark.semantic_role,
+            )
+        )
 
-    for polyline in program.polylines:
-        polylines.append(_map_polyline_primitive(polyline=polyline, frame=frame))
+    for index, polyline in enumerate(program.polylines, start=1):
+        primitive_id = _primitive_id("polyline", index, polyline.primitive_id)
+        polylines.append(
+            _map_polyline_primitive(
+                polyline=polyline,
+                frame=frame,
+                primitive_id=primitive_id,
+            )
+        )
 
-    for group in program.contour_groups:
-        for contour in group.contours:
+    for index, group in enumerate(program.contour_groups, start=1):
+        primitive_id = _primitive_id("contour_group", index, group.primitive_id)
+        for contour_index, contour in enumerate(group.contours, start=1):
             polylines.append(
                 _planned_polyline_from_paper_points(
                     points=contour,
                     role="contour",
                     closed=False,
                     frame=frame,
+                    primitive_id=primitive_id,
+                    stroke_id=f"{primitive_id}:contour:{contour_index:03d}",
+                    semantic_role=group.semantic_role,
                 )
             )
 
-    for shape in program.simple_shapes:
-        polylines.append(_simple_shape_polyline(shape=shape, frame=frame))
+    for index, shape in enumerate(program.simple_shapes, start=1):
+        primitive_id = _primitive_id(shape.kind, index, shape.primitive_id)
+        polylines.append(_simple_shape_polyline(shape=shape, frame=frame, primitive_id=primitive_id))
 
-    for polygon in program.polygons:
+    for index, circle in enumerate(program.circles, start=1):
+        primitive_id = _primitive_id("circle", index, circle.primitive_id)
+        polylines.append(_circle_polyline(circle=circle, frame=frame, primitive_id=primitive_id))
+
+    for index, arc in enumerate(program.arcs, start=1):
+        primitive_id = _primitive_id("arc", index, arc.primitive_id)
+        polylines.append(_arc_polyline(arc=arc, frame=frame, primitive_id=primitive_id))
+
+    for index, polygon in enumerate(program.polygons, start=1):
+        primitive_id = _primitive_id("polygon", index, polygon.primitive_id)
         logical_vertices = [frame.map_point(vertex) for vertex in polygon.vertices]
         if polygon.outline:
             polylines.append(
-                PlannedPolyline(role="outline", points=[*logical_vertices, logical_vertices[0]])
+                PlannedPolyline(
+                    role="outline",
+                    points=[*logical_vertices, logical_vertices[0]],
+                    primitive_id=primitive_id,
+                    stroke_id=f"{primitive_id}:outline",
+                    semantic_role=polygon.semantic_role,
+                )
             )
 
         if polygon.shade <= 0:
@@ -243,7 +357,15 @@ def build_polygon_polylines(
                 raise ValueError(
                     f"polygon hatch expansion exceeded {program.max_hatch_segments} segments."
                 )
-            polylines.append(PlannedPolyline(role="hatch", points=list(segment)))
+            polylines.append(
+                PlannedPolyline(
+                    role="hatch",
+                    points=list(segment),
+                    primitive_id=primitive_id,
+                    stroke_id=f"{primitive_id}:hatch:{hatch_count:03d}",
+                    semantic_role=polygon.semantic_role,
+                )
+            )
 
     return polylines
 
@@ -252,6 +374,8 @@ def _point_mark_polylines(
     *,
     mark: PointMarkPrimitive,
     frame: DrawingFrameMM,
+    primitive_id: str,
+    semantic_role: str,
 ) -> list[PlannedPolyline]:
     center = frame.map_point(mark.center)
     half = mark.mark_size_mm / 2.0
@@ -262,6 +386,9 @@ def _point_mark_polylines(
                 LogicalPointMM(x=center.x - half, y=center.y),
                 LogicalPointMM(x=center.x + half, y=center.y),
             ],
+            primitive_id=primitive_id,
+            stroke_id=f"{primitive_id}:x",
+            semantic_role=semantic_role,
         ),
         PlannedPolyline(
             role="mark",
@@ -269,6 +396,9 @@ def _point_mark_polylines(
                 LogicalPointMM(x=center.x, y=center.y - half),
                 LogicalPointMM(x=center.x, y=center.y + half),
             ],
+            primitive_id=primitive_id,
+            stroke_id=f"{primitive_id}:y",
+            semantic_role=semantic_role,
         ),
     ]
 
@@ -277,12 +407,16 @@ def _map_polyline_primitive(
     *,
     polyline: PolylinePrimitive,
     frame: DrawingFrameMM,
+    primitive_id: str,
 ) -> PlannedPolyline:
     return _planned_polyline_from_paper_points(
         points=polyline.points,
         role=polyline.role,
         closed=polyline.closed,
         frame=frame,
+        primitive_id=primitive_id,
+        stroke_id=f"{primitive_id}:stroke",
+        semantic_role=polyline.semantic_role or polyline.role,
     )
 
 
@@ -292,17 +426,27 @@ def _planned_polyline_from_paper_points(
     role: PolylineRole,
     closed: bool,
     frame: DrawingFrameMM,
+    primitive_id: str,
+    stroke_id: str,
+    semantic_role: str,
 ) -> PlannedPolyline:
     logical_points = [frame.map_point(point) for point in points]
     if closed and logical_points[0] != logical_points[-1]:
         logical_points.append(logical_points[0])
-    return PlannedPolyline(role=role, points=logical_points)
+    return PlannedPolyline(
+        role=role,
+        points=logical_points,
+        primitive_id=primitive_id,
+        stroke_id=stroke_id,
+        semantic_role=semantic_role,
+    )
 
 
 def _simple_shape_polyline(
     *,
     shape: SimpleShapePrimitive,
     frame: DrawingFrameMM,
+    primitive_id: str,
 ) -> PlannedPolyline:
     vertices = _simple_shape_vertices(shape)
     return _planned_polyline_from_paper_points(
@@ -310,6 +454,9 @@ def _simple_shape_polyline(
         role="outline",
         closed=True,
         frame=frame,
+        primitive_id=primitive_id,
+        stroke_id=f"{primitive_id}:outline",
+        semantic_role=shape.semantic_role or shape.kind,
     )
 
 
@@ -330,6 +477,216 @@ def _simple_shape_vertices(shape: SimpleShapePrimitive) -> list[PaperPointNorm]:
             (shape.center.x, shape.center.y + 2.0 * height / 3.0),
         ]
     return [PaperPointNorm(x=x, y=y) for x, y in raw_vertices]
+
+
+def _circle_polyline(
+    *,
+    circle: CirclePrimitive,
+    frame: DrawingFrameMM,
+    primitive_id: str,
+) -> PlannedPolyline:
+    center = frame.map_point(circle.center)
+    points = [
+        _point_on_circle(
+            center=center,
+            radius_mm=circle.radius_mm,
+            angle_rad=(2.0 * math.pi * index) / circle.segment_count,
+        )
+        for index in range(circle.segment_count)
+    ]
+    points.append(points[0])
+    return PlannedPolyline(
+        role="outline",
+        points=points,
+        primitive_id=primitive_id,
+        stroke_id=f"{primitive_id}:circle",
+        semantic_role=circle.semantic_role,
+    )
+
+
+def _arc_polyline(
+    *,
+    arc: ArcPrimitive,
+    frame: DrawingFrameMM,
+    primitive_id: str,
+) -> PlannedPolyline:
+    center = frame.map_point(arc.center)
+    start_rad = math.radians(arc.start_angle_deg)
+    sweep_rad = math.radians(arc.end_angle_deg - arc.start_angle_deg)
+    points = [
+        _point_on_circle(
+            center=center,
+            radius_mm=arc.radius_mm,
+            angle_rad=start_rad + sweep_rad * (index / arc.segment_count),
+        )
+        for index in range(arc.segment_count + 1)
+    ]
+    return PlannedPolyline(
+        role="outline",
+        points=points,
+        primitive_id=primitive_id,
+        stroke_id=f"{primitive_id}:arc",
+        semantic_role=arc.semantic_role,
+    )
+
+
+def _point_on_circle(
+    *,
+    center: LogicalPointMM,
+    radius_mm: float,
+    angle_rad: float,
+) -> LogicalPointMM:
+    return LogicalPointMM(
+        x=center.x + math.cos(angle_rad) * radius_mm,
+        y=center.y + math.sin(angle_rad) * radius_mm,
+    )
+
+
+def _primitive_id(prefix: str, index: int, explicit_id: str | None) -> str:
+    return explicit_id if explicit_id else f"{prefix}:{index:03d}"
+
+
+def build_rich_drawing_calibration_program() -> DrawingProgram:
+    """Build a deterministic multi-primitive sheet for drawing residual calibration."""
+    return DrawingProgram(
+        point_marks=[
+            PointMarkPrimitive(
+                primitive_id="cal.mark.center",
+                semantic_role="center_cross_mark",
+                center=PaperPointNorm(x=0.50, y=0.50),
+                mark_size_mm=8.0,
+            ),
+            PointMarkPrimitive(
+                primitive_id="cal.mark.lower_left",
+                semantic_role="corner_cross_mark",
+                center=PaperPointNorm(x=0.12, y=0.12),
+                mark_size_mm=5.0,
+            ),
+            PointMarkPrimitive(
+                primitive_id="cal.mark.upper_right",
+                semantic_role="corner_cross_mark",
+                center=PaperPointNorm(x=0.88, y=0.88),
+                mark_size_mm=5.0,
+            ),
+        ],
+        polylines=[
+            PolylinePrimitive(
+                primitive_id="cal.grid.horizontal_mid",
+                semantic_role="grid_cross_axis",
+                role="mark",
+                points=[PaperPointNorm(x=0.18, y=0.50), PaperPointNorm(x=0.82, y=0.50)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.grid.vertical_mid",
+                semantic_role="grid_cross_axis",
+                role="mark",
+                points=[PaperPointNorm(x=0.50, y=0.18), PaperPointNorm(x=0.50, y=0.82)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.line.horizontal_short",
+                semantic_role="angle_length_line_0deg_short",
+                role="outline",
+                points=[PaperPointNorm(x=0.18, y=0.28), PaperPointNorm(x=0.38, y=0.28)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.line.vertical_medium",
+                semantic_role="angle_length_line_90deg_medium",
+                role="outline",
+                points=[PaperPointNorm(x=0.18, y=0.34), PaperPointNorm(x=0.18, y=0.66)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.line.diagonal_pos",
+                semantic_role="angle_length_line_45deg",
+                role="outline",
+                points=[PaperPointNorm(x=0.25, y=0.22), PaperPointNorm(x=0.45, y=0.42)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.line.diagonal_neg",
+                semantic_role="angle_length_line_minus45deg",
+                role="outline",
+                points=[PaperPointNorm(x=0.25, y=0.78), PaperPointNorm(x=0.45, y=0.58)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.line.shallow",
+                semantic_role="angle_length_line_shallow",
+                role="outline",
+                points=[PaperPointNorm(x=0.56, y=0.20), PaperPointNorm(x=0.84, y=0.28)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.rectangle.outer",
+                semantic_role="nested_rectangle_outer",
+                role="outline",
+                closed=True,
+                points=[
+                    PaperPointNorm(x=0.10, y=0.10),
+                    PaperPointNorm(x=0.90, y=0.10),
+                    PaperPointNorm(x=0.90, y=0.90),
+                    PaperPointNorm(x=0.10, y=0.90),
+                ],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.rectangle.inner",
+                semantic_role="nested_rectangle_inner",
+                role="outline",
+                closed=True,
+                points=[
+                    PaperPointNorm(x=0.28, y=0.30),
+                    PaperPointNorm(x=0.72, y=0.30),
+                    PaperPointNorm(x=0.72, y=0.70),
+                    PaperPointNorm(x=0.28, y=0.70),
+                ],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.repeat.forward",
+                semantic_role="opposite_direction_repeat_forward",
+                role="mark",
+                points=[PaperPointNorm(x=0.62, y=0.54), PaperPointNorm(x=0.84, y=0.54)],
+            ),
+            PolylinePrimitive(
+                primitive_id="cal.repeat.reverse",
+                semantic_role="opposite_direction_repeat_reverse",
+                role="mark",
+                points=[PaperPointNorm(x=0.84, y=0.60), PaperPointNorm(x=0.62, y=0.60)],
+            ),
+        ],
+        circles=[
+            CirclePrimitive(
+                primitive_id="cal.circle.left",
+                semantic_role="closed_circle",
+                center=PaperPointNorm(x=0.34, y=0.72),
+                radius_mm=14.0,
+                segment_count=32,
+            ),
+            CirclePrimitive(
+                primitive_id="cal.circle.right",
+                semantic_role="closed_circle",
+                center=PaperPointNorm(x=0.72, y=0.36),
+                radius_mm=18.0,
+                segment_count=40,
+            ),
+        ],
+        arcs=[
+            ArcPrimitive(
+                primitive_id="cal.arc.clockwise",
+                semantic_role="arc_clockwise",
+                center=PaperPointNorm(x=0.70, y=0.72),
+                radius_mm=20.0,
+                start_angle_deg=300.0,
+                end_angle_deg=60.0,
+                segment_count=18,
+            ),
+            ArcPrimitive(
+                primitive_id="cal.arc.counterclockwise",
+                semantic_role="arc_counterclockwise",
+                center=PaperPointNorm(x=0.36, y=0.38),
+                radius_mm=16.0,
+                start_angle_deg=20.0,
+                end_angle_deg=260.0,
+                segment_count=24,
+            ),
+        ],
+        max_primitive_count=64,
+    )
 
 
 def validate_polylines_in_workspace(

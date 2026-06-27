@@ -42,6 +42,8 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var expectedPathSegments: [ExpectedPathSegment] = []
     @Published var expectedPathRole = ""
     @Published var expectedPathLabel = "EXPECTED"
+    @Published var predictedPathSegments: [ExpectedPathSegment] = []
+    @Published var predictedPathLabel = "Model-corrected frame"
     @Published var observedDrawingFrameOverlay: DrawingFrameOverlay?
     @Published var drawingCalibrationStatus = "DRAW CAL --"
     @Published var drawingCalibrationDetail = "No drawing calibration"
@@ -111,6 +113,9 @@ final class PlotterBridgeModel: ObservableObject {
             return false
         }
         if expectedPathRole == "setup_field_frame", !expectedPathSegments.isEmpty {
+            return false
+        }
+        if !predictedPathSegments.isEmpty {
             return false
         }
         return true
@@ -702,6 +707,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "image_bridge_preview_eligible": imagePreviewEligibleForBridgePreview,
                 "expected_path_segments": expectedPathSegments.count,
                 "expected_path_role": expectedPathRole,
+                "predicted_path_segments": predictedPathSegments.count,
                 "observed_frame_visible": observedDrawingFrameOverlay?.isVisible ?? false,
                 "observed_frame_edges": observedDrawingFrameOverlay?.detectedEdgeCount ?? 0,
                 "drawing_calibration": drawingCalibrationStatus,
@@ -1981,6 +1987,7 @@ final class PlotterBridgeModel: ObservableObject {
         expectedPathRole = "setup_field_frame"
         expectedPathLabel = "Expected frame"
         observedDrawingFrameOverlay = nil
+        updatePredictedDrawingProgramOverlay()
         pathRevealProgress = 1.0
         pathAnimationStatus = "FRAME"
         previewStatus = "SIM FRAME"
@@ -1997,6 +2004,7 @@ final class PlotterBridgeModel: ObservableObject {
 
     func clearExpectedPathOverlay() {
         expectedPathSegments = []
+        predictedPathSegments = []
         resetExpectedPathRole()
         pathRevealProgress = 1.0
         pathAnimationStatus = "IDLE"
@@ -2005,6 +2013,7 @@ final class PlotterBridgeModel: ObservableObject {
     private func resetExpectedPathRole() {
         expectedPathRole = ""
         expectedPathLabel = "EXPECTED"
+        predictedPathLabel = "Model-corrected frame"
         observedDrawingFrameOverlay = nil
     }
 
@@ -2876,6 +2885,7 @@ final class PlotterBridgeModel: ObservableObject {
             drawingCalibrationStatus = "DRAW CAL ERR"
             drawingCalibrationDetail = error.localizedDescription
             latestDrawingCalibration = nil
+            updatePredictedDrawingProgramOverlay()
             diagnosticsEvent("drawing_model_refresh_failed", errorPayload(error), snapshot: false)
             return nil
         }
@@ -2911,6 +2921,110 @@ final class PlotterBridgeModel: ObservableObject {
             drawingCalibrationDetail = "Observed frame overlay only; bridge offline"
             return nil
         }
+        do {
+            let response = try await client.observeDrawingProgram(
+                BridgeDrawingProgramObservationRequest(
+                    commandId: commandId,
+                    paperRegistrationId: registration.registrationId,
+                    cameraId: "plotter-camera",
+                    cameraName: "Plotter Camera",
+                    programId: result.program.programId,
+                    programKind: result.program.programKind,
+                    expectedFrameCornersMm: expectedCorners,
+                    primitives: result.program.primitives.map { primitive in
+                        BridgeDrawingProgramPrimitiveObservationRequest(
+                            primitiveId: primitive.primitiveId,
+                            primitiveKind: primitive.kind.rawValue,
+                            sampleCount: primitive.sampleCount,
+                            detectedSampleCount: primitive.detectedSampleCount,
+                            greenPixelCount: primitive.greenPixelCount,
+                            coverageFraction: primitive.coverageFraction,
+                            rmsResidualMm: primitive.rmsResidualMm,
+                            p95ResidualMm: primitive.p95ResidualMm,
+                            maxResidualMm: primitive.maxResidualMm
+                        )
+                    },
+                    samples: result.program.samples.map { sample in
+                        BridgeDrawingProgramSampleObservationRequest(
+                            primitiveId: sample.primitiveId,
+                            sampleIndex: sample.sampleIndex,
+                            expectedMm: sample.expectedMm,
+                            expectedCameraNorm: sample.expectedCameraNorm,
+                            observedMm: sample.observedMm,
+                            observedCameraNorm: sample.observedCameraNorm,
+                            residualMm: sample.residualMm,
+                            detected: sample.detected,
+                            greenPixelCount: sample.greenPixelCount
+                        )
+                    },
+                    sampleCount: result.program.sampleCount,
+                    detectedSampleCount: result.program.detectedSampleCount,
+                    totalGreenPixels: result.program.totalGreenPixels,
+                    coverageFraction: result.program.coverageFraction,
+                    rmsResidualMm: result.program.rmsResidualMm,
+                    p95ResidualMm: result.program.p95ResidualMm,
+                    maxResidualMm: result.program.maxResidualMm,
+                    usable: result.isUsable
+                )
+            )
+            applyDrawingCalibrationResponse(response)
+            diagnosticsEvent(
+                "drawing_program_observation_recorded",
+                [
+                    "status": response.status,
+                    "observation_id": response.observationId ?? "",
+                    "model_id": response.calibration?.modelId ?? "",
+                    "solver_kind": response.calibration?.solverKind ?? "",
+                    "program_id": result.program.programId,
+                    "program_kind": result.program.programKind,
+                    "sample_count": result.program.sampleCount,
+                    "detected_samples": result.program.detectedSampleCount,
+                    "detected_edges": result.detectedEdgeCount,
+                    "usable": result.isUsable,
+                    "blockers": response.calibration?.blockers ?? []
+                ],
+                snapshot: true
+            )
+            return response.calibration
+        } catch {
+            diagnosticsEvent(
+                "drawing_program_observation_failed",
+                errorPayload(error).merging(["fallback_route": "calibration/drawing/frame-observation"]) { current, _ in current },
+                snapshot: true
+            )
+            return await recordLegacyDrawingFrameInspection(
+                result,
+                expectedCorners: expectedCorners,
+                registration: registration,
+                commandId: commandId
+            )
+        }
+    }
+
+    private func applyDrawingCalibrationResponse(_ response: BridgeDrawingCalibrationResponse) {
+        latestDrawingCalibration = response.calibration
+        updatePredictedDrawingProgramOverlay()
+        guard let calibration = response.calibration else {
+            drawingCalibrationStatus = response.status == "missing" ? "DRAW CAL --" : "DRAW CAL ERR"
+            drawingCalibrationDetail = response.error ?? "No drawing calibration"
+            return
+        }
+        drawingCalibrationStatus = "DRAW CAL \(calibration.statusLabel)"
+        let residual = calibration.rmsResidualMm.map { String(format: "rms %.1fmm", $0) } ?? "rms --"
+        let maxResidual = calibration.maxResidualMm.map { String(format: "max %.1fmm", $0) } ?? "max --"
+        if let blocker = calibration.blockers.first {
+            drawingCalibrationDetail = "\(residual) \(maxResidual); \(blocker)"
+        } else {
+            drawingCalibrationDetail = "\(residual) \(maxResidual); \(calibration.usableObservationCount) usable frame(s)"
+        }
+    }
+
+    private func recordLegacyDrawingFrameInspection(
+        _ result: DrawnFrameInspectionResult,
+        expectedCorners: [PaperPointMmSnapshot],
+        registration: PaperRegistrationSnapshot,
+        commandId: String?
+    ) async -> BridgeDrawingCalibrationModel? {
         do {
             let response = try await client.observeDrawingFrame(
                 BridgeDrawingFrameObservationRequest(
@@ -2976,21 +3090,62 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    private func applyDrawingCalibrationResponse(_ response: BridgeDrawingCalibrationResponse) {
-        latestDrawingCalibration = response.calibration
-        guard let calibration = response.calibration else {
-            drawingCalibrationStatus = response.status == "missing" ? "DRAW CAL --" : "DRAW CAL ERR"
-            drawingCalibrationDetail = response.error ?? "No drawing calibration"
+    private func updatePredictedDrawingProgramOverlay() {
+        guard expectedPathRole == "setup_field_frame",
+              !expectedPathSegments.isEmpty,
+              latestDrawingCalibration?.validationStatus == "ready",
+              let homography = latestDrawingCalibration?.expectedToObserved else {
+            predictedPathSegments = []
             return
         }
-        drawingCalibrationStatus = "DRAW CAL \(calibration.statusLabel)"
-        let residual = calibration.rmsResidualMm.map { String(format: "rms %.1fmm", $0) } ?? "rms --"
-        let maxResidual = calibration.maxResidualMm.map { String(format: "max %.1fmm", $0) } ?? "max --"
-        if let blocker = calibration.blockers.first {
-            drawingCalibrationDetail = "\(residual) \(maxResidual); \(blocker)"
-        } else {
-            drawingCalibrationDetail = "\(residual) \(maxResidual); \(calibration.usableObservationCount) usable frame(s)"
+        predictedPathSegments = expectedPathSegments.compactMap { segment in
+            guard let start = paperPoint(fromNorm: segment.startNorm),
+                  let end = paperPoint(fromNorm: segment.endNorm),
+                  let predictedStart = transformPaperPoint(start, homography: homography),
+                  let predictedEnd = transformPaperPoint(end, homography: homography) else {
+                return nil
+            }
+            return ExpectedPathSegment(
+                startNorm: [
+                    predictedStart.x / visualFieldWidthMm,
+                    predictedStart.y / visualFieldHeightMm
+                ],
+                endNorm: [
+                    predictedEnd.x / visualFieldWidthMm,
+                    predictedEnd.y / visualFieldHeightMm
+                ],
+                startMachineMm: [],
+                endMachineMm: [],
+                lengthMm: hypot(predictedEnd.x - predictedStart.x, predictedEnd.y - predictedStart.y)
+            )
         }
+    }
+
+    private func paperPoint(fromNorm values: [Double]) -> PaperPointMmSnapshot? {
+        guard values.count >= 2, visualFieldWidthMm > 0, visualFieldHeightMm > 0 else { return nil }
+        return PaperPointMmSnapshot(
+            x: values[0] * visualFieldWidthMm,
+            y: values[1] * visualFieldHeightMm
+        )
+    }
+
+    private func transformPaperPoint(
+        _ point: PaperPointMmSnapshot,
+        homography: HomographySnapshot
+    ) -> PaperPointMmSnapshot? {
+        let coefficients = homography.coefficients
+        guard coefficients.count == 9, visualFieldWidthMm > 0, visualFieldHeightMm > 0 else { return nil }
+        let x = point.x / visualFieldWidthMm
+        let y = point.y / visualFieldHeightMm
+        let denominator = coefficients[6] * x + coefficients[7] * y + coefficients[8]
+        guard abs(denominator) > 0.000_000_001 else { return nil }
+        let correctedX = (coefficients[0] * x + coefficients[1] * y + coefficients[2]) / denominator
+        let correctedY = (coefficients[3] * x + coefficients[4] * y + coefficients[5]) / denominator
+        guard correctedX.isFinite, correctedY.isFinite else { return nil }
+        return PaperPointMmSnapshot(
+            x: correctedX * visualFieldWidthMm,
+            y: correctedY * visualFieldHeightMm
+        )
     }
 
     func observeVisualBindingPoint(

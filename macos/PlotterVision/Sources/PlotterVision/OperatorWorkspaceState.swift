@@ -35,6 +35,7 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var visualCenterDotTaskActive = false
     @Published var operatorLog: [OperatorLogEntry] = []
     @Published var setupLogExpanded = false
+    @Published var setupModelEstimatesExpanded = false
     @Published var setupSnapshot = SetupPanelSnapshot.idle
     @Published var pendingSetupCommand: SetupPanelCommandRequest?
     @Published var pendingPanelCommand: OperatorPanelCommandRequest?
@@ -115,6 +116,7 @@ final class OperatorWorkspaceState: ObservableObject {
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
                 "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
                 "setup_log_expanded": setupLogExpanded,
+                "setup_model_estimates_expanded": setupModelEstimatesExpanded,
                 "operator_log_entries": operatorLog.count
             ]
         ]

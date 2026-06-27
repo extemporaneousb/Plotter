@@ -2,6 +2,532 @@ import CoreGraphics
 import CoreVideo
 import Foundation
 
+enum InkProgramPrimitiveKind: String, Equatable {
+    case mark
+    case line
+    case circle
+    case arc
+    case denseStroke = "dense_stroke"
+}
+
+struct InkProgramPrimitive: Equatable {
+    let primitiveId: String
+    let kind: InkProgramPrimitiveKind
+    let expectedPointsMm: [PaperPointMmSnapshot]
+    let centerMm: PaperPointMmSnapshot?
+    let radiusMm: Double?
+    let startAngleDeg: Double?
+    let endAngleDeg: Double?
+    let closed: Bool
+    let sampleCountHint: Int?
+
+    static func mark(
+        primitiveId: String,
+        center: PaperPointMmSnapshot,
+        sampleCountHint: Int? = nil
+    ) -> InkProgramPrimitive {
+        InkProgramPrimitive(
+            primitiveId: primitiveId,
+            kind: .mark,
+            expectedPointsMm: [center],
+            centerMm: center,
+            radiusMm: nil,
+            startAngleDeg: nil,
+            endAngleDeg: nil,
+            closed: false,
+            sampleCountHint: sampleCountHint
+        )
+    }
+
+    static func line(
+        primitiveId: String,
+        start: PaperPointMmSnapshot,
+        end: PaperPointMmSnapshot,
+        sampleCountHint: Int? = nil
+    ) -> InkProgramPrimitive {
+        InkProgramPrimitive(
+            primitiveId: primitiveId,
+            kind: .line,
+            expectedPointsMm: [start, end],
+            centerMm: nil,
+            radiusMm: nil,
+            startAngleDeg: nil,
+            endAngleDeg: nil,
+            closed: false,
+            sampleCountHint: sampleCountHint
+        )
+    }
+
+    static func circle(
+        primitiveId: String,
+        center: PaperPointMmSnapshot,
+        radiusMm: Double,
+        sampleCountHint: Int? = nil
+    ) -> InkProgramPrimitive {
+        InkProgramPrimitive(
+            primitiveId: primitiveId,
+            kind: .circle,
+            expectedPointsMm: [],
+            centerMm: center,
+            radiusMm: radiusMm,
+            startAngleDeg: 0,
+            endAngleDeg: 360,
+            closed: true,
+            sampleCountHint: sampleCountHint
+        )
+    }
+
+    static func arc(
+        primitiveId: String,
+        center: PaperPointMmSnapshot,
+        radiusMm: Double,
+        startAngleDeg: Double,
+        endAngleDeg: Double,
+        sampleCountHint: Int? = nil
+    ) -> InkProgramPrimitive {
+        InkProgramPrimitive(
+            primitiveId: primitiveId,
+            kind: .arc,
+            expectedPointsMm: [],
+            centerMm: center,
+            radiusMm: radiusMm,
+            startAngleDeg: startAngleDeg,
+            endAngleDeg: endAngleDeg,
+            closed: false,
+            sampleCountHint: sampleCountHint
+        )
+    }
+
+    static func denseStroke(
+        primitiveId: String,
+        points: [PaperPointMmSnapshot],
+        closed: Bool = false
+    ) -> InkProgramPrimitive {
+        InkProgramPrimitive(
+            primitiveId: primitiveId,
+            kind: .denseStroke,
+            expectedPointsMm: points,
+            centerMm: nil,
+            radiusMm: nil,
+            startAngleDeg: nil,
+            endAngleDeg: nil,
+            closed: closed,
+            sampleCountHint: points.count
+        )
+    }
+}
+
+struct InkProgramObservedSample: Equatable {
+    let primitiveId: String
+    let sampleIndex: Int
+    let expectedMm: PaperPointMmSnapshot
+    let expectedCameraNorm: NormPoint?
+    let observedMm: PaperPointMmSnapshot?
+    let observedCameraNorm: NormPoint?
+    let residualMm: Double?
+    let detected: Bool
+    let greenPixelCount: Int
+}
+
+struct InkProgramPrimitiveInspection: Equatable {
+    let primitiveId: String
+    let kind: InkProgramPrimitiveKind
+    let sampleCount: Int
+    let detectedSampleCount: Int
+    let greenPixelCount: Int
+    let coverageFraction: Double
+    let rmsResidualMm: Double?
+    let p95ResidualMm: Double?
+    let maxResidualMm: Double?
+    let observedSamples: [InkProgramObservedSample]
+}
+
+struct InkProgramInspectionResult: Equatable {
+    let programId: String
+    let programKind: String
+    let imageSize: CGSize
+    let primitives: [InkProgramPrimitiveInspection]
+
+    var samples: [InkProgramObservedSample] {
+        primitives.flatMap(\.observedSamples)
+    }
+
+    var sampleCount: Int {
+        primitives.reduce(0) { $0 + $1.sampleCount }
+    }
+
+    var detectedSampleCount: Int {
+        primitives.reduce(0) { $0 + $1.detectedSampleCount }
+    }
+
+    var totalGreenPixels: Int {
+        primitives.reduce(0) { $0 + $1.greenPixelCount }
+    }
+
+    var coverageFraction: Double {
+        guard sampleCount > 0 else { return 0 }
+        return Double(detectedSampleCount) / Double(sampleCount)
+    }
+
+    var rmsResidualMm: Double? {
+        let residuals = samples.compactMap(\.residualMm)
+        guard !residuals.isEmpty else { return nil }
+        return sqrt(residuals.reduce(0.0) { $0 + $1 * $1 } / Double(residuals.count))
+    }
+
+    var p95ResidualMm: Double? {
+        percentileResidual(0.95)
+    }
+
+    var maxResidualMm: Double? {
+        samples.compactMap(\.residualMm).max()
+    }
+
+    var isUsable: Bool {
+        detectedSampleCount >= 4 && coverageFraction >= 0.08
+    }
+
+    private func percentileResidual(_ percentile: Double) -> Double? {
+        let residuals = samples.compactMap(\.residualMm).sorted()
+        guard !residuals.isEmpty else { return nil }
+        let clamped = min(1.0, max(0.0, percentile))
+        let index = Int(ceil(clamped * Double(residuals.count))) - 1
+        return residuals[min(max(index, 0), residuals.count - 1)]
+    }
+}
+
+enum InkProgramInspector {
+    static func inspect(
+        pixelBuffer: CVPixelBuffer,
+        primitives: [InkProgramPrimitive],
+        registration: PaperRegistrationSnapshot,
+        colorTarget: CapMarkerColorTarget?,
+        programId: String,
+        programKind: String
+    ) -> InkProgramInspectionResult? {
+        guard !primitives.isEmpty else { return nil }
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
+            return nil
+        }
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        guard width > 1, height > 1 else { return nil }
+
+        let inspected = primitives.map { primitive in
+            inspectPrimitive(
+                primitive,
+                registration: registration,
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
+                baseAddress: baseAddress,
+                colorTarget: colorTarget
+            )
+        }
+        return InkProgramInspectionResult(
+            programId: programId,
+            programKind: programKind,
+            imageSize: CGSize(width: width, height: height),
+            primitives: inspected
+        )
+    }
+
+    static func isGreenFramePixel(
+        red: Int,
+        green: Int,
+        blue: Int,
+        target: CapMarkerColorTarget?
+    ) -> Bool {
+        if let target, isSampledGreenFramePixel(red: red, green: green, blue: blue, target: target) {
+            return true
+        }
+        guard green >= 62 else { return false }
+        let strongestNonGreen = max(red, blue)
+        guard green - strongestNonGreen >= 16 else { return false }
+        guard Double(green) / Double(max(strongestNonGreen, 1)) >= 1.16 else { return false }
+        return red <= 215 && blue <= 215
+    }
+
+    private static func inspectPrimitive(
+        _ primitive: InkProgramPrimitive,
+        registration: PaperRegistrationSnapshot,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        baseAddress: UnsafeMutableRawPointer,
+        colorTarget: CapMarkerColorTarget?
+    ) -> InkProgramPrimitiveInspection {
+        let expectedSamples = expectedSamplePoints(for: primitive, registration: registration, width: width, height: height)
+        let samples = expectedSamples.enumerated().map { index, expected in
+            inspectExpectedPoint(
+                primitiveId: primitive.primitiveId,
+                sampleIndex: index,
+                expectedMm: expected,
+                registration: registration,
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
+                baseAddress: baseAddress,
+                colorTarget: colorTarget
+            )
+        }
+        let detected = samples.filter(\.detected)
+        let residuals = detected.compactMap(\.residualMm).sorted()
+        let rms = residuals.isEmpty
+            ? nil
+            : sqrt(residuals.reduce(0.0) { $0 + $1 * $1 } / Double(residuals.count))
+        let p95 = percentile(residuals, 0.95)
+        return InkProgramPrimitiveInspection(
+            primitiveId: primitive.primitiveId,
+            kind: primitive.kind,
+            sampleCount: samples.count,
+            detectedSampleCount: detected.count,
+            greenPixelCount: samples.reduce(0) { $0 + $1.greenPixelCount },
+            coverageFraction: samples.isEmpty ? 0 : Double(detected.count) / Double(samples.count),
+            rmsResidualMm: rms,
+            p95ResidualMm: p95,
+            maxResidualMm: residuals.max(),
+            observedSamples: samples
+        )
+    }
+
+    private static func inspectExpectedPoint(
+        primitiveId: String,
+        sampleIndex: Int,
+        expectedMm: PaperPointMmSnapshot,
+        registration: PaperRegistrationSnapshot,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        baseAddress: UnsafeMutableRawPointer,
+        colorTarget: CapMarkerColorTarget?
+    ) -> InkProgramObservedSample {
+        let expectedCamera = paperToCameraPoint(expectedMm, registration: registration)
+        guard let expectedCamera else {
+            return InkProgramObservedSample(
+                primitiveId: primitiveId,
+                sampleIndex: sampleIndex,
+                expectedMm: expectedMm,
+                expectedCameraNorm: nil,
+                observedMm: nil,
+                observedCameraNorm: nil,
+                residualMm: nil,
+                detected: false,
+                greenPixelCount: 0
+            )
+        }
+
+        let pixel = pixelPoint(expectedCamera, width: width, height: height)
+        let searchRadiusPx = 12
+        var hitX = 0.0
+        var hitY = 0.0
+        var hitCount = 0
+        for yOffset in -searchRadiusPx...searchRadiusPx {
+            let sampleY = Int(round(pixel.y)) + yOffset
+            guard sampleY >= 0, sampleY < height else { continue }
+            let row = baseAddress.advanced(by: sampleY * bytesPerRow).assumingMemoryBound(to: UInt8.self)
+            for xOffset in -searchRadiusPx...searchRadiusPx {
+                let sampleX = Int(round(pixel.x)) + xOffset
+                guard sampleX >= 0, sampleX < width else { continue }
+                let pixelOffset = sampleX * 4
+                let blue = Int(row[pixelOffset])
+                let green = Int(row[pixelOffset + 1])
+                let red = Int(row[pixelOffset + 2])
+                guard isGreenFramePixel(red: red, green: green, blue: blue, target: colorTarget) else {
+                    continue
+                }
+                hitX += Double(sampleX)
+                hitY += Double(sampleY)
+                hitCount += 1
+            }
+        }
+
+        guard hitCount > 0 else {
+            return InkProgramObservedSample(
+                primitiveId: primitiveId,
+                sampleIndex: sampleIndex,
+                expectedMm: expectedMm,
+                expectedCameraNorm: NormPoint(expectedCamera),
+                observedMm: nil,
+                observedCameraNorm: nil,
+                residualMm: nil,
+                detected: false,
+                greenPixelCount: 0
+            )
+        }
+
+        let observedPixel = CGPoint(x: hitX / Double(hitCount), y: hitY / Double(hitCount))
+        let observedCamera = cameraPoint(pixel: observedPixel, width: width, height: height)
+        let observedPaper = cameraToPaperPoint(observedCamera, registration: registration)
+        return InkProgramObservedSample(
+            primitiveId: primitiveId,
+            sampleIndex: sampleIndex,
+            expectedMm: expectedMm,
+            expectedCameraNorm: NormPoint(expectedCamera),
+            observedMm: observedPaper,
+            observedCameraNorm: NormPoint(observedCamera),
+            residualMm: observedPaper.map { distance($0, expectedMm) },
+            detected: observedPaper != nil,
+            greenPixelCount: hitCount
+        )
+    }
+
+    private static func expectedSamplePoints(
+        for primitive: InkProgramPrimitive,
+        registration: PaperRegistrationSnapshot,
+        width: Int,
+        height: Int
+    ) -> [PaperPointMmSnapshot] {
+        switch primitive.kind {
+        case .mark:
+            return Array(primitive.expectedPointsMm.prefix(1))
+        case .line:
+            guard primitive.expectedPointsMm.count >= 2 else { return primitive.expectedPointsMm }
+            let start = primitive.expectedPointsMm[0]
+            let end = primitive.expectedPointsMm[1]
+            let sampleCount = primitive.sampleCountHint ?? lineSampleCount(start: start, end: end, registration: registration, width: width, height: height)
+            return (0...max(sampleCount, 1)).map { index in
+                let fraction = Double(index) / Double(max(sampleCount, 1))
+                return PaperPointMmSnapshot(
+                    x: start.x + (end.x - start.x) * fraction,
+                    y: start.y + (end.y - start.y) * fraction
+                )
+            }
+        case .circle, .arc:
+            guard let center = primitive.centerMm,
+                  let radius = primitive.radiusMm,
+                  radius > 0 else {
+                return []
+            }
+            let startDeg = primitive.startAngleDeg ?? 0
+            let endDeg = primitive.endAngleDeg ?? (primitive.closed ? 360 : startDeg)
+            let sweep = primitive.closed ? 360.0 : endDeg - startDeg
+            let sampleCount = max(primitive.sampleCountHint ?? Int(abs(sweep) / 360.0 * 128.0), 8)
+            return (0...sampleCount).map { index in
+                let fraction = Double(index) / Double(max(sampleCount, 1))
+                let angle = (startDeg + sweep * fraction) * .pi / 180.0
+                return PaperPointMmSnapshot(
+                    x: center.x + cos(angle) * radius,
+                    y: center.y + sin(angle) * radius
+                )
+            }
+        case .denseStroke:
+            return primitive.expectedPointsMm
+        }
+    }
+
+    private static func lineSampleCount(
+        start: PaperPointMmSnapshot,
+        end: PaperPointMmSnapshot,
+        registration: PaperRegistrationSnapshot,
+        width: Int,
+        height: Int
+    ) -> Int {
+        guard let cameraStart = paperToCameraPoint(start, registration: registration),
+              let cameraEnd = paperToCameraPoint(end, registration: registration) else {
+            return 64
+        }
+        let pixelStart = pixelPoint(cameraStart, width: width, height: height)
+        let pixelEnd = pixelPoint(cameraEnd, width: width, height: height)
+        let edgeLength = hypot(pixelEnd.x - pixelStart.x, pixelEnd.y - pixelStart.y)
+        return min(480, max(32, Int(edgeLength / 2.4)))
+    }
+
+    private static func paperToCameraPoint(
+        _ paperMm: PaperPointMmSnapshot,
+        registration: PaperRegistrationSnapshot
+    ) -> CGPoint? {
+        let coefficients = registration.paperToCamera.coefficients
+        guard coefficients.count == 9,
+              registration.paperSizeMm.width > 0,
+              registration.paperSizeMm.height > 0 else {
+            return nil
+        }
+        let x = paperMm.x / registration.paperSizeMm.width
+        let y = paperMm.y / registration.paperSizeMm.height
+        let denominator = coefficients[6] * x + coefficients[7] * y + coefficients[8]
+        guard abs(denominator) > 0.000_000_001 else { return nil }
+        let cameraX = (coefficients[0] * x + coefficients[1] * y + coefficients[2]) / denominator
+        let cameraY = (coefficients[3] * x + coefficients[4] * y + coefficients[5]) / denominator
+        guard cameraX >= -0.35, cameraX <= 1.35, cameraY >= -0.35, cameraY <= 1.35 else {
+            return nil
+        }
+        return CGPoint(x: cameraX, y: cameraY)
+    }
+
+    private static func cameraToPaperPoint(
+        _ cameraPoint: CGPoint,
+        registration: PaperRegistrationSnapshot
+    ) -> PaperPointMmSnapshot? {
+        let coefficients = registration.cameraToPaper.coefficients
+        guard coefficients.count == 9 else { return nil }
+        let x = Double(cameraPoint.x)
+        let y = Double(cameraPoint.y)
+        let denominator = coefficients[6] * x + coefficients[7] * y + coefficients[8]
+        guard abs(denominator) > 0.000_000_001 else { return nil }
+        let paperX = (coefficients[0] * x + coefficients[1] * y + coefficients[2]) / denominator
+        let paperY = (coefficients[3] * x + coefficients[4] * y + coefficients[5]) / denominator
+        return PaperPointMmSnapshot(
+            x: paperX * registration.paperSizeMm.width,
+            y: paperY * registration.paperSizeMm.height
+        )
+    }
+
+    private static func pixelPoint(_ cameraPoint: CGPoint, width: Int, height: Int) -> CGPoint {
+        CGPoint(
+            x: Double(cameraPoint.x) * Double(width - 1),
+            y: (1.0 - Double(cameraPoint.y)) * Double(height - 1)
+        )
+    }
+
+    private static func cameraPoint(pixel: CGPoint, width: Int, height: Int) -> CGPoint {
+        CGPoint(
+            x: Double(pixel.x) / Double(max(width - 1, 1)),
+            y: 1.0 - Double(pixel.y) / Double(max(height - 1, 1))
+        )
+    }
+
+    private static func isSampledGreenFramePixel(
+        red: Int,
+        green: Int,
+        blue: Int,
+        target: CapMarkerColorTarget
+    ) -> Bool {
+        let r = Double(red)
+        let g = Double(green)
+        let b = Double(blue)
+        guard g >= r, g >= b else { return false }
+        let maxChannel = max(r, max(g, b))
+        let minChannel = min(r, min(g, b))
+        guard maxChannel >= 38.0, maxChannel - minChannel >= 10.0 else {
+            return false
+        }
+
+        let candidateSum = max(r + g + b, 1.0)
+        let targetSum = max(target.red + target.green + target.blue, 1.0)
+        let dr = r / candidateSum - target.red / targetSum
+        let dg = g / candidateSum - target.green / targetSum
+        let db = b / candidateSum - target.blue / targetSum
+        let chromaDistance = sqrt(dr * dr + dg * dg + db * db)
+        return chromaDistance <= max(target.tolerance, 0.16)
+    }
+
+    private static func percentile(_ residuals: [Double], _ percentile: Double) -> Double? {
+        guard !residuals.isEmpty else { return nil }
+        let clamped = min(1.0, max(0.0, percentile))
+        let index = Int(ceil(clamped * Double(residuals.count))) - 1
+        return residuals[min(max(index, 0), residuals.count - 1)]
+    }
+
+    private static func distance(_ lhs: PaperPointMmSnapshot, _ rhs: PaperPointMmSnapshot) -> Double {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+}
+
 struct DrawnFrameLineFit {
     let pointMm: PaperPointMmSnapshot
     let dx: Double
@@ -23,6 +549,7 @@ struct DrawnFrameEdgeInspection {
     let observedStartMm: PaperPointMmSnapshot?
     let observedEndMm: PaperPointMmSnapshot?
     let lineFit: DrawnFrameLineFit?
+    let observedSamples: [InkProgramObservedSample]
 
     var isDetected: Bool {
         lineFit != nil && detectedSampleCount >= 6 && coverageFraction >= 0.08
@@ -45,6 +572,7 @@ struct DrawnFrameInspectionResult {
     let maxResidualMm: Double?
     let cornerRmsResidualMm: Double?
     let cornerMaxResidualMm: Double?
+    let program: InkProgramInspectionResult
 
     var detectedEdgeCount: Int {
         edges.filter(\.isDetected).count
@@ -114,6 +642,27 @@ enum GreenFrameInkInspector {
         let cornersMeasured = inspectCorners(expectedCorners: corners, edges: edges)
         let cornerSquaredSum = cornersMeasured.reduce(0.0) { $0 + $1.residualMm * $1.residualMm }
         let cornerMaxResidual = cornersMeasured.map(\.residualMm).max()
+        let primitives = edges.map { edge in
+            let residuals = edge.observedSamples.compactMap(\.residualMm).sorted()
+            return InkProgramPrimitiveInspection(
+                primitiveId: "frame-edge-\(edge.edgeIndex)",
+                kind: .line,
+                sampleCount: edge.sampleCount,
+                detectedSampleCount: edge.detectedSampleCount,
+                greenPixelCount: edge.greenPixelCount,
+                coverageFraction: edge.coverageFraction,
+                rmsResidualMm: edge.rmsExpectedResidualMm,
+                p95ResidualMm: percentile(residuals, 0.95),
+                maxResidualMm: edge.maxExpectedResidualMm,
+                observedSamples: edge.observedSamples
+            )
+        }
+        let program = InkProgramInspectionResult(
+            programId: "setup-field-frame",
+            programKind: "setup_field_frame",
+            imageSize: CGSize(width: width, height: height),
+            primitives: primitives
+        )
 
         return DrawnFrameInspectionResult(
             imageSize: CGSize(width: width, height: height),
@@ -123,7 +672,8 @@ enum GreenFrameInkInspector {
             rmsResidualMm: residualCount > 0 ? sqrt(residualSquaredSum / Double(residualCount)) : nil,
             maxResidualMm: maxResidual,
             cornerRmsResidualMm: cornersMeasured.isEmpty ? nil : sqrt(cornerSquaredSum / Double(cornersMeasured.count)),
-            cornerMaxResidualMm: cornerMaxResidual
+            cornerMaxResidualMm: cornerMaxResidual,
+            program: program
         )
     }
 
@@ -155,7 +705,8 @@ enum GreenFrameInkInspector {
                     angleErrorDeg: nil,
                     observedStartMm: nil,
                     observedEndMm: nil,
-                    lineFit: nil
+                    lineFit: nil,
+                    observedSamples: []
                 ),
                 residualSquaredSum: 0,
                 residualCount: 0
@@ -179,12 +730,18 @@ enum GreenFrameInkInspector {
         let sampleCount = min(480, max(32, Int(edgeLength / 2.4)))
         var observedPaperPoints: [PaperPointMmSnapshot] = []
         var residuals: [Double] = []
+        var observedSamples: [InkProgramObservedSample] = []
         var greenPixelCount = 0
 
         for sampleIndex in 0...sampleCount {
             let fraction = Double(sampleIndex) / Double(max(sampleCount, 1))
             let baseX = Double(pixelStart.x) + vx * fraction
             let baseY = Double(pixelStart.y) + vy * fraction
+            let expectedPaper = PaperPointMmSnapshot(
+                x: start.x + (end.x - start.x) * fraction,
+                y: start.y + (end.y - start.y) * fraction
+            )
+            let expectedCamera = cameraPoint(pixel: CGPoint(x: baseX, y: baseY), width: width, height: height)
             var hitX = 0.0
             var hitY = 0.0
             var hitCount = 0
@@ -206,15 +763,56 @@ enum GreenFrameInkInspector {
                 hitCount += 1
             }
 
-            guard hitCount > 0 else { continue }
+            guard hitCount > 0 else {
+                observedSamples.append(
+                    InkProgramObservedSample(
+                        primitiveId: "frame-edge-\(edgeIndex)",
+                        sampleIndex: sampleIndex,
+                        expectedMm: expectedPaper,
+                        expectedCameraNorm: NormPoint(expectedCamera),
+                        observedMm: nil,
+                        observedCameraNorm: nil,
+                        residualMm: nil,
+                        detected: false,
+                        greenPixelCount: 0
+                    )
+                )
+                continue
+            }
             greenPixelCount += hitCount
             let averagePixel = CGPoint(x: hitX / Double(hitCount), y: hitY / Double(hitCount))
             let cameraPoint = cameraPoint(pixel: averagePixel, width: width, height: height)
             guard let observedPaper = cameraToPaperPoint(cameraPoint, registration: registration) else {
+                observedSamples.append(
+                    InkProgramObservedSample(
+                        primitiveId: "frame-edge-\(edgeIndex)",
+                        sampleIndex: sampleIndex,
+                        expectedMm: expectedPaper,
+                        expectedCameraNorm: NormPoint(expectedCamera),
+                        observedMm: nil,
+                        observedCameraNorm: NormPoint(cameraPoint),
+                        residualMm: nil,
+                        detected: false,
+                        greenPixelCount: hitCount
+                    )
+                )
                 continue
             }
             observedPaperPoints.append(observedPaper)
             residuals.append(distanceFromPoint(observedPaper, toSegmentStart: start, end: end))
+            observedSamples.append(
+                InkProgramObservedSample(
+                    primitiveId: "frame-edge-\(edgeIndex)",
+                    sampleIndex: sampleIndex,
+                    expectedMm: expectedPaper,
+                    expectedCameraNorm: NormPoint(expectedCamera),
+                    observedMm: observedPaper,
+                    observedCameraNorm: NormPoint(cameraPoint),
+                    residualMm: distanceFromPoint(observedPaper, toSegmentStart: start, end: end),
+                    detected: true,
+                    greenPixelCount: hitCount
+                )
+            )
         }
 
         let residualSquaredSum = residuals.reduce(0.0) { $0 + $1 * $1 }
@@ -235,7 +833,8 @@ enum GreenFrameInkInspector {
             angleErrorDeg: line?.angleErrorDeg,
             observedStartMm: line?.observedStartMm,
             observedEndMm: line?.observedEndMm,
-            lineFit: line?.lineFit
+            lineFit: line?.lineFit,
+            observedSamples: observedSamples
         )
         return EdgeMeasurement(edge: edge, residualSquaredSum: residualSquaredSum, residualCount: residualCount)
     }
@@ -396,39 +995,14 @@ enum GreenFrameInkInspector {
         blue: Int,
         target: CapMarkerColorTarget?
     ) -> Bool {
-        if let target, isSampledGreenFramePixel(red: red, green: green, blue: blue, target: target) {
-            return true
-        }
-        guard green >= 62 else { return false }
-        let strongestNonGreen = max(red, blue)
-        guard green - strongestNonGreen >= 16 else { return false }
-        guard Double(green) / Double(max(strongestNonGreen, 1)) >= 1.16 else { return false }
-        return red <= 215 && blue <= 215
+        InkProgramInspector.isGreenFramePixel(red: red, green: green, blue: blue, target: target)
     }
 
-    private static func isSampledGreenFramePixel(
-        red: Int,
-        green: Int,
-        blue: Int,
-        target: CapMarkerColorTarget
-    ) -> Bool {
-        let r = Double(red)
-        let g = Double(green)
-        let b = Double(blue)
-        guard g >= r, g >= b else { return false }
-        let maxChannel = max(r, max(g, b))
-        let minChannel = min(r, min(g, b))
-        guard maxChannel >= 38.0, maxChannel - minChannel >= 10.0 else {
-            return false
-        }
-
-        let candidateSum = max(r + g + b, 1.0)
-        let targetSum = max(target.red + target.green + target.blue, 1.0)
-        let dr = r / candidateSum - target.red / targetSum
-        let dg = g / candidateSum - target.green / targetSum
-        let db = b / candidateSum - target.blue / targetSum
-        let chromaDistance = sqrt(dr * dr + dg * dg + db * db)
-        return chromaDistance <= max(target.tolerance, 0.16)
+    private static func percentile(_ residuals: [Double], _ percentile: Double) -> Double? {
+        guard !residuals.isEmpty else { return nil }
+        let clamped = min(1.0, max(0.0, percentile))
+        let index = Int(ceil(clamped * Double(residuals.count))) - 1
+        return residuals[min(max(index, 0), residuals.count - 1)]
     }
 
     private static func distanceFromPoint(
@@ -491,7 +1065,8 @@ private struct EdgeMeasurement {
                 angleErrorDeg: nil,
                 observedStartMm: nil,
                 observedEndMm: nil,
-                lineFit: nil
+                lineFit: nil,
+                observedSamples: []
             ),
             residualSquaredSum: 0,
             residualCount: 0

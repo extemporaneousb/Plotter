@@ -309,6 +309,8 @@ struct ContentView: View {
                         motionTracks: plotterCamera.motionTracks,
                         expectedPathSegments: bridge.expectedPathSegments,
                         expectedPathLabel: bridge.expectedPathLabel,
+                        predictedPathSegments: bridge.predictedPathSegments,
+                        predictedPathLabel: bridge.predictedPathLabel,
                         observedFrameOverlay: bridge.observedDrawingFrameOverlay,
                         bindingMarkPreviewSegments: bridge.bindingMarkPreviewSegments,
                         bindingMarkPreviewPoints: bridge.bindingMarkPreviewPoints,

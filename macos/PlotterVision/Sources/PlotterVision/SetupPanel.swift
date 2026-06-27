@@ -36,6 +36,7 @@ struct SetupPanel: View {
                 hide: { workspace.requestSetupCommand(.hide) }
             )
             SetupLogDisclosure(workspace: workspace)
+            SetupModelEstimatesDisclosure(workspace: workspace, bridge: bridge)
         }
         .frame(width: 430, alignment: .topLeading)
         .padding(14)
@@ -84,6 +85,217 @@ private struct SetupLogDisclosure: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
+    }
+}
+
+private struct SetupModelEstimatesDisclosure: View {
+    @ObservedObject var workspace: OperatorWorkspaceState
+    @ObservedObject var bridge: PlotterBridgeModel
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $workspace.setupModelEstimatesExpanded) {
+            VStack(alignment: .leading, spacing: 7) {
+                estimateRow("Paper homography", paperHomographySummary)
+                estimateRow("Motion 2x2", motionMatrixSummary)
+                estimateRow("Motion samples", motionSampleSummary)
+                estimateRow("Drawing model family", drawingModelFamilySummary)
+                estimateRow("Solver kind", drawingSolverSummary)
+                estimateRow("Grid/control count", drawingControlSummary)
+                estimateRow("Sample count", drawingSampleSummary)
+                estimateRow("Coverage", drawingCoverageSummary)
+                estimateRow("RMS/p95/max", drawingResidualSummary)
+                estimateRow("Holdout error", drawingHoldoutSummary)
+                estimateRow("Blockers", drawingBlockerSummary)
+                estimateRow("Model id", bridge.latestDrawingCalibration?.modelId ?? "--")
+            }
+            .padding(.top, 8)
+            .textSelection(.enabled)
+        } label: {
+            Label("Model Estimates", systemImage: "function")
+                .font(.system(size: 12, weight: .bold))
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func estimateRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 122, alignment: .leading)
+            Text(value)
+                .foregroundStyle(.primary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+    }
+
+    private var paperHomographySummary: String {
+        guard let registration = bridge.paperRegistrationSnapshot else {
+            return "--"
+        }
+        return "\(registration.registrationId) \(formatHomography(registration.paperToCamera)) \(formatResidualPair(registration.rmsErrorNorm, registration.maxErrorNorm, suffix: "norm"))"
+    }
+
+    private var motionModel: VisualMotionModel? {
+        workspace.visualMotionModel ?? bridge.latestVisualReadiness?.relativeMotionModel?.visualMotionModel
+    }
+
+    private var motionMatrixSummary: String {
+        guard let model = motionModel else {
+            return "--"
+        }
+        return String(
+            format: "[%.3f %.3f; %.3f %.3f]",
+            model.xBasisDx,
+            model.yBasisDx,
+            model.xBasisDy,
+            model.yBasisDy
+        )
+    }
+
+    private var motionSampleSummary: String {
+        guard let model = motionModel else {
+            return "--"
+        }
+        let p95 = bridge.latestVisualReadiness?.relativeMotionModel?.p95ResidualMm
+            .map { String(format: " p95 %.1fmm", $0) } ?? ""
+        return String(
+            format: "%d samples rms %.1fmm%@ max %.1fmm",
+            model.sampleCount,
+            model.rmsResidualMm,
+            p95,
+            model.maxResidualMm
+        )
+    }
+
+    private var drawingModelFamilySummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        let version = calibration.modelVersion.map { " \($0)" } ?? ""
+        return "\(calibration.modelFamily)\(version)"
+    }
+
+    private var drawingSolverSummary: String {
+        bridge.latestDrawingCalibration?.solverKind ?? "--"
+    }
+
+    private var drawingControlSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        if let grid = calibration.residualGrid {
+            let fitCount = calibration.acceptedFitSampleCount ?? calibration.fitSampleCount ?? 0
+            return "\(grid.columns)x\(grid.rows) grid; \(grid.nodes.count) node(s); \(fitCount) fit control(s)"
+        }
+        let count = calibration.gridControlCount ?? (calibration.expectedToObserved == nil ? 0 : 4)
+        return "\(count) control(s)"
+    }
+
+    private var drawingSampleSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        let sampleCount = calibration.sampleCount ?? calibration.observationCount
+        let holdout = calibration.holdoutSampleCount.map { "; \($0) holdout" } ?? ""
+        let rejected = calibration.rejectedSampleCount.map { "; \($0) rejected" } ?? ""
+        return "\(sampleCount) sample(s); \(calibration.usableObservationCount) usable observation(s)\(holdout)\(rejected)"
+    }
+
+    private var drawingCoverageSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        if let coverage = calibration.coverage {
+            return String(
+                format: "%.0f%% grid %d/%d nodes radius %.1fmm",
+                coverage.coverageFraction * 100.0,
+                coverage.coveredNodeCount,
+                coverage.totalNodeCount,
+                coverage.coverageRadiusMm ?? 0.0
+            )
+        }
+        if let coverage = calibration.coverageFraction {
+            return String(format: "%.0f%%", coverage * 100.0)
+        }
+        guard calibration.observationCount > 0 else {
+            return "0%"
+        }
+        let coverage = Double(calibration.usableObservationCount) / Double(calibration.observationCount)
+        return String(format: "%.0f%% usable observations", coverage * 100.0)
+    }
+
+    private var drawingResidualSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        let rms = calibration.fitMetrics?.rmsMm ?? calibration.rmsResidualMm
+        let p95 = calibration.fitMetrics?.p95Mm ?? calibration.p95ResidualMm
+        let max = calibration.fitMetrics?.maxMm ?? calibration.maxResidualMm
+        return [
+            rms.map { String(format: "rms %.1fmm", $0) } ?? "rms --",
+            p95.map { String(format: "p95 %.1fmm", $0) } ?? "p95 --",
+            max.map { String(format: "max %.1fmm", $0) } ?? "max --"
+        ].joined(separator: " ")
+    }
+
+    private var drawingHoldoutSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        if calibration.holdoutSampleCount == 0 {
+            return "0 holdout samples"
+        }
+        let rms = (calibration.holdoutMetrics?.rmsMm ?? calibration.holdoutRmsResidualMm)
+            .map { String(format: "rms %.1fmm", $0) } ?? "rms --"
+        let max = (calibration.holdoutMetrics?.maxMm ?? calibration.holdoutMaxResidualMm)
+            .map { String(format: "max %.1fmm", $0) } ?? "max --"
+        return "\(rms) \(max)"
+    }
+
+    private var drawingBlockerSummary: String {
+        guard let calibration = bridge.latestDrawingCalibration else {
+            return "--"
+        }
+        guard !calibration.blockers.isEmpty else {
+            guard let stale = calibration.staleReasons, !stale.isEmpty else {
+                return "none"
+            }
+            return stale.prefix(2).joined(separator: " | ")
+        }
+        return calibration.blockers.prefix(2).joined(separator: " | ")
+    }
+
+    private func formatHomography(_ homography: HomographySnapshot) -> String {
+        let coefficients = homography.coefficients
+        guard coefficients.count == 9 else {
+            return "H --"
+        }
+        return String(
+            format: "H[%.3f %.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f]",
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            coefficients[3],
+            coefficients[4],
+            coefficients[5],
+            coefficients[6],
+            coefficients[7],
+            coefficients[8]
+        )
+    }
+
+    private func formatResidualPair(_ rms: Double?, _ max: Double?, suffix: String) -> String {
+        let rmsText = rms.map { String(format: "rms %.3f%@", $0, suffix) } ?? "rms --"
+        let maxText = max.map { String(format: "max %.3f%@", $0, suffix) } ?? "max --"
+        return "\(rmsText) \(maxText)"
     }
 }
 

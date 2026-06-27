@@ -101,8 +101,15 @@ extension ContentView {
                 completionDetails["ink_edges_detected"] = inkGeometry.detectedEdgeCount
                 completionDetails["ink_green_pixels"] = inkGeometry.totalGreenPixels
                 completionDetails["ink_geometry_usable"] = inkGeometry.isUsable
+                completionDetails["ink_program_id"] = inkGeometry.program.programId
+                completionDetails["ink_sample_count"] = inkGeometry.program.sampleCount
+                completionDetails["ink_detected_sample_count"] = inkGeometry.program.detectedSampleCount
+                completionDetails["ink_coverage"] = inkGeometry.program.coverageFraction
                 if let rmsResidual = inkGeometry.rmsResidualMm {
                     completionDetails["ink_rms_residual_mm"] = rmsResidual
+                }
+                if let p95Residual = inkGeometry.program.p95ResidualMm {
+                    completionDetails["ink_p95_residual_mm"] = p95Residual
                 }
                 if let maxResidual = inkGeometry.maxResidualMm {
                     completionDetails["ink_max_residual_mm"] = maxResidual
@@ -370,12 +377,20 @@ extension ContentView {
             "corner_count": result.corners.count,
             "total_green_pixels": result.totalGreenPixels,
             "usable": result.isUsable,
+            "program_id": result.program.programId,
+            "program_kind": result.program.programKind,
+            "program_sample_count": result.program.sampleCount,
+            "program_detected_sample_count": result.program.detectedSampleCount,
+            "program_coverage": result.program.coverageFraction,
             "model_rms_residual_mm": model.rmsResidualMm,
             "model_max_residual_mm": model.maxResidualMm,
             "sample_count": model.sampleCount
         ]
         if let rmsResidual = result.rmsResidualMm {
             details["rms_residual_mm"] = rmsResidual
+        }
+        if let p95Residual = result.program.p95ResidualMm {
+            details["p95_residual_mm"] = p95Residual
         }
         if let maxResidual = result.maxResidualMm {
             details["max_residual_mm"] = maxResidual

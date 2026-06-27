@@ -235,9 +235,12 @@ def test_drawing_frame_observation_persists_drawing_calibration(tmp_path: Path) 
         calibration = response["calibration"]
         assert calibration["artifact_type"] == "drawing_calibration_model"
         assert calibration["paper_registration_id"] == registration_id
-        assert calibration["solver_kind"] == "corner_homography"
+        assert calibration["model_version"] == "residual_grid_v1"
+        assert calibration["solver_kind"] == "residual_grid_v1"
         assert calibration["usable_observation_count"] == 1
         assert calibration["expected_to_observed"] is not None
+        assert calibration["residual_grid"] is not None
+        assert calibration["sample_count"] >= 4
         assert calibration["blockers"] == []
         assert (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
 
@@ -271,6 +274,134 @@ def test_setup_reset_clears_latest_drawing_calibration_pointer(tmp_path: Path) -
         assert reset["status"] == "reset"
         assert not (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
         assert historical_model.exists()
+
+
+def test_drawing_calibration_program_pipeline_persists_residual_grid_model(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+
+        status_code, preview = client.post(
+            "/calibration/drawing/program/preview",
+            {"request_id": "rich-sheet-preview"},
+        )
+        assert status_code == 200
+        assert preview["status"] == "ready"
+        assert preview["program_kind"] == "rich_drawing_calibration_sheet"
+        assert preview["plan_hash"]
+        assert preview["preview_overlay"]["projected"] is True
+        assert preview["preview_overlay"]["paper_registration_id"] == registration_id
+        assert len(preview["planned_trace"]) > 0
+        assert {step["action"] for step in preview["planned_trace"]} == {"travel", "draw"}
+        assert any(
+            segment["primitive_id"] == "cal.circle.left"
+            for segment in preview["simulation"]["drawn_segments"]
+        )
+        assert any(
+            primitive["primitive_id"] == "cal.arc.clockwise"
+            for primitive in preview["preview_overlay"]["primitives"]
+        )
+
+        status_code, observed = client.post(
+            "/calibration/drawing/program-observation",
+            _drawing_program_observation_payload(
+                registration_id=registration_id,
+                command_id=preview["command_id"],
+                preview_overlay=preview["preview_overlay"],
+            ),
+        )
+        assert status_code == 200
+        assert observed["status"] == "ready"
+        calibration = observed["calibration"]
+        assert calibration["model_family"] == "residual_grid_v1"
+        assert calibration["solver_kind"] == "residual_grid_v1"
+        assert calibration["sample_count"] >= 20
+        assert calibration["residual_grid"]["columns"] == 5
+        assert calibration["coverage"]["coverage_fraction"] >= 0.2
+        assert calibration["blockers"] == []
+        assert (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+        assert (
+            tmp_path
+            / "calibration"
+            / "drawing_calibrations"
+            / f"{calibration['model_id']}.json"
+        ).exists()
+
+        status_code, status = client.get("/calibration/drawing/status")
+        assert status_code == 200
+        assert status["status"] == "ready"
+        assert status["calibration"]["latest_observation_id"] == observed["observation_id"]
+
+
+def test_valid_drawing_model_applies_to_sheet_run_and_refuses_stale_registration(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+        status_code, preview = client.post(
+            "/calibration/drawing/program/preview",
+            {"request_id": "uncorrected-sheet-preview"},
+        )
+        assert status_code == 200
+        status_code, observed = client.post(
+            "/calibration/drawing/program-observation",
+            _drawing_program_observation_payload(
+                registration_id=registration_id,
+                command_id=preview["command_id"],
+                preview_overlay=preview["preview_overlay"],
+            ),
+        )
+        assert status_code == 200
+        assert observed["status"] == "ready"
+
+        status_code, corrected_preview = client.post(
+            "/calibration/drawing/program/preview",
+            {
+                "request_id": "corrected-sheet-preview",
+                "apply_drawing_calibration_model": True,
+            },
+        )
+        assert status_code == 200
+        assert corrected_preview["status"] == "ready"
+        assert corrected_preview["drawing_correction"]["status"] == "applied"
+        assert corrected_preview["drawing_correction"]["corrected_point_count"] > 0
+        assert corrected_preview["drawing_correction"]["max_correction_mm"] > 0.1
+
+        status_code, corrected_run = client.post(
+            "/calibration/drawing/program/run",
+            {
+                "request_id": "corrected-sheet-run",
+                "apply_drawing_calibration_model": True,
+                "expected_plan_hash": corrected_preview["plan_hash"],
+            },
+        )
+        assert status_code == 200
+        assert corrected_run["status"] == "completed"
+        assert corrected_run["dry_run"] is True
+        assert corrected_run["drawing_correction"]["status"] == "applied"
+
+        _register_shifted_field(client)
+        status_code, stale_status = client.get("/calibration/drawing/status")
+        assert status_code == 200
+        assert stale_status["status"] == "blocked"
+        assert stale_status["calibration"]["freshness_status"] == "stale"
+        assert stale_status["calibration"]["stale_reasons"]
+
+        status_code, stale_preview = client.post(
+            "/calibration/drawing/program/preview",
+            {
+                "request_id": "stale-corrected-sheet-preview",
+                "apply_drawing_calibration_model": True,
+            },
+        )
+        assert status_code == 400
+        assert stale_preview["status"] == "failed"
+        assert "stale" in stale_preview["error"]
 
 
 def test_motion_model_valid_does_not_unlock_real_drawing(tmp_path: Path) -> None:
@@ -400,6 +531,17 @@ def _register_field(client: _BridgeClient) -> dict[str, Any]:
     return registration
 
 
+def _register_shifted_field(client: _BridgeClient) -> dict[str, Any]:
+    payload = _field_registration_payload()
+    for corner in payload["corners"]:
+        corner["observed_norm"]["x"] += 0.015
+        corner["observed_norm"]["y"] += 0.010
+    status_code, registration = client.post("/paper/register", payload)
+    assert status_code == 200
+    assert registration["status"] == "locked"
+    return registration
+
+
 def _observe_cap(client: _BridgeClient, *, x: float, y: float) -> dict[str, Any]:
     status_code, observed = client.post(
         "/calibration/pen/observe",
@@ -486,6 +628,95 @@ def _drawing_frame_observation_payload(*, registration_id: str) -> dict[str, Any
         "corner_max_residual_mm": 2.4,
         "usable": True,
     }
+
+
+def _drawing_program_observation_payload(
+    *,
+    registration_id: str,
+    command_id: str,
+    preview_overlay: dict[str, Any],
+) -> dict[str, Any]:
+    primitive_rows: dict[str, dict[str, Any]] = {}
+    samples: list[dict[str, Any]] = []
+    for primitive in preview_overlay["primitives"]:
+        primitive_id = primitive["primitive_id"]
+        primitive_kind = _primitive_kind(primitive_id)
+        row = primitive_rows.setdefault(
+            primitive_id,
+            {
+                "primitive_id": primitive_id,
+                "primitive_kind": primitive_kind,
+                "sample_count": 0,
+                "detected_sample_count": 0,
+                "green_pixel_count": 0,
+                "coverage_fraction": 1.0,
+                "rms_residual_mm": 1.8,
+                "p95_residual_mm": 2.4,
+                "max_residual_mm": 2.8,
+            },
+        )
+        for suffix, point in [
+            ("start", primitive["start_paper_mm"]),
+            ("end", primitive["end_paper_mm"]),
+        ]:
+            sample_index = row["sample_count"]
+            observed = _synthetic_observed_drawing_point(point)
+            samples.append(
+                {
+                    "primitive_id": primitive_id,
+                    "sample_index": sample_index,
+                    "expected_mm": point,
+                    "expected_camera_norm": primitive.get(f"{suffix}_camera_norm"),
+                    "observed_mm": observed,
+                    "observed_camera_norm": primitive.get(f"{suffix}_camera_norm"),
+                    "residual_mm": _distance_mm(point, observed),
+                    "detected": True,
+                    "green_pixel_count": 12,
+                }
+            )
+            row["sample_count"] += 1
+            row["detected_sample_count"] += 1
+            row["green_pixel_count"] += 12
+
+    return {
+        "command_id": command_id,
+        "paper_registration_id": registration_id,
+        "camera_id": "plotter-camera",
+        "camera_name": "Plotter Camera",
+        "program_id": "rich-sheet-test",
+        "program_kind": "rich_drawing_calibration_sheet",
+        "primitives": list(primitive_rows.values()),
+        "samples": samples,
+        "sample_count": len(samples),
+        "detected_sample_count": len(samples),
+        "total_green_pixels": 12 * len(samples),
+        "coverage_fraction": 1.0,
+        "rms_residual_mm": 1.8,
+        "p95_residual_mm": 2.4,
+        "max_residual_mm": 2.8,
+        "usable": True,
+    }
+
+
+def _primitive_kind(primitive_id: str) -> str:
+    if ".circle." in primitive_id:
+        return "circle"
+    if ".arc." in primitive_id:
+        return "arc"
+    if ".mark." in primitive_id:
+        return "mark"
+    return "line"
+
+
+def _synthetic_observed_drawing_point(point: dict[str, float]) -> dict[str, float]:
+    return {
+        "x": point["x"] + 2.4 + 0.004 * point["x"] - 0.003 * point["y"],
+        "y": point["y"] - 1.7 + 0.002 * point["x"] + 0.003 * point["y"],
+    }
+
+
+def _distance_mm(left: dict[str, float], right: dict[str, float]) -> float:
+    return ((left["x"] - right["x"]) ** 2 + (left["y"] - right["y"]) ** 2) ** 0.5
 
 
 def _probe_sample_payloads(

@@ -42,11 +42,15 @@ from plotter_vision.calibration.binding import (
     upsert_expected_geometry,
 )
 from plotter_vision.calibration.drawing_model import (
+    DrawingCalibrationActionMetadata,
     DrawingCalibrationModel,
+    DrawingCalibrationObservation,
+    DrawingCalibrationSample,
     DrawingFrameCornerObservation,
     DrawingFrameEdgeObservation,
     DrawingFrameObservation,
     build_drawing_calibration_model,
+    drawing_observation_from_frame_observation,
 )
 from plotter_vision.calibration.probe_evidence import (
     VisualProbeCapSnapshot,
@@ -71,12 +75,14 @@ from plotter_vision.calibration.vision_model import (
     PaperPointNorm,
 )
 from plotter_vision.bridge.planner import (
+    DrawingCorrectionSummary,
     ShapeExecutionPlan,
     ShapeExecutionRequest,
     PlannedCommand,
     PolygonDrawPlan,
     PolygonDrawPlanSummary,
     PolygonDrawRequest,
+    PlannedTraceStep,
     build_shape_execution_plan,
     build_polygon_draw_plan,
 )
@@ -100,6 +106,7 @@ from plotter_vision.drawing import (
     build_paper_contour_program_from_luminance_raster,
     build_paper_program_from_luminance_raster,
     build_capability_test_definition,
+    build_rich_drawing_calibration_program,
 )
 from plotter_vision.drawing.pipeline import (
     PreviewOverlay,
@@ -512,6 +519,52 @@ class DrawingFrameObservationRequest(TraceContextFields):
     request_id: str | None = None
 
 
+class DrawingProgramSampleObservationRequest(BaseModel):
+    primitive_id: str
+    sample_index: int
+    expected_mm: PaperPointMM
+    expected_camera_norm: CameraPointNorm | None = None
+    observed_mm: PaperPointMM | None = None
+    observed_camera_norm: CameraPointNorm | None = None
+    residual_mm: float | None = None
+    detected: bool = False
+    green_pixel_count: int = 0
+
+
+class DrawingProgramPrimitiveObservationRequest(BaseModel):
+    primitive_id: str
+    primitive_kind: str
+    sample_count: int = 0
+    detected_sample_count: int = 0
+    green_pixel_count: int = 0
+    coverage_fraction: float = 0.0
+    rms_residual_mm: float | None = None
+    p95_residual_mm: float | None = None
+    max_residual_mm: float | None = None
+
+
+class DrawingProgramObservationRequest(TraceContextFields):
+    schema_version: int = 1
+    command_id: str | None = None
+    paper_registration_id: str | None = None
+    camera_id: str | None = None
+    camera_name: str | None = None
+    program_id: str
+    program_kind: str
+    expected_frame_corners_mm: list[PaperPointMM] | None = None
+    primitives: list[DrawingProgramPrimitiveObservationRequest] = Field(default_factory=list)
+    samples: list[DrawingProgramSampleObservationRequest] = Field(default_factory=list)
+    sample_count: int = 0
+    detected_sample_count: int = 0
+    total_green_pixels: int = 0
+    coverage_fraction: float = 0.0
+    rms_residual_mm: float | None = None
+    p95_residual_mm: float | None = None
+    max_residual_mm: float | None = None
+    usable: bool = False
+    request_id: str | None = None
+
+
 class DrawingCalibrationResponse(BaseModel):
     status: str
     dry_run: bool
@@ -519,6 +572,16 @@ class DrawingCalibrationResponse(BaseModel):
     calibration_file: str = ""
     observation_id: str | None = None
     error: str | None = None
+
+
+class DrawingCalibrationProgramRequest(TraceContextFields):
+    include_homing: bool = False
+    draw_feed_mm_min: float = 180.0
+    travel_feed_mm_min: float = 500.0
+    max_segment_mm: float = 12.0
+    apply_drawing_calibration_model: bool = False
+    expected_plan_hash: str | None = None
+    request_id: str | None = None
 
 
 class VisualProbeSampleObservationRequest(TraceContextFields):
@@ -681,6 +744,8 @@ class PolygonDrawResponse(BaseModel):
     status: str
     dry_run: bool
     planned_commands: list[str]
+    planned_trace: list[PlannedTraceStep] = Field(default_factory=list)
+    drawing_correction: DrawingCorrectionSummary | None = None
     simulation: SimulatedPath | None = None
     summary: PolygonDrawPlanSummary | None = None
     preview_overlay: PreviewOverlay | None = None
@@ -688,6 +753,12 @@ class PolygonDrawResponse(BaseModel):
     controller_transcript: str | None = None
     machine_status: MachineStatusResponse | None = None
     error: str | None = None
+
+
+class DrawingCalibrationProgramResponse(PolygonDrawResponse):
+    preview_only: bool = False
+    program_kind: str = "rich_drawing_calibration_sheet"
+    plan_hash: str = ""
 
 
 class FaceRasterDrawRequest(TraceContextFields):
@@ -1605,11 +1676,17 @@ class PlotterBridge:
 
         try:
             machine = self._load_machine_config()
+            drawing_model = (
+                self._drawing_calibration_for_planning()
+                if request.apply_drawing_calibration_model
+                else None
+            )
             plan = build_polygon_draw_plan(
                 request=request,
                 machine=machine,
                 safety=SafetyState(dry_run=True),
                 command_id=command_id,
+                drawing_calibration_model=drawing_model,
             )
             preview_overlay = self._preview_overlay_for_simulation(
                 command_id=command_id,
@@ -1633,6 +1710,8 @@ class PlotterBridge:
                 status="ready",
                 dry_run=True,
                 planned_commands=plan.command_strings,
+                planned_trace=plan.planned_trace,
+                drawing_correction=plan.drawing_correction,
                 simulation=plan.simulation,
                 summary=plan.summary,
                 preview_overlay=preview_overlay,
@@ -1737,6 +1816,163 @@ class PlotterBridge:
                 error=str(exc),
             )
 
+    def preview_drawing_calibration_program(
+        self,
+        request: DrawingCalibrationProgramRequest,
+    ) -> DrawingCalibrationProgramResponse:
+        command_id = request.request_id or request.trace_id or f"drawing-cal-preview-{uuid.uuid4().hex[:12]}"
+        try:
+            machine = self._load_machine_config()
+            registration = self._load_latest_paper_registration()
+            drawing_model = (
+                self._drawing_calibration_for_planning()
+                if request.apply_drawing_calibration_model
+                else None
+            )
+            plan = self._build_drawing_calibration_program_plan(
+                request=request,
+                machine=machine,
+                registration=registration,
+                safety=SafetyState(dry_run=True),
+                command_id=command_id,
+                drawing_model=drawing_model,
+            )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
+            plan_hash = _planned_command_hash(plan.command_strings)
+            self.event_log.emit(
+                "calibration.drawing_program_preview_ready",
+                command_id=command_id,
+                status="ready",
+                payload={
+                    "program_kind": "rich_drawing_calibration_sheet",
+                    "plan_hash": plan_hash,
+                    "draw_segment_count": plan.summary.draw_segment_count,
+                    "drawing_correction_status": (
+                        plan.drawing_correction.status if plan.drawing_correction else "skipped"
+                    ),
+                    "preview_only": True,
+                },
+            )
+            return self._drawing_calibration_program_response(
+                plan=plan,
+                status="ready",
+                preview_only=True,
+                plan_hash=plan_hash,
+                preview_overlay=preview_overlay,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_program_preview_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc), "preview_only": True},
+            )
+            return DrawingCalibrationProgramResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=True,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=None,
+                error=str(exc),
+                preview_only=True,
+            )
+
+    def run_drawing_calibration_program(
+        self,
+        request: DrawingCalibrationProgramRequest,
+    ) -> DrawingCalibrationProgramResponse:
+        command_id = request.request_id or request.trace_id or f"drawing-cal-run-{uuid.uuid4().hex[:12]}"
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        try:
+            machine = self._load_machine_config()
+            self._require_axis_model_trusted(machine)
+            registration = self._load_latest_paper_registration()
+            drawing_model = (
+                self._drawing_calibration_for_planning()
+                if request.apply_drawing_calibration_model
+                else None
+            )
+            plan = self._build_drawing_calibration_program_plan(
+                request=request,
+                machine=machine,
+                registration=registration,
+                safety=self._safety_state(),
+                command_id=command_id,
+                drawing_model=drawing_model,
+                visual_position_trusted=self._visual_ready_to_plot(),
+            )
+            plan_hash = _planned_command_hash(plan.command_strings)
+            if request.expected_plan_hash and request.expected_plan_hash != plan_hash:
+                raise MotionSafetyError(
+                    "Drawing calibration program changed after preview; preview it again."
+                )
+            preview_overlay = self._preview_overlay_for_simulation(
+                command_id=command_id,
+                simulation=plan.simulation,
+                machine=machine,
+            )
+            machine_response = self._run_machine_action(
+                action="drawing_calibration_program",
+                command_id=command_id,
+                planned_commands=plan.planned_commands,
+                transcript_path=transcript_path,
+            )
+            self.event_log.emit(
+                (
+                    "calibration.drawing_program_completed"
+                    if machine_response.status == "completed"
+                    else "calibration.drawing_program_run_failed"
+                ),
+                command_id=command_id,
+                status=machine_response.status,
+                payload={
+                    "program_kind": "rich_drawing_calibration_sheet",
+                    "plan_hash": plan_hash,
+                    "dry_run": machine_response.dry_run,
+                    "drawing_correction_status": (
+                        plan.drawing_correction.status if plan.drawing_correction else "skipped"
+                    ),
+                    "error": machine_response.error,
+                },
+            )
+            return self._drawing_calibration_program_response(
+                plan=plan,
+                status=machine_response.status,
+                preview_only=False,
+                plan_hash=plan_hash,
+                preview_overlay=preview_overlay,
+                machine_response=machine_response,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_program_run_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationProgramResponse(
+                command_id=command_id,
+                status="failed",
+                dry_run=self.config.dry_run,
+                planned_commands=[],
+                simulation=locals().get("plan").simulation if "plan" in locals() else None,
+                summary=locals().get("plan").summary if "plan" in locals() else None,
+                preview_overlay=locals().get("preview_overlay"),
+                event_log=str(self.config.event_log_path),
+                controller_transcript=str(transcript_path) if transcript_path.exists() else None,
+                error=str(exc),
+                preview_only=False,
+                plan_hash=locals().get("plan_hash", ""),
+            )
+
     def draw_program(self, request: PolygonDrawRequest) -> PolygonDrawResponse:
         command_id = request.request_id or request.trace_id or f"draw-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
@@ -1747,11 +1983,17 @@ class PlotterBridge:
             draw_request = request
             if self._visual_ready_to_plot():
                 draw_request = request.model_copy(update={"visual_position_trusted": True})
+            drawing_model = (
+                self._drawing_calibration_for_planning()
+                if draw_request.apply_drawing_calibration_model
+                else None
+            )
             plan = build_polygon_draw_plan(
                 request=draw_request,
                 machine=machine,
                 safety=self._safety_state(),
                 command_id=command_id,
+                drawing_calibration_model=drawing_model,
             )
             preview_overlay = self._preview_overlay_for_simulation(
                 command_id=command_id,
@@ -2499,8 +2741,20 @@ class PlotterBridge:
         try:
             calibration = self._load_latest_drawing_calibration()
             registration = self._load_latest_paper_registration()
-            if calibration.paper_registration_id != registration.registration_id:
-                raise ValueError("Drawing calibration is stale for the current Drawing Border.")
+            stale_reasons = calibration.stale_reasons_for(
+                paper_registration_id=registration.registration_id,
+                camera_id=registration.camera_id,
+            )
+            if stale_reasons:
+                blockers = list(dict.fromkeys([*calibration.blockers, *stale_reasons]))
+                calibration = calibration.model_copy(
+                    update={
+                        "validation_status": "blocked",
+                        "freshness_status": "stale",
+                        "stale_reasons": stale_reasons,
+                        "blockers": blockers,
+                    }
+                )
             return self._drawing_calibration_response(calibration)
         except Exception as exc:
             return DrawingCalibrationResponse(
@@ -2543,14 +2797,14 @@ class PlotterBridge:
                 usable=request.usable,
             )
             previous = self._load_latest_drawing_calibration_or_none()
-            observations: list[DrawingFrameObservation] = []
+            observations: list[DrawingCalibrationObservation] = []
             if (
                 previous is not None
                 and previous.paper_registration_id == registration.registration_id
                 and (previous.camera_id in {None, observation.camera_id} or observation.camera_id is None)
             ):
-                observations.extend(previous.frame_observations)
-            observations.append(observation)
+                observations.extend(previous.observations)
+            observations.append(drawing_observation_from_frame_observation(observation))
             observations = observations[-24:]
 
             calibration = build_drawing_calibration_model(
@@ -2588,6 +2842,80 @@ class PlotterBridge:
         except Exception as exc:
             self.event_log.emit(
                 "calibration.drawing_frame_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def observe_drawing_program(
+        self,
+        request: DrawingProgramObservationRequest,
+    ) -> DrawingCalibrationResponse:
+        try:
+            registration = self._load_latest_paper_registration()
+            if (
+                request.paper_registration_id is not None
+                and request.paper_registration_id != registration.registration_id
+            ):
+                raise ValueError(
+                    "Drawing program observation paper_registration_id does not match the current Drawing Border."
+                )
+
+            observation = _drawing_program_observation_from_request(
+                request,
+                registration=registration,
+            )
+            previous = self._load_latest_drawing_calibration_or_none()
+            observations: list[DrawingCalibrationObservation] = []
+            if (
+                previous is not None
+                and previous.paper_registration_id == registration.registration_id
+                and (previous.camera_id in {None, observation.camera_id} or observation.camera_id is None)
+            ):
+                observations.extend(previous.observations)
+            observations.append(observation)
+            observations = observations[-24:]
+
+            calibration = build_drawing_calibration_model(
+                observations=observations,
+                paper_registration_id=registration.registration_id,
+                camera_id=observation.camera_id,
+                camera_name=observation.camera_name,
+                field_width_mm=registration.paper_size_mm.width,
+                field_height_mm=registration.paper_size_mm.height,
+            )
+            self._save_drawing_calibration(calibration)
+            self.event_log.emit(
+                "calibration.drawing_program_observed",
+                command_id=observation.command_id or observation.observation_id,
+                status=calibration.validation_status,
+                payload={
+                    "observation_id": observation.observation_id,
+                    "paper_registration_id": registration.registration_id,
+                    "program_id": request.program_id,
+                    "program_kind": request.program_kind,
+                    "sample_count": request.sample_count,
+                    "detected_sample_count": request.detected_sample_count,
+                    "usable": request.usable,
+                    "solver_kind": calibration.solver_kind,
+                    "model_family": calibration.model_family,
+                    "validation_status": calibration.validation_status,
+                    "blockers": calibration.blockers,
+                    "calibration_file": str(self._latest_drawing_calibration_path()),
+                },
+            )
+            return self._drawing_calibration_response(
+                calibration,
+                observation_id=observation.observation_id,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_program_failed",
                 status="failed",
                 payload={"error": str(exc)},
             )
@@ -4629,6 +4957,20 @@ class PlotterBridge:
         except Exception:
             return None
 
+    def _drawing_calibration_for_planning(self) -> DrawingCalibrationModel:
+        registration = self._load_latest_paper_registration()
+        calibration = self._load_latest_drawing_calibration()
+        stale_reasons = calibration.stale_reasons_for(
+            paper_registration_id=registration.registration_id,
+            camera_id=registration.camera_id,
+        )
+        if stale_reasons:
+            raise MotionSafetyError("Drawing calibration model is stale: " + "; ".join(stale_reasons))
+        if not calibration.ready:
+            blockers = calibration.blockers or [calibration.validation_status]
+            raise MotionSafetyError("Drawing calibration model is not ready: " + "; ".join(blockers))
+        return calibration
+
     def _policy_safe_zone_or_none(
         self,
         safe_zone: DrawingSafeZone | None,
@@ -5374,6 +5716,71 @@ class PlotterBridge:
             controller_transcript=str(transcript_path) if transcript_path else None,
         )
 
+    def _build_drawing_calibration_program_plan(
+        self,
+        *,
+        request: DrawingCalibrationProgramRequest,
+        machine: MachineConfig,
+        registration: PaperFrameRegistration,
+        safety: SafetyState,
+        command_id: str,
+        drawing_model: DrawingCalibrationModel | None,
+        visual_position_trusted: bool = False,
+    ) -> PolygonDrawPlan:
+        return build_polygon_draw_plan(
+            request=PolygonDrawRequest(
+                program=build_rich_drawing_calibration_program(),
+                frame=DrawingFrameMM(
+                    origin_x_mm=0.0,
+                    origin_y_mm=0.0,
+                    width_mm=registration.paper_size_mm.width,
+                    height_mm=registration.paper_size_mm.height,
+                ),
+                include_homing=request.include_homing,
+                visual_position_trusted=visual_position_trusted,
+                apply_drawing_calibration_model=request.apply_drawing_calibration_model,
+                draw_feed_mm_min=request.draw_feed_mm_min,
+                travel_feed_mm_min=request.travel_feed_mm_min,
+                max_segment_mm=request.max_segment_mm,
+                request_id=command_id,
+            ),
+            machine=machine,
+            safety=safety,
+            command_id=command_id,
+            drawing_calibration_model=drawing_model,
+        )
+
+    def _drawing_calibration_program_response(
+        self,
+        *,
+        plan: PolygonDrawPlan,
+        status: str,
+        preview_only: bool,
+        plan_hash: str,
+        preview_overlay: PreviewOverlay | None = None,
+        machine_response: MachineCommandResponse | None = None,
+    ) -> DrawingCalibrationProgramResponse:
+        return DrawingCalibrationProgramResponse(
+            command_id=plan.command_id,
+            status=status,
+            dry_run=plan.dry_run,
+            preview_only=preview_only,
+            program_kind="rich_drawing_calibration_sheet",
+            plan_hash=plan_hash,
+            planned_commands=plan.command_strings,
+            planned_trace=plan.planned_trace,
+            drawing_correction=plan.drawing_correction,
+            simulation=plan.simulation,
+            summary=plan.summary,
+            preview_overlay=preview_overlay,
+            event_log=str(self.config.event_log_path),
+            controller_transcript=(
+                machine_response.controller_transcript if machine_response is not None else None
+            ),
+            machine_status=machine_response.machine_status if machine_response is not None else None,
+            error=machine_response.error if machine_response is not None else None,
+        )
+
     def _draw_program_response(
         self,
         *,
@@ -5386,6 +5793,8 @@ class PlotterBridge:
             status=machine_response.status,
             dry_run=plan.dry_run,
             planned_commands=plan.command_strings,
+            planned_trace=plan.planned_trace,
+            drawing_correction=plan.drawing_correction,
             simulation=plan.simulation,
             summary=plan.summary,
             preview_overlay=preview_overlay,
@@ -5715,7 +6124,10 @@ def _preview_overlay_from_simulation(
             )
         primitives.append(
             PreviewOverlayPrimitive(
-                primitive_id=f"{command_id}-seg-{index:04d}",
+                primitive_id=segment.primitive_id or f"{command_id}-seg-{index:04d}",
+                stroke_id=segment.stroke_id,
+                semantic_role=segment.semantic_role,
+                source_role=segment.source_role,
                 command_id=command_id,
                 segment_index=index,
                 start_paper_mm=start_paper,
@@ -5773,6 +6185,84 @@ def _zero_near(value: float) -> float:
 def _planned_command_hash(commands: list[str]) -> str:
     digest = hashlib.sha256("\n".join(commands).encode("utf-8")).hexdigest()
     return digest[:16]
+
+
+def _drawing_program_observation_from_request(
+    request: DrawingProgramObservationRequest,
+    *,
+    registration: PaperFrameRegistration,
+) -> DrawingCalibrationObservation:
+    primitive_kinds = {
+        primitive.primitive_id: primitive.primitive_kind
+        for primitive in request.primitives
+    }
+    action = DrawingCalibrationActionMetadata(
+        action_id=request.program_id,
+        command_id=request.command_id,
+        action_kind="frame" if request.program_kind == "setup_field_frame" else "stroke",
+        features={
+            f"program_kind:{request.program_kind}": 1.0,
+            "detected_sample_fraction": (
+                request.detected_sample_count / request.sample_count
+                if request.sample_count > 0
+                else 0.0
+            ),
+        },
+    )
+    samples: list[DrawingCalibrationSample] = []
+    for sample in request.samples:
+        if not sample.detected or sample.observed_mm is None:
+            continue
+        primitive_kind = primitive_kinds.get(sample.primitive_id, "dense_stroke")
+        sample_kind = _drawing_sample_kind_for_primitive(primitive_kind)
+        samples.append(
+            DrawingCalibrationSample(
+                sample_id=f"{request.program_id}-{sample.primitive_id}-{sample.sample_index}",
+                sample_kind=sample_kind,
+                expected_mm=sample.expected_mm,
+                observed_mm=sample.observed_mm,
+                source_observation_id=None,
+                geometry_id=sample.primitive_id,
+                confidence=1.0,
+                action_metadata=action,
+                action_features={
+                    f"primitive_kind:{primitive_kind}": 1.0,
+                    f"primitive_id:{sample.primitive_id}": 1.0,
+                },
+            )
+        )
+
+    observation_id = f"drawing-program-{uuid.uuid4().hex[:12]}"
+    for sample in samples:
+        sample.source_observation_id = observation_id
+
+    return DrawingCalibrationObservation(
+        observation_id=observation_id,
+        command_id=request.command_id,
+        paper_registration_id=registration.registration_id,
+        camera_id=request.camera_id or registration.camera_id,
+        camera_name=request.camera_name or registration.camera_name,
+        field_width_mm=registration.paper_size_mm.width,
+        field_height_mm=registration.paper_size_mm.height,
+        observation_kind="frame" if request.program_kind == "setup_field_frame" else "mixed",
+        action_metadata=action,
+        samples=samples,
+        usable=request.usable and len(samples) >= 4,
+        blockers=[] if request.usable else ["Drawing program observation was not marked usable."],
+    )
+
+
+def _drawing_sample_kind_for_primitive(primitive_kind: str) -> str:
+    normalized = primitive_kind.strip().lower()
+    if normalized == "mark":
+        return "mark"
+    if normalized == "circle":
+        return "circle"
+    if normalized == "arc":
+        return "arc"
+    if normalized in {"line", "dense_stroke", "stroke"}:
+        return "dense_edge_sample"
+    return "stroke_endpoint"
 
 
 def _command_can_move(command: str) -> bool:
@@ -5998,6 +6488,21 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             VisualBindingSolveRequest,
             bridge.solve_visual_binding,
             lambda response: getattr(response, "status", "") in {"ready", "validated", "collecting", "blocked"},
+        ),
+        "/calibration/drawing/program/preview": PostRoute(
+            DrawingCalibrationProgramRequest,
+            bridge.preview_drawing_calibration_program,
+            lambda response: getattr(response, "status", "") == "ready",
+        ),
+        "/calibration/drawing/program/run": PostRoute(
+            DrawingCalibrationProgramRequest,
+            bridge.run_drawing_calibration_program,
+            lambda response: getattr(response, "status", "") == "completed",
+        ),
+        "/calibration/drawing/program-observation": PostRoute(
+            DrawingProgramObservationRequest,
+            bridge.observe_drawing_program,
+            lambda response: getattr(response, "status", "") in {"ready", "needs_more_evidence", "collecting", "blocked"},
         ),
         "/calibration/drawing/frame-observation": PostRoute(
             DrawingFrameObservationRequest,

@@ -1027,6 +1027,55 @@ struct BridgeDrawingFrameObservationRequest: Encodable {
     let parentSpanId: String? = nil
 }
 
+struct BridgeDrawingProgramSampleObservationRequest: Encodable {
+    let primitiveId: String
+    let sampleIndex: Int
+    let expectedMm: PaperPointMmSnapshot
+    let expectedCameraNorm: NormPoint?
+    let observedMm: PaperPointMmSnapshot?
+    let observedCameraNorm: NormPoint?
+    let residualMm: Double?
+    let detected: Bool
+    let greenPixelCount: Int
+}
+
+struct BridgeDrawingProgramPrimitiveObservationRequest: Encodable {
+    let primitiveId: String
+    let primitiveKind: String
+    let sampleCount: Int
+    let detectedSampleCount: Int
+    let greenPixelCount: Int
+    let coverageFraction: Double
+    let rmsResidualMm: Double?
+    let p95ResidualMm: Double?
+    let maxResidualMm: Double?
+}
+
+struct BridgeDrawingProgramObservationRequest: Encodable {
+    let schemaVersion: Int = 1
+    let commandId: String?
+    let paperRegistrationId: String?
+    let cameraId: String?
+    let cameraName: String?
+    let programId: String
+    let programKind: String
+    let expectedFrameCornersMm: [PaperPointMmSnapshot]?
+    let primitives: [BridgeDrawingProgramPrimitiveObservationRequest]
+    let samples: [BridgeDrawingProgramSampleObservationRequest]
+    let sampleCount: Int
+    let detectedSampleCount: Int
+    let totalGreenPixels: Int
+    let coverageFraction: Double
+    let rmsResidualMm: Double?
+    let p95ResidualMm: Double?
+    let maxResidualMm: Double?
+    let usable: Bool
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
 struct BridgeDrawingCalibrationResponse: Decodable {
     let status: String
     let dryRun: Bool
@@ -1038,6 +1087,7 @@ struct BridgeDrawingCalibrationResponse: Decodable {
 
 struct BridgeDrawingCalibrationModel: Decodable, Equatable {
     let modelId: String
+    let modelVersion: String?
     let paperRegistrationId: String
     let cameraId: String?
     let cameraName: String?
@@ -1045,21 +1095,77 @@ struct BridgeDrawingCalibrationModel: Decodable, Equatable {
     let fieldHeightMm: Double
     let modelFamily: String
     let solverKind: String
+    let globalModelKind: String?
     let validationStatus: String
     let observationCount: Int
     let usableObservationCount: Int
+    let gridControlCount: Int?
+    let sampleCount: Int?
+    let fitSampleCount: Int?
+    let acceptedFitSampleCount: Int?
+    let rejectedSampleCount: Int?
+    let holdoutSampleCount: Int?
+    let coverageFraction: Double?
     let latestObservationId: String?
     let expectedToObserved: HomographySnapshot?
     let observedToExpected: HomographySnapshot?
+    let residualGrid: BridgeDrawingResidualGrid?
+    let coverage: BridgeDrawingCalibrationCoverage?
+    let fitMetrics: BridgeDrawingCalibrationMetrics?
+    let holdoutMetrics: BridgeDrawingCalibrationMetrics?
     let rmsResidualMm: Double?
+    let p95ResidualMm: Double?
     let maxResidualMm: Double?
     let cornerRmsResidualMm: Double?
     let cornerMaxResidualMm: Double?
+    let holdoutRmsResidualMm: Double?
+    let holdoutMaxResidualMm: Double?
     let blockers: [String]
+    let staleReasons: [String]?
 
     var statusLabel: String {
         validationStatus.uppercased().replacingOccurrences(of: "_", with: " ")
     }
+}
+
+struct BridgeDrawingResidualGrid: Decodable, Equatable {
+    let modelVersion: String?
+    let columns: Int
+    let rows: Int
+    let coverageRadiusMm: Double?
+    let uncertaintyLimitMm: Double?
+    let maxCorrectionMm: Double?
+    let nodes: [BridgeDrawingResidualGridNode]
+}
+
+struct BridgeDrawingResidualGridNode: Decodable, Equatable {
+    let indexX: Int
+    let indexY: Int
+    let xMm: Double
+    let yMm: Double
+    let residualXMm: Double
+    let residualYMm: Double
+    let sourceSampleCount: Int
+    let nearestSampleDistanceMm: Double?
+    let uncertaintyMm: Double
+}
+
+struct BridgeDrawingCalibrationCoverage: Decodable, Equatable {
+    let sampleCount: Int
+    let acceptedSampleCount: Int
+    let holdoutSampleCount: Int
+    let totalNodeCount: Int
+    let coveredNodeCount: Int
+    let coverageFraction: Double
+    let coverageRadiusMm: Double?
+    let maxNodeUncertaintyMm: Double?
+}
+
+struct BridgeDrawingCalibrationMetrics: Decodable, Equatable {
+    let sampleCount: Int
+    let rmsMm: Double?
+    let p95Mm: Double?
+    let maxMm: Double?
 }
 
 struct BridgeVisualProbeSampleResponse: Decodable {
@@ -1321,6 +1427,12 @@ final class PlotterBridgeClient {
         _ request: BridgeDrawingFrameObservationRequest
     ) async throws -> BridgeDrawingCalibrationResponse {
         try await post(path: "calibration/drawing/frame-observation", request: request)
+    }
+
+    func observeDrawingProgram(
+        _ request: BridgeDrawingProgramObservationRequest
+    ) async throws -> BridgeDrawingCalibrationResponse {
+        try await post(path: "calibration/drawing/program-observation", request: request)
     }
 
     func observeVisualProbeSample(_ request: BridgeVisualProbeSampleRequest) async throws -> BridgeVisualProbeSampleResponse {

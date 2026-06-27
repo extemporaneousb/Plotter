@@ -775,6 +775,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     frame_inspection = _read(SWIFT_DIR / "FrameInkInspection.swift")
     bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    camera_model = _read(SWIFT_DIR / "CameraModel.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert "bridge.showSetupFieldFrameExpectedPath(corners: corners)" in frame_drawing
     assert "model.machineDelta(forPaperDx: paperDx, paperDy: paperDy)" in frame_drawing
@@ -789,17 +790,41 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert '"setup_field_frame_ink_geometry_weak"' in frame_drawing
     assert '"setup_field_frame_ink_geometry_unavailable"' in frame_drawing
     assert '"ink_rms_residual_mm"' in frame_drawing
+    assert '"ink_sample_count"' in frame_drawing
+    assert '"program_sample_count"' in frame_drawing
     assert 'let prefix = "edge_\\(edge.edgeIndex)"' in frame_drawing
     assert '"\\(prefix)_detected_samples"' in frame_drawing
+    assert "enum InkProgramInspector" in frame_inspection
+    assert "enum InkProgramPrimitiveKind" in frame_inspection
+    assert "case mark" in frame_inspection
+    assert "case line" in frame_inspection
+    assert "case circle" in frame_inspection
+    assert "case arc" in frame_inspection
+    assert "case denseStroke = \"dense_stroke\"" in frame_inspection
+    assert "primitiveId: \"frame-edge-\\(edgeIndex)\"" in frame_inspection
+    assert "observedSamples: [InkProgramObservedSample]" in frame_inspection
+    assert "p95ResidualMm" in frame_inspection
     assert "enum GreenFrameInkInspector" in frame_inspection
     assert "static func inspect(" in frame_inspection
     assert "isGreenFramePixel" in frame_inspection
     assert "fitLine(points: observedPaperPoints" in frame_inspection
     assert "cornerRmsResidualMm" in frame_inspection
+    assert "func inspectInkProgram(" in camera_model
     assert "func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot])" in bridge_model
     assert '"setup_field_frame_expected_path_ready"' in bridge_model
+    assert "@Published var predictedPathSegments: [ExpectedPathSegment] = []" in bridge_model
+    assert '@Published var predictedPathLabel = "Model-corrected frame"' in bridge_model
+    assert "if !predictedPathSegments.isEmpty" in bridge_model
+    assert "func observeDrawingProgram(" in bridge_client
+    assert "BridgeDrawingProgramObservationRequest" in bridge_client
+    assert "BridgeDrawingProgramSampleObservationRequest" in bridge_client
+    assert 'post(path: "calibration/drawing/program-observation"' in bridge_client
+    assert "drawing_program_observation_recorded" in bridge_model
+    assert "fallback_route\": \"calibration/drawing/frame-observation\"" in bridge_model
     assert "drawDrawingBorder" in overlay
     assert "DRAWING BORDER %.0f x %.0f mm" in overlay
+    assert "drawPredictedPath" in overlay
+    assert "predictedPathLabel" in overlay
     assert "drawFieldCoordinateGrid" not in overlay
     assert "majorPaperGridStep" not in overlay
     assert "showGrid" not in overlay
@@ -849,6 +874,45 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "correct perspective" not in readme + contract + plan
 
 
+def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> None:
+    readme = _read(ROOT / "README.md")
+    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
+    plan = _read(ROOT / "docs" / "REPOSITORY_PLAN.md")
+    server = _read(ROOT / "plotter_vision" / "bridge" / "server.py")
+    planner = _read(ROOT / "plotter_vision" / "bridge" / "planner.py")
+    capabilities = _read(ROOT / "plotter_vision" / "drawing" / "capabilities.py")
+    drawing_model = _read(ROOT / "plotter_vision" / "calibration" / "drawing_model.py")
+    bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    plan_flat = " ".join(plan.split())
+
+    assert "multi_shape_coordinate_sheet" in capabilities
+    assert "program=definition.program" in server
+    assert "build_polygon_draw_plan" in server
+    assert "DrawingProgram" in planner
+    assert "DrawingCalibrationObservation" in drawing_model
+    assert "residual_grid_v1" in drawing_model
+    assert "apply_drawing_calibration_model" in planner
+    assert "/calibration/drawing/program-observation" in server
+    assert "/calibration/drawing/program/preview" in server
+    assert "/calibration/drawing/program/run" in server
+    assert "BridgeDrawingCalibrationModel" in bridge_client
+    assert "latestDrawingCalibration" in bridge_model
+    assert "wizardDrawingCalibrationDetail" in content
+
+    docs = readme + contract + plan
+    assert "multi_shape_coordinate_sheet" in docs
+    assert "residual_grid_v1" in docs
+    assert "GET /calibration/drawing/status" in readme
+    assert "latest_drawing_calibration.json" in docs
+    assert "runtime hits outside tests" in plan
+    assert "model-aware drawing planner stage" in plan_flat
+    assert "Do not add SVG import" in contract
+    assert "Swift may show" in contract
+    assert "Python owns persistence, trust" in plan_flat
+
+
 def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
@@ -863,8 +927,25 @@ def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
     assert 'static let operatorLog = "operator-log"' in support
     assert "appendOperatorLog" in workspace
     assert "@Published var setupLogExpanded" in workspace
+    assert "@Published var setupModelEstimatesExpanded" in workspace
     assert "SetupLogDisclosure(workspace: workspace)" in setup_panel
+    assert "SetupModelEstimatesDisclosure(workspace: workspace, bridge: bridge)" in setup_panel
     assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' in setup_panel
+    assert 'Label("Model Estimates", systemImage: "function")' in setup_panel
+    for label in [
+        "Paper homography",
+        "Motion 2x2",
+        "Drawing model family",
+        "Solver kind",
+        "Grid/control count",
+        "Sample count",
+        "Coverage",
+        "RMS/p95/max",
+        "Holdout error",
+        "Blockers",
+        "Model id",
+    ]:
+        assert label in setup_panel
     assert 'label: "Log"' not in content
     assert "OperatorWindowID.operatorLog" not in content
     assert "workspace.appendOperatorLog(newValue" in content

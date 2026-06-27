@@ -72,12 +72,13 @@ The app-first drawing flow is:
    user-defined visual drawing field.
 7. Treat field registration, cap localization, and a valid relative motion model as the active setup
    authority. During setup, the cap and tip are colocated until explicit binding evidence proves
-   otherwise. Cap-to-tip offset, ink observations, and actual drawing are future work.
+   otherwise. Cap-to-tip offset and general drawing trust remain future work.
    The separate setup `Calibrate Drawing` action may draw an inset border after validation. It must
    compare the expected frame to observed green stroke geometry when the plotter camera can see it,
    overlay both `Expected frame` and `Observed frame`, and persist edge/corner ink residuals as a
-   drawing-calibration artifact. The first model may be a frame homography plus residual field; it
-   must not claim full nonlinear drawing correction until enough frame or mark evidence exists.
+   drawing-calibration artifact. Frame observations are adapted into the generic drawing-observation
+   schema and solved as `residual_grid_v1`; the result must not claim arbitrary drawing trust until
+   enough frame or mark evidence exists.
 8. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
    programs through:
 
@@ -104,6 +105,16 @@ calibration and execution authority. Current segmentation and motion detection o
 `CameraModel` on the full camera frame when explicitly enabled for visual inspection. They are off
 by default, while green-cap tracking stays active for Visual Field Setup. Processing ROI is a
 separate Swift observation feature if it is added later.
+
+Drawing calibration sheets are `DrawingProgram`s. The current sheet contract is the
+`multi_shape_coordinate_sheet` capability program generated in Python and lowered through the
+planner, simulator, and projected preview before any execution. Do not add SVG import, a separate
+plotter-video grid, or a Swift-only calibration drawing path. A sheet-derived model may use
+`model_family: residual_grid_v1` only when the bridge persists observations from the planned sheet,
+the command/preview hash matches, the evidence belongs to the current Drawing Border registration
+and camera, and residual coverage is sufficient for planner use. Swift may show the current model
+family, solver kind, residuals, observation counts, blockers, and artifact path, but Python decides
+model persistence and planner authority.
 
 ## Core entities
 
@@ -157,29 +168,35 @@ A serializable config object:
 
 Use conservative defaults. Make it obvious when config is only a placeholder.
 
-### CalibrationArtifact
+### DrawingCalibrationModel
 
-A saved JSON artifact from manual or camera-assisted calibration:
+A saved JSON artifact for drawing calibration. Setup-frame and sheet-derived correction use the
+`residual_grid_v1` family and remain blocked until observations are fresh and sufficient for the
+current Drawing Border and camera:
 
 ```json
 {
   "schema_version": 1,
-  "created_at": "...",
-  "controller_snapshot_id": "...",
-  "machine_config_id": "...",
-  "method": "human_affine",
-  "input_space": "calibration_board_or_image_or_canvas",
-  "machine_space": "mm",
-  "transform": {
-    "type": "affine_2d",
-    "matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+  "artifact_type": "drawing_calibration_model",
+  "model_id": "drawing-cal-...",
+  "updated_at": "...",
+  "paper_registration_id": "...",
+  "camera_id": "plotter-camera",
+  "field_width_mm": 200.0,
+  "field_height_mm": 150.0,
+  "model_family": "residual_grid_v1",
+  "source_program_kind": "multi_shape_coordinate_sheet",
+  "source_plan_hash": "...",
+  "observation_count": 0,
+  "usable_observation_count": 0,
+  "grid": {
+    "coordinate_space": "paper_mm",
+    "nodes": []
   },
-  "residuals": {
-    "rmse_mm": null,
-    "max_error_mm": null
-  },
-  "validated": false,
-  "notes": []
+  "rms_residual_mm": null,
+  "max_residual_mm": null,
+  "validation_status": "needs_more_evidence",
+  "blockers": []
 }
 ```
 

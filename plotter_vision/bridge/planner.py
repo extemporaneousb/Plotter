@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from plotter_vision.calibration.drawing_model import DrawingCalibrationModel
+from plotter_vision.calibration.paper import PaperPointMM
 from plotter_vision.calibration.vision_model import LogicalPointMM
 from plotter_vision.config import MachineConfig, SafetyState
 from plotter_vision.drawing import (
@@ -24,6 +26,8 @@ from plotter_vision.machine.safety import (
 )
 from plotter_vision.motion.gcode import format_mm
 from plotter_vision.motion.simulator import (
+    MotionSegmentMetadata,
+    MotionTraceAction,
     ShapeGeometryEvaluation,
     SimulatedPath,
     evaluate_shape_geometry,
@@ -34,12 +38,48 @@ ShapePattern = Literal["triangle", "square"]
 PlannedCommandKind = Literal["homing", "motion", "pen"]
 
 
+class PlannedTraceStep(BaseModel):
+    action: MotionTraceAction
+    command: str
+    end_logical_mm: LogicalPointMM
+    start_logical_mm: LogicalPointMM | None = None
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
+    source_segment_index: int | None = None
+
+
+class DrawingCorrectionPoint(BaseModel):
+    desired_mm: LogicalPointMM
+    commanded_mm: LogicalPointMM
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    uncertainty_mm: float | None = None
+    correction_norm_mm: float = 0.0
+
+
+class DrawingCorrectionSummary(BaseModel):
+    stage: Literal["drawing_model_correction"] = "drawing_model_correction"
+    status: Literal["applied", "skipped", "blocked"] = "skipped"
+    model_id: str | None = None
+    model_family: str | None = None
+    solver_kind: str | None = None
+    corrected_point_count: int = 0
+    max_correction_mm: float = 0.0
+    max_uncertainty_mm: float | None = None
+    blockers: list[str] = Field(default_factory=list)
+    points: list[DrawingCorrectionPoint] = Field(default_factory=list)
+
+
 class PolygonDrawRequest(BaseModel):
     program: DrawingProgram = Field(default_factory=DrawingProgram)
     frame: DrawingFrameMM | None = None
     polylines: list[PlannedPolyline] = Field(default_factory=list)
     include_homing: bool = False
     visual_position_trusted: bool = False
+    apply_drawing_calibration_model: bool = False
     draw_feed_mm_min: float = 180.0
     travel_feed_mm_min: float = 500.0
     max_segment_mm: float = 25.0
@@ -70,6 +110,12 @@ class PlannedCommand(BaseModel):
     command: str
     kind: PlannedCommandKind
     description: str
+    trace_action: MotionTraceAction | None = None
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
+    source_segment_index: int | None = None
 
 
 class ShapeExecutionPlan(BaseModel):
@@ -102,6 +148,8 @@ class PolygonDrawPlan(BaseModel):
     command_id: str
     dry_run: bool
     planned_commands: list[PlannedCommand] = Field(default_factory=list)
+    planned_trace: list[PlannedTraceStep] = Field(default_factory=list)
+    drawing_correction: DrawingCorrectionSummary | None = None
     simulation: SimulatedPath
     summary: PolygonDrawPlanSummary
 
@@ -116,6 +164,7 @@ def build_polygon_draw_plan(
     machine: MachineConfig,
     safety: SafetyState,
     command_id: str,
+    drawing_calibration_model: DrawingCalibrationModel | None = None,
 ) -> PolygonDrawPlan:
     """Build a bounded paper-space polygon drawing command stream without contacting hardware."""
     validate_polygon_draw_request(
@@ -143,10 +192,12 @@ def build_polygon_draw_plan(
         raise MotionSafetyError("Polygon drawing requires configured pen up/down commands.")
 
     frame = request.frame or _default_drawing_frame(machine)
-    polylines = [
-        *build_polygon_polylines(program=request.program, frame=frame),
-        *request.polylines,
-    ]
+    polylines = _ensure_polyline_metadata(
+        [
+            *build_polygon_polylines(program=request.program, frame=frame),
+            *request.polylines,
+        ]
+    )
     if not polylines:
         raise MotionSafetyError("Polygon drawing requires at least one polygon or polyline.")
     if request.max_polyline_count < 1:
@@ -162,11 +213,19 @@ def build_polygon_draw_plan(
         _split_polyline(polyline=polyline, max_segment_mm=request.max_segment_mm)
         for polyline in polylines
     ]
+    drawing_correction: DrawingCorrectionSummary | None = None
+    if request.apply_drawing_calibration_model:
+        split_polylines, drawing_correction = _apply_drawing_correction(
+            split_polylines=split_polylines,
+            source_polylines=polylines,
+            frame=frame,
+            model=drawing_calibration_model,
+        )
     draw_segment_count = sum(len(points) - 1 for points in split_polylines)
     if draw_segment_count <= 0:
         raise MotionSafetyError("Polygon drawing produced no drawable segments.")
 
-    commands = _polygon_draw_commands(
+    commands, planned_trace = _polygon_draw_commands(
         split_polylines=split_polylines,
         source_polylines=polylines,
         machine=machine,
@@ -182,6 +241,7 @@ def build_polygon_draw_plan(
         machine=machine,
         pen_up_command=pen_up,
         pen_down_command=pen_down,
+        metadata=_command_metadata(commands),
     )
     if simulation.status != "ok":
         raise MotionSafetyError(
@@ -208,6 +268,8 @@ def build_polygon_draw_plan(
         command_id=command_id,
         dry_run=safety.dry_run,
         planned_commands=commands,
+        planned_trace=planned_trace,
+        drawing_correction=drawing_correction,
         simulation=simulation,
         summary=summary,
     )
@@ -410,6 +472,127 @@ def _default_drawing_frame(machine: MachineConfig) -> DrawingFrameMM:
     )
 
 
+def _ensure_polyline_metadata(polylines: list[PlannedPolyline]) -> list[PlannedPolyline]:
+    resolved: list[PlannedPolyline] = []
+    for index, polyline in enumerate(polylines, start=1):
+        primitive_id = polyline.primitive_id or f"planned_polyline:{index:03d}"
+        stroke_id = polyline.stroke_id or f"{primitive_id}:stroke"
+        semantic_role = polyline.semantic_role or polyline.role
+        resolved.append(
+            polyline.model_copy(
+                update={
+                    "primitive_id": primitive_id,
+                    "stroke_id": stroke_id,
+                    "semantic_role": semantic_role,
+                }
+            )
+        )
+    return resolved
+
+
+def _apply_drawing_correction(
+    *,
+    split_polylines: list[list[LogicalPointMM]],
+    source_polylines: list[PlannedPolyline],
+    frame: DrawingFrameMM,
+    model: DrawingCalibrationModel | None,
+) -> tuple[list[list[LogicalPointMM]], DrawingCorrectionSummary]:
+    if model is None:
+        raise MotionSafetyError("Drawing model correction requested but no drawing calibration model is loaded.")
+    if not model.ready:
+        raise MotionSafetyError("Drawing model correction requested but the drawing calibration model is not ready.")
+
+    corrected_polylines: list[list[LogicalPointMM]] = []
+    corrected_points: list[DrawingCorrectionPoint] = []
+    blockers: list[str] = []
+    max_correction = 0.0
+    max_uncertainty: float | None = None
+
+    for points, source in zip(split_polylines, source_polylines):
+        corrected_points_for_polyline: list[LogicalPointMM] = []
+        action_features = _drawing_action_features(source)
+        for point in points:
+            desired = PaperPointMM(
+                x=point.x - frame.origin_x_mm,
+                y=point.y - frame.origin_y_mm,
+            )
+            correction = model.correct_target_for_planning(
+                desired,
+                action_features=action_features,
+            )
+            if not correction.usable:
+                blockers.extend(correction.blockers)
+                corrected_points_for_polyline.append(point)
+                continue
+            corrected = LogicalPointMM(
+                x=frame.origin_x_mm + correction.commanded_mm.x,
+                y=frame.origin_y_mm + correction.commanded_mm.y,
+            )
+            corrected_points_for_polyline.append(corrected)
+            max_correction = max(max_correction, correction.correction_norm_mm)
+            if correction.uncertainty_mm is not None:
+                max_uncertainty = (
+                    correction.uncertainty_mm
+                    if max_uncertainty is None
+                    else max(max_uncertainty, correction.uncertainty_mm)
+                )
+            corrected_points.append(
+                DrawingCorrectionPoint(
+                    desired_mm=point,
+                    commanded_mm=corrected,
+                    primitive_id=source.primitive_id,
+                    stroke_id=source.stroke_id,
+                    semantic_role=source.semantic_role,
+                    uncertainty_mm=correction.uncertainty_mm,
+                    correction_norm_mm=correction.correction_norm_mm,
+                )
+            )
+        corrected_polylines.append(corrected_points_for_polyline)
+
+    if blockers:
+        unique_blockers = list(dict.fromkeys(blockers))
+        raise MotionSafetyError("Drawing model correction blocked: " + "; ".join(unique_blockers))
+
+    return corrected_polylines, DrawingCorrectionSummary(
+        status="applied",
+        model_id=model.model_id,
+        model_family=model.model_family,
+        solver_kind=model.solver_kind,
+        corrected_point_count=len(corrected_points),
+        max_correction_mm=max_correction,
+        max_uncertainty_mm=max_uncertainty,
+        points=corrected_points[:200],
+    )
+
+
+def _drawing_action_features(source: PlannedPolyline) -> dict[str, float]:
+    features = {f"source_role:{source.role}": 1.0}
+    if source.semantic_role:
+        features[f"semantic_role:{source.semantic_role}"] = 1.0
+    if source.primitive_id:
+        features[f"primitive_id:{source.primitive_id}"] = 1.0
+    return features
+
+
+def _command_metadata(commands: list[PlannedCommand]) -> list[MotionSegmentMetadata | None]:
+    metadata: list[MotionSegmentMetadata | None] = []
+    for command in commands:
+        if command.trace_action is None:
+            metadata.append(None)
+            continue
+        metadata.append(
+            MotionSegmentMetadata(
+                trace_action=command.trace_action,
+                primitive_id=command.primitive_id,
+                stroke_id=command.stroke_id,
+                semantic_role=command.semantic_role,
+                source_role=command.source_role,
+                source_segment_index=command.source_segment_index,
+            )
+        )
+    return metadata
+
+
 def _polygon_draw_commands(
     *,
     split_polylines: list[list[LogicalPointMM]],
@@ -420,8 +603,9 @@ def _polygon_draw_commands(
     include_homing: bool,
     draw_feed_mm_min: float,
     travel_feed_mm_min: float,
-) -> list[PlannedCommand]:
+) -> tuple[list[PlannedCommand], list[PlannedTraceStep]]:
     commands: list[PlannedCommand] = []
+    planned_trace: list[PlannedTraceStep] = []
     if include_homing:
         commands.append(PlannedCommand(command="$H", kind="homing", description="Run XY homing"))
 
@@ -439,6 +623,7 @@ def _polygon_draw_commands(
         description="Raise pen",
     )
 
+    cursor: LogicalPointMM | None = None
     for index, (points, source) in enumerate(zip(split_polylines, source_polylines), start=1):
         start = points[0]
         commands.append(
@@ -453,6 +638,23 @@ def _polygon_draw_commands(
                 command=_absolute_machine_move_command(point=start, machine=machine),
                 kind="motion",
                 description=f"Travel to {source.role} polyline {index} start",
+                trace_action="travel",
+                primitive_id=source.primitive_id,
+                stroke_id=source.stroke_id,
+                semantic_role=source.semantic_role,
+                source_role=source.role,
+            )
+        )
+        planned_trace.append(
+            PlannedTraceStep(
+                action="travel",
+                command=commands[-1].command,
+                start_logical_mm=cursor,
+                end_logical_mm=start,
+                primitive_id=source.primitive_id,
+                stroke_id=source.stroke_id,
+                semantic_role=source.semantic_role,
+                source_role=source.role,
             )
         )
         _append_pen_command(
@@ -476,6 +678,25 @@ def _polygon_draw_commands(
                     description=(
                         f"Draw {source.role} polyline {index} segment {segment_index}"
                     ),
+                    trace_action="draw",
+                    primitive_id=source.primitive_id,
+                    stroke_id=source.stroke_id,
+                    semantic_role=source.semantic_role,
+                    source_role=source.role,
+                    source_segment_index=segment_index,
+                )
+            )
+            planned_trace.append(
+                PlannedTraceStep(
+                    action="draw",
+                    command=commands[-1].command,
+                    start_logical_mm=points[segment_index - 1],
+                    end_logical_mm=point,
+                    primitive_id=source.primitive_id,
+                    stroke_id=source.stroke_id,
+                    semantic_role=source.semantic_role,
+                    source_role=source.role,
+                    source_segment_index=segment_index,
                 )
             )
         _append_pen_command(
@@ -484,8 +705,9 @@ def _polygon_draw_commands(
             command=pen_up,
             description="Raise pen",
         )
+        cursor = points[-1]
 
-    return commands
+    return commands, planned_trace
 
 
 def _absolute_machine_move_command(*, point: LogicalPointMM, machine: MachineConfig) -> str:

@@ -31,6 +31,9 @@ Implemented vertical slices now include:
 - non-homed relative motion calibration that maps machine-relative X/Y moves into visual-field
   millimeters;
 - preview-safe shape, raster, capability-check, and image-derived drawing with command-stream simulation;
+- backend capability-test `DrawingProgram`s, including the `multi_shape_coordinate_sheet`
+  calibration sheet, planned through the Python planner/simulator/preview path rather than SVG
+  import or Swift-only overlays;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible;
 - a windowed operator UI with independent plotter/face camera toggles, Setup, Plotter Video, and
   Face Video panels, plus UI state surfaced in `/codex/snapshot`.
@@ -71,7 +74,9 @@ The normal development target is the fixed-camera drawing loop:
    field.
 7. Persist the field registration, cap observation, and relative motion model as the current setup
    authority. During setup the cap and tip are treated as colocated until explicit binding evidence
-   proves otherwise. Cap-to-tip offset, ink observations, and actual drawing execution are future work.
+   proves otherwise. Cap-to-tip offset and general drawing trust remain future work; the separate
+   drawing-calibration actions below record bounded ink evidence without making arbitrary drawings
+   trustworthy.
 8. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
    currently removed from the operator UI until the next real drawing surface is defined.
 
@@ -86,15 +91,26 @@ Simulation is not a decorative UI preview. It is the expected pen motion project
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
 
-The setup `Calibrate Drawing` action is the current bridge into that residual loop. After drawing the
-inset Drawing Border, the app records the final cap closure residual and, when the plotter camera has
-a usable frame, detects green stroke pixels near the expected frame, fits observed edge/corner
-geometry, overlays the observed frame against the expected frame, and sends the residual evidence to
-the bridge. The bridge persists `latest_drawing_calibration.json` under the calibration artifact
-directory and loads it on later app startup. The first saved model is a conservative
-frame-homography-plus-residual-field artifact from expected paper millimeters to observed drawn
-millimeters; it is deliberately extensible for later inner/outer frames or mark sets before claiming
-nonlinear correction quality.
+The setup `Calibrate Drawing` action is the current operator bridge into that residual loop. The
+implemented path draws the inset Drawing Border, records the final cap closure residual, and, when
+the plotter camera has a usable frame, detects green stroke pixels near the expected frame, fits
+observed edge/corner geometry, overlays the observed frame against the expected frame, and sends the
+residual evidence to the bridge. The bridge persists `latest_drawing_calibration.json` under the
+calibration artifact directory, keeps historical models under `drawing_calibrations/`, and loads the
+latest model on later app startup. Frame observations are now adapted into the generic drawing
+observation schema and solved as `residual_grid_v1`; one inset rectangle remains limited evidence,
+so readiness still depends on freshness, coverage, residual, and blocker gates.
+
+The richer calibration sheet is a `DrawingProgram`, not an SVG file and not a separate plotter-video
+grid. The backend `multi_shape_coordinate_sheet` capability program is the current sheet contract:
+normalized paper marks, axis lines, closure geometry, and angle geometry are lowered through the
+same Python `DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay` path used
+by other drawing programs. Sheet-derived observations use the same generic sample schema and
+`residual_grid_v1` model family, keyed by the planned command hash, Drawing Border registration id,
+camera id, observed mark residuals in paper millimeters, grid-cell residual vectors, validation
+status, and blockers. Operators should read `/calibration/drawing/status`, the Setup model-estimate
+detail, and `artifacts/app_state.json` as visibility into the current estimate rather than as trust
+promotion.
 
 The plotter-camera FOV zoom in the macOS app is a persisted Swift viewport transform for operator
 inspection. It does not crop bridge geometry, promote trust, or change machine authority. Current
@@ -114,6 +130,7 @@ The operator sequence should stay explicit:
 | 3 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
 | 5 | Calibrate Drawing | Execution transcript, cap closure residual, expected/observed frame overlays, green frame edge/corner observations, persisted drawing-calibration residual model | Full nonlinear drawing correction from one rectangle or future drawing trust without fresh evidence. |
+| 5a | Calibration Sheet | Planned `multi_shape_coordinate_sheet` `DrawingProgram`, plan hash, projected preview, observed mark residuals, candidate `residual_grid_v1` cells and blockers | Active correction unless the bridge has persisted a fresh ready model for the current Drawing Border and camera. |
 | 6 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
 
 Swift may collect and display probe samples, residuals, and operator events, but Python owns durable
@@ -279,6 +296,9 @@ The canonical bridge surfaces for agents are:
   treats the artifact as the user-defined drawing field.
 - `GET /calibration/workflow/status`: Visual Field Setup state, including field registration, cap
   localization, relative motion-model validity, and current blockers.
+- `GET /calibration/drawing/status`: drawing-calibration model visibility, including model family,
+  solver kind, observation counts, residuals, blockers, and the `latest_drawing_calibration.json`
+  path.
 - `GET /codex/events`: recent normalized app, bridge, and controller-adjacent events using the shared
   agent event envelope.
 - `GET /codex/snapshot`: the first read for debugging current state. It includes app/bridge build
@@ -294,7 +314,8 @@ The canonical bridge surfaces for agents are:
 The app-side diagnostics surfaces are:
 
 - `artifacts/app_state.json`: latest app-observed state, including app/bridge identity, lifecycle
-  label, machine summary, visual field lock status, preview state, and safety gate labels.
+  label, machine summary, visual field lock status, drawing-calibration status/model id, preview
+  state, and safety gate labels.
 - `artifacts/app_events.jsonl`: bounded append-only app lifecycle, UI action, bridge polling,
   preview/draw, visual-probe, and visible error events.
 - `POST /codex/app/state` and `POST /codex/app/events`: append-only bridge ingestion routes for app

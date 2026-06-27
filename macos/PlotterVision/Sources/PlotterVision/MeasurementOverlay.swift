@@ -7,6 +7,8 @@ struct MeasurementOverlay: View {
     let motionTracks: [MotionTrack]
     let expectedPathSegments: [ExpectedPathSegment]
     let expectedPathLabel: String
+    let predictedPathSegments: [ExpectedPathSegment]
+    let predictedPathLabel: String
     let observedFrameOverlay: DrawingFrameOverlay?
     let bindingMarkPreviewSegments: [BindingMarkPreviewSegment]
     let bindingMarkPreviewPoints: [BindingMarkPreviewPoint]
@@ -27,6 +29,7 @@ struct MeasurementOverlay: View {
                     drawDrawingBorder(paperTransform, mapper: mapper, in: &context)
                 }
                 drawExpectedPath(registration: paperTransform, mapper: mapper, in: &context)
+                drawPredictedPath(registration: paperTransform, mapper: mapper, in: &context)
                 drawObservedFrame(registration: paperTransform, mapper: mapper, in: &context)
             }
 
@@ -248,6 +251,52 @@ struct MeasurementOverlay: View {
             expectedPathLabel,
             at: CGPoint(x: point.x + 8, y: point.y - 10),
             foreground: .yellow.opacity(0.9 * plotterOverlay.opacity),
+            in: &context
+        )
+    }
+
+    private func drawPredictedPath(
+        registration: PaperRegistrationSnapshot,
+        mapper: OverlayMapper,
+        in context: inout GraphicsContext
+    ) {
+        guard plotterOverlay.enabled else { return }
+        guard !predictedPathSegments.isEmpty else { return }
+
+        var path = Path()
+        for segment in predictedPathSegments {
+            guard let start = normalizedPoint(segment.startNorm),
+                  let end = normalizedPoint(segment.endNorm),
+                  let cameraStart = paperToCameraPoint(start, registration: registration),
+                  let cameraEnd = paperToCameraPoint(end, registration: registration) else {
+                continue
+            }
+            path.move(to: mapper.point(cameraStart))
+            path.addLine(to: mapper.point(cameraEnd))
+        }
+
+        let color = Color(red: 1.0, green: 0.26, blue: 0.82)
+        context.stroke(
+            path,
+            with: .color(.black.opacity(0.90 * plotterOverlay.opacity)),
+            style: StrokeStyle(lineWidth: 6.8, lineCap: .round, lineJoin: .round, dash: [4, 6])
+        )
+        context.stroke(
+            path,
+            with: .color(color.opacity(0.96 * plotterOverlay.opacity)),
+            style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round, dash: [4, 6])
+        )
+
+        guard let first = predictedPathSegments.first,
+              let start = normalizedPoint(first.startNorm),
+              let cameraStart = paperToCameraPoint(start, registration: registration) else {
+            return
+        }
+        let point = mapper.point(cameraStart)
+        drawOverlayLabel(
+            predictedPathLabel,
+            at: CGPoint(x: point.x + 8, y: point.y + 34),
+            foreground: color.opacity(0.98 * plotterOverlay.opacity),
             in: &context
         )
     }

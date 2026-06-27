@@ -310,6 +310,32 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         return result
     }
 
+    func inspectInkProgram(
+        primitives: [InkProgramPrimitive],
+        registration: PaperRegistrationSnapshot,
+        programId: String,
+        programKind: String
+    ) -> InkProgramInspectionResult? {
+        guard let buffer = snapshotLastBuffer() else {
+            statusText = "\(role.statusPrefix): no frame available for ink program check"
+            return nil
+        }
+        let target = settingsSnapshot().capMarkerColorTarget
+        guard let result = InkProgramInspector.inspect(
+            pixelBuffer: buffer,
+            primitives: primitives,
+            registration: registration,
+            colorTarget: target,
+            programId: programId,
+            programKind: programKind
+        ) else {
+            statusText = "\(role.statusPrefix): ink program check could not sample video"
+            return nil
+        }
+        statusText = "\(role.statusPrefix) ink program \(result.detectedSampleCount)/\(result.sampleCount) samples"
+        return result
+    }
+
     func captureFaceRaster(
         columns: Int = 14,
         rows: Int = 18,

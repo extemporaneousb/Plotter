@@ -14,6 +14,7 @@ from plotter_vision.machine.pen import normalize_pen_command
 SimulationStatus = Literal["ok", "failed"]
 EvaluationStatus = Literal["passed", "failed"]
 CheckStatus = Literal["passed", "failed"]
+MotionTraceAction = Literal["travel", "draw"]
 
 
 class PointMM(BaseModel):
@@ -25,6 +26,11 @@ class DrawnSegment(BaseModel):
     start: PointMM
     end: PointMM
     length_mm: float
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
+    source_segment_index: int | None = None
 
 
 class PreviewSegment(BaseModel):
@@ -33,6 +39,20 @@ class PreviewSegment(BaseModel):
     start_machine_mm: tuple[float, float]
     end_machine_mm: tuple[float, float]
     length_mm: float
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
+    source_segment_index: int | None = None
+
+
+class MotionSegmentMetadata(BaseModel):
+    trace_action: MotionTraceAction
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    semantic_role: str | None = None
+    source_role: str | None = None
+    source_segment_index: int | None = None
 
 
 class SimulatedPath(BaseModel):
@@ -73,15 +93,20 @@ def simulate_plotter_commands(
     machine: MachineConfig,
     pen_up_command: str | None,
     pen_down_command: str | None,
+    metadata: Sequence[MotionSegmentMetadata | None] | None = None,
 ) -> SimulatedPath:
+    if metadata is not None and len(metadata) != len(commands):
+        raise ValueError("command metadata length must match command count.")
+
     interpreter = _CommandInterpreter(
         machine=machine,
         pen_up_command=pen_up_command,
         pen_down_command=pen_down_command,
     )
 
-    for command in commands:
-        interpreter.apply(command)
+    for index, command in enumerate(commands):
+        command_metadata = metadata[index] if metadata is not None else None
+        interpreter.apply(command, metadata=command_metadata)
 
     return interpreter.result()
 
@@ -204,7 +229,7 @@ class _CommandInterpreter:
         self.drawn_segments: list[DrawnSegment] = []
         self.errors: list[str] = []
 
-    def apply(self, command: str) -> None:
+    def apply(self, command: str, *, metadata: MotionSegmentMetadata | None = None) -> None:
         normalized = _normalize_command(command)
         if not normalized:
             return
@@ -220,7 +245,7 @@ class _CommandInterpreter:
             return
 
         try:
-            self._apply_gcode(normalized)
+            self._apply_gcode(normalized, metadata=metadata)
         except GCodeSimulationError as exc:
             self.errors.append(f"{normalized}: {exc}")
 
@@ -241,7 +266,12 @@ class _CommandInterpreter:
             errors=self.errors,
         )
 
-    def _apply_gcode(self, command: str) -> None:
+    def _apply_gcode(
+        self,
+        command: str,
+        *,
+        metadata: MotionSegmentMetadata | None = None,
+    ) -> None:
         words = command.split()
         g_codes: list[int] = []
         axes: dict[str, float] = {}
@@ -276,7 +306,7 @@ class _CommandInterpreter:
             raise GCodeSimulationError("Axis words require G0 or G1 in this simulator.")
 
         target = self._target_position(axes=axes, machine_absolute=53 in g_codes)
-        self._move_to(target)
+        self._move_to(target, metadata=metadata)
 
     def _target_position(
         self,
@@ -304,7 +334,7 @@ class _CommandInterpreter:
             y=self.position.y + axes.get("Y", 0.0),
         )
 
-    def _move_to(self, target: PointMM) -> None:
+    def _move_to(self, target: PointMM, *, metadata: MotionSegmentMetadata | None = None) -> None:
         if self.position is not None and self.pen_is_down:
             length_mm = _distance(self.position, target)
             if length_mm > 0:
@@ -313,6 +343,13 @@ class _CommandInterpreter:
                         start=self.position,
                         end=target,
                         length_mm=length_mm,
+                        primitive_id=metadata.primitive_id if metadata else None,
+                        stroke_id=metadata.stroke_id if metadata else None,
+                        semantic_role=metadata.semantic_role if metadata else None,
+                        source_role=metadata.source_role if metadata else None,
+                        source_segment_index=(
+                            metadata.source_segment_index if metadata else None
+                        ),
                     )
                 )
         self.position = target
@@ -336,6 +373,11 @@ def _preview_segment(*, segment: DrawnSegment, machine: MachineConfig) -> Previe
         start_machine_mm=(segment.start.x, segment.start.y),
         end_machine_mm=(segment.end.x, segment.end.y),
         length_mm=segment.length_mm,
+        primitive_id=segment.primitive_id,
+        stroke_id=segment.stroke_id,
+        semantic_role=segment.semantic_role,
+        source_role=segment.source_role,
+        source_segment_index=segment.source_segment_index,
     )
 
 

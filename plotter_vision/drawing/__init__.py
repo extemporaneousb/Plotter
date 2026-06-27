@@ -7,6 +7,8 @@ from plotter_vision.drawing.capabilities import (
     build_capability_test_program,
 )
 from plotter_vision.drawing.polygons import (
+    ArcPrimitive,
+    CirclePrimitive,
     ContourGroupPrimitive,
     DrawingProgram,
     DrawingFrameMM,
@@ -16,6 +18,7 @@ from plotter_vision.drawing.polygons import (
     PolylinePrimitive,
     PolygonPrimitive,
     SimpleShapePrimitive,
+    build_rich_drawing_calibration_program,
     build_polygon_polylines,
     validate_polylines_in_workspace,
 )
@@ -35,6 +38,8 @@ from plotter_vision.drawing.raster import (
 __all__ = [
     "DrawingFrameMM",
     "DrawingProgram",
+    "ArcPrimitive",
+    "CirclePrimitive",
     "LuminanceRaster",
     "ContourGroupPrimitive",
     "CapabilityTestDefinition",
@@ -56,6 +61,7 @@ __all__ = [
     "build_paper_program_from_luminance_raster",
     "build_capability_test_definition",
     "build_capability_test_program",
+    "build_rich_drawing_calibration_program",
     "build_polygon_polylines",
     "validate_polylines_in_workspace",
 ]
