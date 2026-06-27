@@ -2,9 +2,9 @@
 
 ## Architecture
 
-This repository is moving from a standalone smoke probe toward one core Python package,
-`plotter_vision`, with multiple entrypoints. The controller, safety, calibration, drawing, and
-simulation core stays independent of any future browser, iPad, or native macOS UI.
+This repository uses one core Python package, `plotter_vision`, with multiple entrypoints. The
+controller, safety, calibration, drawing, and simulation core stays independent of any future
+browser, iPad, or native macOS UI.
 
 Current package shape:
 
@@ -42,9 +42,6 @@ macos/
   PlotterVision/
 tests/
 ```
-
-The older `smoke_probe/` utility is preserved as reference material, but new work should use
-`plotterctl` and the `plotter_vision` package.
 
 ## Canonical Interfaces
 
@@ -311,3 +308,24 @@ vector import remains deferred.
   CAM import.
 - Do not implement SVG/vector import until the control, calibration, simulation, and residual
   foundation is reliable.
+
+## Maintenance Backlog
+
+These are implementation refactors that still appear useful after retiring the old cleanup-plan
+document. Treat each as a focused patch with current call-site scans and tests, not as a reason to
+preserve stale compatibility surfaces.
+
+- Extract a machine-status base builder in `plotter_vision.bridge.server` only after proving the
+  live, dry-run, hold, lock, and error status payloads remain byte-for-byte compatible where tests
+  assert them.
+- Move repeated JSON artifact write/read helpers into a neutral artifact utility while preserving
+  current JSON output.
+- Split `PlotterBridgeClient.swift` into DTOs, HTTP client, observable bridge model, and operation
+  extensions without changing public behavior.
+- Split `ContentView.swift` along the current window boundaries and visual-motion coordinator
+  responsibilities.
+- Replace string-parsed Swift status gates with typed visual-field, cap, motion-model, and machine
+  status state.
+- Centralize camera/viewport coordinate mapping so click layers and overlays use one transform.
+- Consolidate duplicate paper point models across calibration, drawing, and bridge code only after
+  persisted schema compatibility is explicitly handled.

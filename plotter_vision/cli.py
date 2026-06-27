@@ -7,11 +7,12 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypeVar
 from urllib.error import URLError
 from urllib.request import urlopen
 
 import typer
+from pydantic import BaseModel
 
 from plotter_vision.calibration.scale import build_scale_observation
 from plotter_vision.bridge.server import BridgeRuntimeConfig, serve_bridge
@@ -48,6 +49,7 @@ from plotter_vision.motion.gcode import (
 )
 
 app = typer.Typer(help="Safe controller interrogation tools for the pen plotter.")
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def _utc_stamp() -> str:
@@ -1321,52 +1323,34 @@ def _steps_for_axis(snapshot: Path | None, axis: str) -> float | None:
     return float(value)
 
 
-def _load_machine_config(path: Path) -> MachineConfig:
-    import json
-
+def _load_json_model(path: Path, model: type[ModelT], *, label: str) -> ModelT:
     if not path.exists():
-        raise typer.BadParameter(f"Machine config not found: {path}")
-    return MachineConfig.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        raise typer.BadParameter(f"{label} not found: {path}")
+    return model.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _load_machine_config(path: Path) -> MachineConfig:
+    return _load_json_model(path, MachineConfig, label="Machine config")
 
 
 def _load_settings_plan(path: Path) -> SettingsWritePlan:
-    import json
-
-    if not path.exists():
-        raise typer.BadParameter(f"Settings plan not found: {path}")
-    return SettingsWritePlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return _load_json_model(path, SettingsWritePlan, label="Settings plan")
 
 
 def _load_xy_homing_plan(path: Path) -> HomingXYSettingsPlan:
-    import json
-
-    if not path.exists():
-        raise typer.BadParameter(f"XY homing plan not found: {path}")
-    return HomingXYSettingsPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return _load_json_model(path, HomingXYSettingsPlan, label="XY homing plan")
 
 
 def _load_hard_limits_plan(path: Path) -> HardLimitsSettingsPlan:
-    import json
-
-    if not path.exists():
-        raise typer.BadParameter(f"Hard-limit plan not found: {path}")
-    return HardLimitsSettingsPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return _load_json_model(path, HardLimitsSettingsPlan, label="Hard-limit plan")
 
 
 def _load_homing_tune_plan(path: Path) -> HomingTuningSettingsPlan:
-    import json
-
-    if not path.exists():
-        raise typer.BadParameter(f"Homing tuning plan not found: {path}")
-    return HomingTuningSettingsPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return _load_json_model(path, HomingTuningSettingsPlan, label="Homing tuning plan")
 
 
 def _load_workspace_travel_plan(path: Path) -> WorkspaceTravelSettingsPlan:
-    import json
-
-    if not path.exists():
-        raise typer.BadParameter(f"Workspace travel plan not found: {path}")
-    return WorkspaceTravelSettingsPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return _load_json_model(path, WorkspaceTravelSettingsPlan, label="Workspace travel plan")
 
 
 if __name__ == "__main__":

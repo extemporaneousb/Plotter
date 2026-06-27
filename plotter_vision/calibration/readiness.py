@@ -29,8 +29,6 @@ DEFAULT_MIN_PROBE_OBSERVATIONS = 2
 DEFAULT_MAX_PROBE_RMS_RESIDUAL_MM = 10.0
 DEFAULT_MAX_PROBE_P95_RESIDUAL_MM = 20.0
 DEFAULT_MAX_PROBE_HARD_RESIDUAL_MM = 40.0
-# Compatibility name for older callers: this is now the robust p95 gate, not a worst-frame veto.
-DEFAULT_MAX_PROBE_MAX_RESIDUAL_MM = DEFAULT_MAX_PROBE_P95_RESIDUAL_MM
 
 
 class RelativeMotionModel(BaseModel):

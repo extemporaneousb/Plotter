@@ -503,12 +503,8 @@ The initial safety state is:
 Phase-0 command validation rejects `$X`, `$H`, `$C`, `$RST`, `$N...`, `$NN=value`, `$J=...`,
 G-code, M-code, feed/spindle words, axis words, feed hold, resume, and Ctrl-X.
 
-## Plans And Handoffs
+## Current Project Docs
 
 - Staged repository plan: `docs/REPOSITORY_PLAN.md`
-- Phase-0 handoff: `docs/PHASE0_HANDOFF.md`
+- Project contract: `codex_prompts/04_PROJECT_CONTRACT.md`
 - Wi-Fi deferral note: `docs/NETWORK_TRANSPORT_DEFERRED.md`
-- Original Codex workstream prompts: `codex_prompts/`
-
-The older `smoke_probe/` directory is preserved as reference material. New implementation work should
-use `plotter_vision/` and `plotterctl`.
