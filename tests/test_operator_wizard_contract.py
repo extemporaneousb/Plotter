@@ -764,6 +764,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "manualFiducials = corners" in live_update
 
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
+    frame_inspection = _read(SWIFT_DIR / "FrameInkInspection.swift")
     bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
@@ -775,6 +776,18 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert '"setup_field_frame_residual_measured"' in frame_drawing
     assert '"closure_residual_mm": residualMm' in frame_drawing
     assert '"setup_field_frame_residual_unavailable"' in frame_drawing
+    assert "plotterCamera.inspectGreenFrameGeometry" in frame_drawing
+    assert '"setup_field_frame_ink_geometry_measured"' in frame_drawing
+    assert '"setup_field_frame_ink_geometry_weak"' in frame_drawing
+    assert '"setup_field_frame_ink_geometry_unavailable"' in frame_drawing
+    assert '"ink_rms_residual_mm"' in frame_drawing
+    assert 'let prefix = "edge_\\(edge.edgeIndex)"' in frame_drawing
+    assert '"\\(prefix)_detected_samples"' in frame_drawing
+    assert "enum GreenFrameInkInspector" in frame_inspection
+    assert "static func inspect(" in frame_inspection
+    assert "isGreenFramePixel" in frame_inspection
+    assert "fitLine(points: observedPaperPoints" in frame_inspection
+    assert "cornerRmsResidualMm" in frame_inspection
     assert "func showSetupFieldFrameExpectedPath(corners: [PaperPointMmSnapshot])" in bridge_model
     assert '"setup_field_frame_expected_path_ready"' in bridge_model
     assert "drawDrawingBorder" in overlay

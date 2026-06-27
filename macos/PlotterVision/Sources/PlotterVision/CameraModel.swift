@@ -288,6 +288,28 @@ final class CameraModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSam
         return result
     }
 
+    func inspectGreenFrameGeometry(
+        expectedCorners: [PaperPointMmSnapshot],
+        registration: PaperRegistrationSnapshot
+    ) -> DrawnFrameInspectionResult? {
+        guard let buffer = snapshotLastBuffer() else {
+            statusText = "\(role.statusPrefix): no frame available for frame check"
+            return nil
+        }
+        let target = settingsSnapshot().capMarkerColorTarget
+        guard let result = GreenFrameInkInspector.inspect(
+            pixelBuffer: buffer,
+            expectedCorners: expectedCorners,
+            registration: registration,
+            colorTarget: target
+        ) else {
+            statusText = "\(role.statusPrefix): frame check could not sample video"
+            return nil
+        }
+        statusText = "\(role.statusPrefix) \(result.summary)"
+        return result
+    }
+
     func captureFaceRaster(
         columns: Int = 14,
         rows: Int = 18,

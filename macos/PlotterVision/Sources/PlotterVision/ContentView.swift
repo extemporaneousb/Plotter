@@ -22,7 +22,7 @@ private let visualCapFreshFrameAdvance = 3
 struct ContentView: View {
     @ObservedObject var bridge: PlotterBridgeModel
     @ObservedObject var workspace: OperatorWorkspaceState
-    @ObservedObject private var plotterCamera: CameraModel
+    @ObservedObject var plotterCamera: CameraModel
     @ObservedObject private var faceCamera: CameraModel
     @Environment(\.openWindow) private var openWindow
     @State private var showLiveVideo = true

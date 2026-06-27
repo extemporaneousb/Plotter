@@ -90,6 +90,26 @@ extension ContentView {
             } else {
                 completionDetails["closure_residual_unavailable"] = true
             }
+            if let inkGeometry = await measureValidatedFieldFrameInkGeometry(
+                expectedCorners: corners,
+                model: model,
+                segmentCount: segmentCount
+            ) {
+                completionDetails["ink_edges_detected"] = inkGeometry.detectedEdgeCount
+                completionDetails["ink_green_pixels"] = inkGeometry.totalGreenPixels
+                completionDetails["ink_geometry_usable"] = inkGeometry.isUsable
+                if let rmsResidual = inkGeometry.rmsResidualMm {
+                    completionDetails["ink_rms_residual_mm"] = rmsResidual
+                }
+                if let maxResidual = inkGeometry.maxResidualMm {
+                    completionDetails["ink_max_residual_mm"] = maxResidual
+                }
+                if let cornerRmsResidual = inkGeometry.cornerRmsResidualMm {
+                    completionDetails["ink_corner_rms_residual_mm"] = cornerRmsResidual
+                }
+            } else {
+                completionDetails["ink_geometry_unavailable"] = true
+            }
         } else {
             bridge.drawVerifyDetail = "Frame draw finished with machine error"
             calibrationStatusText = "FIELD frame draw ended with machine error"
@@ -240,5 +260,152 @@ extension ContentView {
             ]
         )
         return residualMm
+    }
+
+    @MainActor
+    private func measureValidatedFieldFrameInkGeometry(
+        expectedCorners: [PaperPointMmSnapshot],
+        model: VisualMotionModel,
+        segmentCount: Int
+    ) async -> DrawnFrameInspectionResult? {
+        guard let registration = bridge.paperRegistrationSnapshot else {
+            recordValidatedFieldFrameInkGeometryUnavailable(
+                reason: "missing_paper_registration",
+                segmentCount: segmentCount,
+                model: model
+            )
+            return nil
+        }
+
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        guard let result = plotterCamera.inspectGreenFrameGeometry(
+            expectedCorners: expectedCorners,
+            registration: registration
+        ) else {
+            recordValidatedFieldFrameInkGeometryUnavailable(
+                reason: "no_frame_geometry",
+                segmentCount: segmentCount,
+                model: model
+            )
+            return nil
+        }
+
+        var details = validatedFieldFrameInkGeometryDetails(
+            result,
+            segmentCount: segmentCount,
+            model: model
+        )
+        let eventName = result.isUsable
+            ? "setup_field_frame_ink_geometry_measured"
+            : "setup_field_frame_ink_geometry_weak"
+        if !result.isUsable {
+            details["weak_reason"] = "insufficient_detected_edges"
+        }
+        bridge.recordOperatorEvent(eventName, details: details)
+
+        if result.isUsable, let rmsResidual = result.rmsResidualMm, let maxResidual = result.maxResidualMm {
+            bridge.drawVerifyDetail = String(
+                format: "Frame drawn %ds ink %.1f/%.1fmm %@",
+                segmentCount,
+                rmsResidual,
+                maxResidual,
+                result.detectedEdgeCount == 4 ? "4 edges" : "\(result.detectedEdgeCount)/4 edges"
+            )
+            calibrationStatusText = String(format: "FIELD frame ink residual %.1fmm", rmsResidual)
+        } else {
+            bridge.drawVerifyDetail = "Frame drawn \(segmentCount)s; ink geometry weak \(result.detectedEdgeCount)/4 edges"
+            calibrationStatusText = "FIELD frame ink geometry weak"
+        }
+
+        return result
+    }
+
+    @MainActor
+    private func recordValidatedFieldFrameInkGeometryUnavailable(
+        reason: String,
+        segmentCount: Int,
+        model: VisualMotionModel
+    ) {
+        bridge.recordOperatorEvent(
+            "setup_field_frame_ink_geometry_unavailable",
+            details: [
+                "reason": reason,
+                "draw_segment_count": segmentCount,
+                "model_rms_residual_mm": model.rmsResidualMm,
+                "model_max_residual_mm": model.maxResidualMm
+            ]
+        )
+    }
+
+    @MainActor
+    private func validatedFieldFrameInkGeometryDetails(
+        _ result: DrawnFrameInspectionResult,
+        segmentCount: Int,
+        model: VisualMotionModel
+    ) -> [String: Any] {
+        var details: [String: Any] = [
+            "draw_segment_count": segmentCount,
+            "image_width_px": Int(result.imageSize.width),
+            "image_height_px": Int(result.imageSize.height),
+            "edges_detected": result.detectedEdgeCount,
+            "edge_count": result.edges.count,
+            "corner_count": result.corners.count,
+            "total_green_pixels": result.totalGreenPixels,
+            "usable": result.isUsable,
+            "model_rms_residual_mm": model.rmsResidualMm,
+            "model_max_residual_mm": model.maxResidualMm,
+            "sample_count": model.sampleCount
+        ]
+        if let rmsResidual = result.rmsResidualMm {
+            details["rms_residual_mm"] = rmsResidual
+        }
+        if let maxResidual = result.maxResidualMm {
+            details["max_residual_mm"] = maxResidual
+        }
+        if let cornerRmsResidual = result.cornerRmsResidualMm {
+            details["corner_rms_residual_mm"] = cornerRmsResidual
+        }
+        if let cornerMaxResidual = result.cornerMaxResidualMm {
+            details["corner_max_residual_mm"] = cornerMaxResidual
+        }
+
+        for edge in result.edges {
+            let prefix = "edge_\(edge.edgeIndex)"
+            details["\(prefix)_samples"] = edge.sampleCount
+            details["\(prefix)_detected_samples"] = edge.detectedSampleCount
+            details["\(prefix)_green_pixels"] = edge.greenPixelCount
+            details["\(prefix)_coverage"] = edge.coverageFraction
+            details["\(prefix)_detected"] = edge.isDetected
+            if let rmsResidual = edge.rmsExpectedResidualMm {
+                details["\(prefix)_rms_residual_mm"] = rmsResidual
+            }
+            if let maxResidual = edge.maxExpectedResidualMm {
+                details["\(prefix)_max_residual_mm"] = maxResidual
+            }
+            if let fitRmsResidual = edge.fitRmsResidualMm {
+                details["\(prefix)_fit_rms_residual_mm"] = fitRmsResidual
+            }
+            if let angleError = edge.angleErrorDeg {
+                details["\(prefix)_angle_error_deg"] = angleError
+            }
+            if let observedStart = edge.observedStartMm {
+                details["\(prefix)_observed_start_x_mm"] = observedStart.x
+                details["\(prefix)_observed_start_y_mm"] = observedStart.y
+            }
+            if let observedEnd = edge.observedEndMm {
+                details["\(prefix)_observed_end_x_mm"] = observedEnd.x
+                details["\(prefix)_observed_end_y_mm"] = observedEnd.y
+            }
+        }
+
+        for corner in result.corners {
+            let prefix = "corner_\(corner.cornerIndex)"
+            details["\(prefix)_expected_x_mm"] = corner.expectedMm.x
+            details["\(prefix)_expected_y_mm"] = corner.expectedMm.y
+            details["\(prefix)_observed_x_mm"] = corner.observedMm.x
+            details["\(prefix)_observed_y_mm"] = corner.observedMm.y
+            details["\(prefix)_residual_mm"] = corner.residualMm
+        }
+        return details
     }
 }

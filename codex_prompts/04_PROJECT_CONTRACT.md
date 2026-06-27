@@ -73,6 +73,9 @@ The app-first drawing flow is:
 7. Treat field registration, cap localization, and a valid relative motion model as the active setup
    authority. During setup, the cap and tip are colocated until explicit binding evidence proves
    otherwise. Cap-to-tip offset, ink observations, and actual drawing are future work.
+   The separate setup `Draw Frame` diagnostic may draw an inset border after validation. It must
+   compare the expected frame to observed green stroke geometry when the plotter camera can see it,
+   and log edge/corner ink residuals as evaluation data rather than a trust-promotion gate.
 8. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
    programs through:
 

@@ -106,6 +106,10 @@ The fixed-camera workflow is:
    authority for this milestone. During setup, the cap and tip are colocated until explicit binding
    evidence proves otherwise. Cap-to-tip offset, ink observations, and real drawing remain future
    work.
+   The setup `Draw Frame` action is diagnostic: it draws an inset Drawing Border, then compares the
+   expected frame against observed green stroke geometry from the plotter camera when available. The
+   logged edge/corner ink residuals describe draw quality but do not update the motion model by
+   themselves.
 8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
    are currently backend tests only and are not exposed in the operator UI.
 
