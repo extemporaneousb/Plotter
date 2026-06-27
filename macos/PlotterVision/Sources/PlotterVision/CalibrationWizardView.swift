@@ -21,7 +21,6 @@ struct CalibrationWizardView: View {
     let capStateLabel: String
     let isLiveMotionMode: Bool
     let capDetected: Bool
-    let fieldAspectYPerX: Double?
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
@@ -135,11 +134,7 @@ struct CalibrationWizardView: View {
         Binding(
             get: { fieldWidthMm },
             set: { newValue in
-                let width = clampedFieldDimension(newValue)
-                fieldWidthMm = width
-                if let fieldAspectYPerX, fieldAspectYPerX > 0 {
-                    fieldHeightMm = clampedFieldDimension(width * fieldAspectYPerX)
-                }
+                fieldWidthMm = clampedFieldDimension(newValue)
             }
         )
     }

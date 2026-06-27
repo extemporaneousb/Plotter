@@ -90,8 +90,8 @@ The fixed-camera workflow is:
    residuals and field-corner precision are diagnostics.
 5. Set Drawing Border from the current camera/video basis. The seeded border uses the learned 2x2
    transform to fit a provisional video rectangle, then lets the operator assign typed X/Y
-   millimeter dimensions to that rectangle, defaulting to 200 mm x 150 mm. Editing X may estimate Y
-   from the rectangle's video aspect, and editing Y remains independent. The video Drawing Border
+   millimeter dimensions to that rectangle, defaulting to 200 mm x 150 mm. Editing X and Y sets
+   those dimensions directly without aspect-ratio inference. The video Drawing Border
    remains operator-adjustable as a rectangle while setup is open: drag the border to move it, drag
    the top-right handle to resize it while it remains rectangular, and release to re-lock border
    registration using the adjusted corners. Every later solved estimate updates the provisional

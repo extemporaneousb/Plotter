@@ -58,7 +58,7 @@ The app-first drawing flow is:
 5. Set Drawing Border from the current 2x2 transform. The seeded border uses the Setup panel's
    physical field width and height, defaulting to 200 mm x 150 mm, as operator-assigned dimensions
    on the current video rectangle. The operator can type explicit X and Y millimeter values; changing
-   X may estimate Y from the rectangle's video aspect, but Y remains independently editable.
+   either dimension sets only that dimension and does not infer the other from video aspect.
    Residuals and field-corner precision remain quality diagnostics, but setup must not discard the
    current transform behind a second accepted-estimate gate. Every later solved estimate updates the
    provisional Drawing Border until the operator locks it. The seeded video border is

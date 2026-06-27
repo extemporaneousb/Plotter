@@ -3210,7 +3210,6 @@ struct ContentView: View {
             capStateLabel: wizardCapStateLabel,
             isLiveMotionMode: bridge.isLiveMotionMode,
             capDetected: currentCarriageMarker != nil,
-            fieldAspectYPerX: currentVisualFieldAspectYPerX,
             fieldWidthMm: $workspace.visualFieldWidthMm,
             fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,

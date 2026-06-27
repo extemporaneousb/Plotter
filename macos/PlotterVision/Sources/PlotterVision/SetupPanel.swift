@@ -26,7 +26,6 @@ struct SetupPanel: View {
                 capStateLabel: workspace.setupSnapshot.capStateLabel,
                 isLiveMotionMode: workspace.setupSnapshot.isLiveMotionMode,
                 capDetected: workspace.setupSnapshot.capDetected,
-                fieldAspectYPerX: workspace.setupSnapshot.fieldAspectYPerX,
                 fieldWidthMm: $workspace.visualFieldWidthMm,
                 fieldHeightMm: $workspace.visualFieldHeightMm,
                 primaryAction: { workspace.requestSetupCommand(.primary) },
