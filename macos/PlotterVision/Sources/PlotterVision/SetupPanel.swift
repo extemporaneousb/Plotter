@@ -35,11 +35,83 @@ struct SetupPanel: View {
                 reset: { workspace.requestSetupCommand(.reset) },
                 hide: { workspace.requestSetupCommand(.hide) }
             )
+            ProgressiveDrawingCalibrationControls(workspace: workspace, bridge: bridge)
             SetupLogDisclosure(workspace: workspace)
             SetupModelEstimatesDisclosure(workspace: workspace, bridge: bridge)
         }
         .frame(width: 430, alignment: .topLeading)
         .padding(14)
+    }
+}
+
+private struct ProgressiveDrawingCalibrationControls: View {
+    @ObservedObject var workspace: OperatorWorkspaceState
+    @ObservedObject var bridge: PlotterBridgeModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("Progressive Drawing Calibration", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text(bridge.drawingCalibrationSessionStatus)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Text(bridge.drawingCalibrationSessionDetail)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Button {
+                    workspace.requestSetupCommand(.startDrawingSession)
+                } label: {
+                    Label("Start", systemImage: "play.circle")
+                }
+                Button {
+                    workspace.requestSetupCommand(.previewDrawingBatch)
+                } label: {
+                    Label("Preview", systemImage: "eye")
+                }
+                Button {
+                    workspace.requestSetupCommand(.runDrawingBatch)
+                } label: {
+                    Label("Run", systemImage: "paperplane")
+                }
+                Button {
+                    workspace.requestSetupCommand(.observeDrawingBatch)
+                } label: {
+                    Label("Observe / Retry", systemImage: "camera.metering.center.weighted")
+                }
+            }
+            .controlSize(.mini)
+            HStack(spacing: 6) {
+                Button {
+                    workspace.requestSetupCommand(.fitDrawingSession)
+                } label: {
+                    Label("Fit", systemImage: "function")
+                }
+                Button {
+                    workspace.requestSetupCommand(.validateDrawingSession)
+                } label: {
+                    Label("Validate", systemImage: "checkmark.seal")
+                }
+                Button {
+                    workspace.requestSetupCommand(.finishDrawingSession)
+                } label: {
+                    Label("Finish", systemImage: "flag.checkered")
+                }
+            }
+            .controlSize(.mini)
+            .disabled(bridge.latestDrawingCalibrationSession == nil)
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
     }
 }
 
@@ -98,13 +170,20 @@ private struct SetupModelEstimatesDisclosure: View {
                 estimateRow("Paper homography", paperHomographySummary)
                 estimateRow("Motion 2x2", motionMatrixSummary)
                 estimateRow("Motion samples", motionSampleSummary)
+                estimateRow("Session id", bridge.latestDrawingCalibrationSession?.sessionId ?? "--")
+                estimateRow("Batch id/index", drawingBatchSummary)
+                estimateRow("Correction mode", bridge.currentDrawingCalibrationBatch?.correctionMode ?? "--")
+                estimateRow("Model id used", bridge.currentDrawingCalibrationBatch?.modelIdUsed ?? "--")
                 estimateRow("Drawing model family", drawingModelFamilySummary)
                 estimateRow("Solver kind", drawingSolverSummary)
+                estimateRow("Action model kind", bridge.latestDrawingCalibration?.actionModelKind ?? "--")
                 estimateRow("Grid/control count", drawingControlSummary)
                 estimateRow("Sample count", drawingSampleSummary)
                 estimateRow("Coverage", drawingCoverageSummary)
                 estimateRow("RMS/p95/max", drawingResidualSummary)
                 estimateRow("Holdout error", drawingHoldoutSummary)
+                estimateRow("Validation error", drawingHoldoutSummary)
+                estimateRow("Retry count", drawingRetrySummary)
                 estimateRow("Blockers", drawingBlockerSummary)
                 estimateRow("Model id", bridge.latestDrawingCalibration?.modelId ?? "--")
             }
@@ -183,6 +262,13 @@ private struct SetupModelEstimatesDisclosure: View {
         return "\(calibration.modelFamily)\(version)"
     }
 
+    private var drawingBatchSummary: String {
+        guard let batch = bridge.currentDrawingCalibrationBatch else {
+            return "--"
+        }
+        return "\(batch.batchId) #\(batch.batchIndex) \(batch.purpose)"
+    }
+
     private var drawingSolverSummary: String {
         bridge.latestDrawingCalibration?.solverKind ?? "--"
     }
@@ -250,19 +336,37 @@ private struct SetupModelEstimatesDisclosure: View {
         guard let calibration = bridge.latestDrawingCalibration else {
             return "--"
         }
-        if calibration.holdoutSampleCount == 0 {
-            return "0 holdout samples"
+        let metrics = calibration.validationMetrics ?? calibration.holdoutMetrics
+        if metrics == nil && calibration.holdoutSampleCount == 0 {
+            return "0 validation samples"
         }
-        let rms = (calibration.holdoutMetrics?.rmsMm ?? calibration.holdoutRmsResidualMm)
+        let rms = (metrics?.rmsMm ?? calibration.holdoutRmsResidualMm)
             .map { String(format: "rms %.1fmm", $0) } ?? "rms --"
-        let max = (calibration.holdoutMetrics?.maxMm ?? calibration.holdoutMaxResidualMm)
+        let p95 = metrics?.p95Mm.map { String(format: "p95 %.1fmm", $0) } ?? "p95 --"
+        let max = (metrics?.maxMm ?? calibration.holdoutMaxResidualMm)
             .map { String(format: "max %.1fmm", $0) } ?? "max --"
-        return "\(rms) \(max)"
+        return "\(rms) \(p95) \(max)"
+    }
+
+    private var drawingRetrySummary: String {
+        guard let batch = bridge.currentDrawingCalibrationBatch else {
+            return "--"
+        }
+        return "\(batch.retryCount)/\(batch.maxRetries)"
     }
 
     private var drawingBlockerSummary: String {
+        if let session = bridge.latestDrawingCalibrationSession, !session.blockers.isEmpty {
+            return session.blockers.prefix(2).joined(separator: " | ")
+        }
+        if let batch = bridge.currentDrawingCalibrationBatch, !batch.blockers.isEmpty {
+            return batch.blockers.prefix(2).joined(separator: " | ")
+        }
         guard let calibration = bridge.latestDrawingCalibration else {
             return "--"
+        }
+        if let actionBlockers = calibration.actionModelBlockers, !actionBlockers.isEmpty {
+            return actionBlockers.prefix(2).joined(separator: " | ")
         }
         guard !calibration.blockers.isEmpty else {
             guard let stale = calibration.staleReasons, !stale.isEmpty else {

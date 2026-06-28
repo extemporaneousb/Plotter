@@ -72,6 +72,13 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert "CalibrationWizardView(" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
     assert "workspace.requestSetupCommand(.drawFrame)" in setup_panel
+    assert "workspace.requestSetupCommand(.startDrawingSession)" in setup_panel
+    assert "workspace.requestSetupCommand(.previewDrawingBatch)" in setup_panel
+    assert "workspace.requestSetupCommand(.runDrawingBatch)" in setup_panel
+    assert "workspace.requestSetupCommand(.observeDrawingBatch)" in setup_panel
+    assert "workspace.requestSetupCommand(.fitDrawingSession)" in setup_panel
+    assert "workspace.requestSetupCommand(.validateDrawingSession)" in setup_panel
+    assert "workspace.requestSetupCommand(.finishDrawingSession)" in setup_panel
     assert "drawFrameVisible" in workspace
     assert "drawFrameEnabled" in workspace
     assert "fieldAspectYPerX" in workspace
@@ -819,7 +826,25 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "BridgeDrawingProgramObservationRequest" in bridge_client
     assert "BridgeDrawingProgramSampleObservationRequest" in bridge_client
     assert 'post(path: "calibration/drawing/program-observation"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/start"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/preview-next-batch"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/run-batch"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/observe-batch"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/fit"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/validate"' in bridge_client
+    assert 'post(path: "calibration/drawing/session/finish"' in bridge_client
+    assert 'get(path: "calibration/drawing/session/status"' in bridge_client
+    assert "BridgeDrawingCalibrationSessionActionResponse" in bridge_client
+    assert "sessionId" in bridge_client
+    assert "batchId" in bridge_client
+    assert "correctionMode" in bridge_client
+    assert "modelIdUsed" in bridge_client
+    assert "planHash" in bridge_client
+    assert "predictedObservedMm" in bridge_client
     assert "drawing_program_observation_recorded" in bridge_model
+    assert "drawing_calibration_session_started" in bridge_model
+    assert "drawing_calibration_batch_observed" in bridge_model
+    assert "recordWeakProgressiveDrawingCalibrationObservation" in bridge_model
     assert "fallback_route\": \"calibration/drawing/frame-observation\"" in bridge_model
     assert "drawDrawingBorder" in overlay
     assert "DRAWING BORDER %.0f x %.0f mm" in overlay
@@ -899,6 +924,11 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     assert "/calibration/drawing/program/run" in server
     assert "BridgeDrawingCalibrationModel" in bridge_client
     assert "latestDrawingCalibration" in bridge_model
+    assert "latestDrawingCalibrationSession" in bridge_model
+    assert "currentDrawingCalibrationBatch" in bridge_model
+    assert "Action model kind" in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert "Validation error" in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert "Retry count" in _read(SWIFT_DIR / "SetupPanel.swift")
     assert "wizardDrawingCalibrationDetail" in content
 
     docs = readme + contract + plan

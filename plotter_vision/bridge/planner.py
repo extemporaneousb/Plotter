@@ -220,6 +220,7 @@ def build_polygon_draw_plan(
             source_polylines=polylines,
             frame=frame,
             model=drawing_calibration_model,
+            draw_feed_mm_min=request.draw_feed_mm_min,
         )
     draw_segment_count = sum(len(points) - 1 for points in split_polylines)
     if draw_segment_count <= 0:
@@ -496,6 +497,7 @@ def _apply_drawing_correction(
     source_polylines: list[PlannedPolyline],
     frame: DrawingFrameMM,
     model: DrawingCalibrationModel | None,
+    draw_feed_mm_min: float,
 ) -> tuple[list[list[LogicalPointMM]], DrawingCorrectionSummary]:
     if model is None:
         raise MotionSafetyError("Drawing model correction requested but no drawing calibration model is loaded.")
@@ -508,9 +510,14 @@ def _apply_drawing_correction(
     max_correction = 0.0
     max_uncertainty: float | None = None
 
-    for points, source in zip(split_polylines, source_polylines):
+    for polyline_index, (points, source) in enumerate(zip(split_polylines, source_polylines)):
         corrected_points_for_polyline: list[LogicalPointMM] = []
-        action_features = _drawing_action_features(source)
+        action_features = _drawing_action_features(
+            source=source,
+            points=points,
+            polyline_index=polyline_index,
+            draw_feed_mm_min=draw_feed_mm_min,
+        )
         for point in points:
             desired = PaperPointMM(
                 x=point.x - frame.origin_x_mm,
@@ -565,13 +572,59 @@ def _apply_drawing_correction(
     )
 
 
-def _drawing_action_features(source: PlannedPolyline) -> dict[str, float]:
-    features = {f"source_role:{source.role}": 1.0}
+def _drawing_action_features(
+    *,
+    source: PlannedPolyline,
+    points: list[LogicalPointMM],
+    polyline_index: int,
+    draw_feed_mm_min: float,
+) -> dict[str, float]:
+    start = points[0]
+    end = points[-1]
+    dx = end.x - start.x
+    dy = end.y - start.y
+    length = math.hypot(dx, dy)
+    direction_x = dx / length if length > 1e-9 else 0.0
+    direction_y = dy / length if length > 1e-9 else 0.0
+    curvature = _polyline_curvature_turns(points)
+    bucket = min(3, polyline_index // 4)
+    features = {
+        f"source_role:{source.role}": 1.0,
+        "direction_unit_x": direction_x,
+        "direction_unit_y": direction_y,
+        "approach_direction_unit_x": direction_x,
+        "approach_direction_unit_y": direction_y,
+        "feed_mm_min_scaled": min(draw_feed_mm_min / 1000.0, 2.0),
+        "segment_length_mm_scaled": min(length / 100.0, 2.0),
+        "curvature_abs_turns": curvature,
+        "pen_transition_down": 1.0,
+        "pen_transition_up": 1.0,
+        f"stroke_order_bucket_{bucket}": 1.0,
+        "opposite_direction_repeat": 0.0,
+    }
     if source.semantic_role:
         features[f"semantic_role:{source.semantic_role}"] = 1.0
-    if source.primitive_id:
-        features[f"primitive_id:{source.primitive_id}"] = 1.0
     return features
+
+
+def _polyline_curvature_turns(points: list[LogicalPointMM]) -> float:
+    if len(points) < 3:
+        return 0.0
+    total = 0.0
+    previous_direction: tuple[float, float] | None = None
+    for start, end in zip(points, points[1:]):
+        dx = end.x - start.x
+        dy = end.y - start.y
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            continue
+        direction = (dx / length, dy / length)
+        if previous_direction is not None:
+            dot = direction[0] * previous_direction[0] + direction[1] * previous_direction[1]
+            cross = previous_direction[0] * direction[1] - previous_direction[1] * direction[0]
+            total += abs(math.atan2(cross, dot)) / math.pi
+        previous_direction = direction
+    return total
 
 
 def _command_metadata(commands: list[PlannedCommand]) -> list[MotionSegmentMetadata | None]:

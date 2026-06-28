@@ -48,6 +48,12 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var drawingCalibrationStatus = "DRAW CAL --"
     @Published var drawingCalibrationDetail = "No drawing calibration"
     @Published var latestDrawingCalibration: BridgeDrawingCalibrationModel?
+    @Published var drawingCalibrationSessionStatus = "SESSION --"
+    @Published var drawingCalibrationSessionDetail = "No drawing calibration session"
+    @Published var latestDrawingCalibrationSession: BridgeDrawingCalibrationSession?
+    @Published var currentDrawingCalibrationBatch: BridgeDrawingCalibrationBatch?
+    @Published var latestDrawingCalibrationBatchPreview: BridgeDrawingCalibrationProgramResponse?
+    @Published var latestDrawingCalibrationBatchRun: BridgeDrawingCalibrationProgramResponse?
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var latestVisualReadiness: BridgeVisualReadinessState?
@@ -254,6 +260,12 @@ final class PlotterBridgeModel: ObservableObject {
             latestDrawingCalibration = nil
             drawingCalibrationStatus = "DRAW CAL --"
             drawingCalibrationDetail = "No drawing calibration"
+            latestDrawingCalibrationSession = nil
+            currentDrawingCalibrationBatch = nil
+            latestDrawingCalibrationBatchPreview = nil
+            latestDrawingCalibrationBatchRun = nil
+            drawingCalibrationSessionStatus = "SESSION --"
+            drawingCalibrationSessionDetail = "No drawing calibration session"
             statusText = "Visual setup reset"
             diagnosticsEvent(
                 "visual_setup_reset",
@@ -2891,6 +2903,232 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func refreshDrawingCalibrationSessionStatus() async {
+        guard isOnline else {
+            drawingCalibrationSessionStatus = "SESSION OFF"
+            drawingCalibrationSessionDetail = "Bridge offline"
+            latestDrawingCalibrationSession = nil
+            currentDrawingCalibrationBatch = nil
+            return
+        }
+        do {
+            let response = try await client.drawingCalibrationSessionStatus()
+            applyDrawingCalibrationSessionStatus(response)
+            diagnosticsEvent(
+                "drawing_calibration_session_refreshed",
+                [
+                    "status": response.status,
+                    "session_id": response.session?.sessionId ?? "",
+                    "batch_id": response.session?.currentBatchId ?? "",
+                    "blockers": response.session?.blockers ?? []
+                ],
+                snapshot: false
+            )
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_session_refresh_failed", errorPayload(error), snapshot: false)
+        }
+    }
+
+    func startProgressiveDrawingCalibrationSession() async {
+        guard isOnline else {
+            drawingCalibrationSessionStatus = "SESSION OFF"
+            drawingCalibrationSessionDetail = "Bridge offline"
+            return
+        }
+        do {
+            let response = try await client.startDrawingCalibrationSession(
+                BridgeDrawingCalibrationSessionStartRequest()
+            )
+            applyDrawingCalibrationSessionResponse(response)
+            diagnosticsEvent("drawing_calibration_session_started", drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_session_start_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func previewNextProgressiveDrawingCalibrationBatch() async {
+        do {
+            let response = try await client.previewNextDrawingCalibrationBatch(
+                drawingSessionBatchRequest(requestId: "swift-preview-drawing-batch")
+            )
+            applyDrawingCalibrationSessionResponse(response)
+            if let preview = response.preview {
+                publishDrawingCalibrationBatchOverlay(preview, label: "Expected batch")
+            }
+            diagnosticsEvent("drawing_calibration_batch_previewed", drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_batch_preview_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func runProgressiveDrawingCalibrationBatch() async {
+        do {
+            let response = try await client.runDrawingCalibrationBatch(
+                drawingSessionBatchRequest(
+                    expectedPlanHash: currentDrawingCalibrationBatch?.planHash
+                        ?? latestDrawingCalibrationBatchPreview?.planHash,
+                    requestId: "swift-run-drawing-batch"
+                )
+            )
+            applyDrawingCalibrationSessionResponse(response)
+            if let run = response.run {
+                publishDrawingCalibrationBatchOverlay(run, label: "Expected batch")
+            }
+            diagnosticsEvent("drawing_calibration_batch_run", drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_batch_run_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func recordProgressiveDrawingCalibrationObservation(_ result: InkProgramInspectionResult) async {
+        guard let session = latestDrawingCalibrationSession,
+              let batch = currentDrawingCalibrationBatch else {
+            drawingCalibrationSessionStatus = "SESSION BLOCK"
+            drawingCalibrationSessionDetail = "No active drawing calibration batch"
+            return
+        }
+        do {
+            let response = try await client.observeDrawingCalibrationBatch(
+                BridgeDrawingProgramObservationRequest(
+                    commandId: latestDrawingCalibrationBatchRun?.commandId
+                        ?? latestDrawingCalibrationBatchPreview?.commandId,
+                    paperRegistrationId: session.paperRegistrationId,
+                    cameraId: session.cameraId,
+                    cameraName: session.cameraName,
+                    programId: batch.batchId,
+                    programKind: batch.programKind,
+                    sessionId: session.sessionId,
+                    batchId: batch.batchId,
+                    runId: latestDrawingCalibrationBatchRun?.commandId,
+                    planHash: latestDrawingCalibrationBatchRun?.planHash
+                        ?? latestDrawingCalibrationBatchPreview?.planHash,
+                    correctionMode: batch.correctionMode,
+                    modelIdUsed: batch.modelIdUsed,
+                    expectedFrameCornersMm: nil,
+                    primitives: result.primitives.map { primitive in
+                        BridgeDrawingProgramPrimitiveObservationRequest(
+                            primitiveId: primitive.primitiveId,
+                            primitiveKind: primitive.kind.rawValue,
+                            sampleCount: primitive.sampleCount,
+                            detectedSampleCount: primitive.detectedSampleCount,
+                            greenPixelCount: primitive.greenPixelCount,
+                            coverageFraction: primitive.coverageFraction,
+                            rmsResidualMm: primitive.rmsResidualMm,
+                            p95ResidualMm: primitive.p95ResidualMm,
+                            maxResidualMm: primitive.maxResidualMm
+                        )
+                    },
+                    samples: result.samples.map { sample in
+                        BridgeDrawingProgramSampleObservationRequest(
+                            primitiveId: sample.primitiveId,
+                            sampleIndex: sample.sampleIndex,
+                            expectedMm: sample.expectedMm,
+                            expectedCameraNorm: sample.expectedCameraNorm,
+                            observedMm: sample.observedMm,
+                            observedCameraNorm: sample.observedCameraNorm,
+                            residualMm: sample.residualMm,
+                            detected: sample.detected,
+                            greenPixelCount: sample.greenPixelCount
+                        )
+                    },
+                    sampleCount: result.sampleCount,
+                    detectedSampleCount: result.detectedSampleCount,
+                    totalGreenPixels: result.totalGreenPixels,
+                    coverageFraction: result.coverageFraction,
+                    rmsResidualMm: result.rmsResidualMm,
+                    p95ResidualMm: result.p95ResidualMm,
+                    maxResidualMm: result.maxResidualMm,
+                    usable: result.isUsable
+                )
+            )
+            applyDrawingCalibrationSessionResponse(response)
+            diagnosticsEvent("drawing_calibration_batch_observed", drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_batch_observe_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func recordWeakProgressiveDrawingCalibrationObservation(reason: String) async {
+        guard let session = latestDrawingCalibrationSession,
+              let batch = currentDrawingCalibrationBatch else {
+            drawingCalibrationSessionStatus = "SESSION BLOCK"
+            drawingCalibrationSessionDetail = "No active drawing calibration batch"
+            return
+        }
+        do {
+            let response = try await client.observeDrawingCalibrationBatch(
+                BridgeDrawingProgramObservationRequest(
+                    commandId: latestDrawingCalibrationBatchRun?.commandId
+                        ?? latestDrawingCalibrationBatchPreview?.commandId,
+                    paperRegistrationId: session.paperRegistrationId,
+                    cameraId: session.cameraId,
+                    cameraName: session.cameraName,
+                    programId: batch.batchId,
+                    programKind: batch.programKind,
+                    sessionId: session.sessionId,
+                    batchId: batch.batchId,
+                    runId: latestDrawingCalibrationBatchRun?.commandId,
+                    planHash: latestDrawingCalibrationBatchRun?.planHash
+                        ?? latestDrawingCalibrationBatchPreview?.planHash,
+                    correctionMode: batch.correctionMode,
+                    modelIdUsed: batch.modelIdUsed,
+                    expectedFrameCornersMm: nil,
+                    primitives: [],
+                    samples: [],
+                    sampleCount: 0,
+                    detectedSampleCount: 0,
+                    totalGreenPixels: 0,
+                    coverageFraction: 0,
+                    rmsResidualMm: nil,
+                    p95ResidualMm: nil,
+                    maxResidualMm: nil,
+                    usable: false,
+                    blockers: [reason]
+                )
+            )
+            applyDrawingCalibrationSessionResponse(response)
+            diagnosticsEvent("drawing_calibration_batch_weak_observation", drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("drawing_calibration_batch_weak_observation_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    func fitProgressiveDrawingCalibrationSession() async {
+        await runDrawingSessionAction(
+            requestId: "swift-fit-drawing-session",
+            eventName: "drawing_calibration_session_fit",
+            action: client.fitDrawingCalibrationSession
+        )
+    }
+
+    func validateProgressiveDrawingCalibrationSession() async {
+        await runDrawingSessionAction(
+            requestId: "swift-validate-drawing-session",
+            eventName: "drawing_calibration_session_validate",
+            action: client.validateDrawingCalibrationSession
+        )
+    }
+
+    func finishProgressiveDrawingCalibrationSession() async {
+        await runDrawingSessionAction(
+            requestId: "swift-finish-drawing-session",
+            eventName: "drawing_calibration_session_finish",
+            action: client.finishDrawingCalibrationSession
+        )
+    }
+
     func recordDrawingFrameInspection(
         _ result: DrawnFrameInspectionResult,
         expectedCorners: [PaperPointMmSnapshot],
@@ -3016,6 +3254,173 @@ final class PlotterBridgeModel: ObservableObject {
             drawingCalibrationDetail = "\(residual) \(maxResidual); \(blocker)"
         } else {
             drawingCalibrationDetail = "\(residual) \(maxResidual); \(calibration.usableObservationCount) usable frame(s)"
+        }
+    }
+
+    private func applyDrawingCalibrationSessionStatus(
+        _ response: BridgeDrawingCalibrationSessionStatusResponse
+    ) {
+        latestDrawingCalibrationSession = response.session
+        currentDrawingCalibrationBatch = response.session.flatMap { session in
+            session.batches.last(where: { $0.batchId == session.currentBatchId })
+                ?? session.batches.last
+        }
+        if let calibration = response.calibration {
+            latestDrawingCalibration = calibration
+        }
+        guard let session = response.session else {
+            drawingCalibrationSessionStatus = response.status == "missing" ? "SESSION --" : "SESSION ERR"
+            drawingCalibrationSessionDetail = response.error ?? "No drawing calibration session"
+            return
+        }
+        drawingCalibrationSessionStatus = "SESSION \(session.status.uppercased().replacingOccurrences(of: "_", with: " "))"
+        drawingCalibrationSessionDetail = drawingSessionDetail(session: session, batch: currentDrawingCalibrationBatch)
+    }
+
+    private func applyDrawingCalibrationSessionResponse(
+        _ response: BridgeDrawingCalibrationSessionActionResponse
+    ) {
+        latestDrawingCalibrationSession = response.session
+        currentDrawingCalibrationBatch = response.batch ?? response.session.flatMap { session in
+            session.batches.last(where: { $0.batchId == session.currentBatchId })
+                ?? session.batches.last
+        }
+        latestDrawingCalibrationBatchPreview = response.preview ?? latestDrawingCalibrationBatchPreview
+        latestDrawingCalibrationBatchRun = response.run ?? latestDrawingCalibrationBatchRun
+        if let calibration = response.calibration {
+            latestDrawingCalibration = calibration
+            updatePredictedDrawingProgramOverlay()
+        }
+        guard let session = response.session else {
+            drawingCalibrationSessionStatus = response.status == "missing" ? "SESSION --" : "SESSION ERR"
+            drawingCalibrationSessionDetail = response.error ?? "No drawing calibration session"
+            return
+        }
+        drawingCalibrationSessionStatus = "SESSION \(session.status.uppercased().replacingOccurrences(of: "_", with: " "))"
+        drawingCalibrationSessionDetail = drawingSessionDetail(session: session, batch: currentDrawingCalibrationBatch)
+        if response.retryScheduled {
+            drawingCalibrationSessionDetail += "; retry scheduled"
+        }
+    }
+
+    private func drawingSessionDetail(
+        session: BridgeDrawingCalibrationSession,
+        batch: BridgeDrawingCalibrationBatch?
+    ) -> String {
+        var parts = ["\(session.sessionId)"]
+        if let batch {
+            parts.append("#\(batch.batchIndex) \(batch.purpose) \(batch.correctionMode)")
+            parts.append("retry \(batch.retryCount)/\(batch.maxRetries)")
+            if let modelId = batch.modelIdUsed {
+                parts.append("model \(modelId)")
+            }
+            if !batch.blockers.isEmpty {
+                parts.append(batch.blockers.prefix(2).joined(separator: " | "))
+            }
+        }
+        if !session.blockers.isEmpty {
+            parts.append(session.blockers.prefix(2).joined(separator: " | "))
+        }
+        return parts.joined(separator: "; ")
+    }
+
+    private func drawingSessionBatchRequest(
+        expectedPlanHash: String? = nil,
+        requestId: String? = nil
+    ) -> BridgeDrawingCalibrationSessionBatchRequest {
+        BridgeDrawingCalibrationSessionBatchRequest(
+            sessionId: latestDrawingCalibrationSession?.sessionId,
+            batchId: currentDrawingCalibrationBatch?.batchId,
+            correctionMode: nil,
+            expectedPlanHash: expectedPlanHash,
+            requestId: requestId
+        )
+    }
+
+    private func runDrawingSessionAction(
+        requestId: String,
+        eventName: String,
+        action: (BridgeDrawingCalibrationSessionBatchRequest) async throws -> BridgeDrawingCalibrationSessionActionResponse
+    ) async {
+        do {
+            let response = try await action(drawingSessionBatchRequest(requestId: requestId))
+            applyDrawingCalibrationSessionResponse(response)
+            diagnosticsEvent(eventName, drawingSessionDiagnostics(response), snapshot: true)
+        } catch {
+            drawingCalibrationSessionStatus = "SESSION ERR"
+            drawingCalibrationSessionDetail = error.localizedDescription
+            diagnosticsEvent("\(eventName)_failed", errorPayload(error), snapshot: true)
+        }
+    }
+
+    private func drawingSessionDiagnostics(
+        _ response: BridgeDrawingCalibrationSessionActionResponse
+    ) -> [String: Any] {
+        [
+            "status": response.status,
+            "session_id": response.session?.sessionId ?? "",
+            "batch_id": response.batch?.batchId ?? response.session?.currentBatchId ?? "",
+            "batch_index": response.batch?.batchIndex ?? 0,
+            "correction_mode": response.batch?.correctionMode ?? "",
+            "model_id_used": response.batch?.modelIdUsed ?? "",
+            "model_id": response.calibration?.modelId ?? "",
+            "retry_count": response.batch?.retryCount ?? 0,
+            "retry_scheduled": response.retryScheduled,
+            "observation_id": response.observationId ?? "",
+            "blockers": response.session?.blockers ?? response.batch?.blockers ?? []
+        ]
+    }
+
+    private func publishDrawingCalibrationBatchOverlay(
+        _ response: BridgeDrawingCalibrationProgramResponse,
+        label: String
+    ) {
+        guard let overlay = response.previewOverlay else { return }
+        expectedPathRole = "drawing_calibration_batch"
+        expectedPathLabel = label
+        expectedPathSegments = overlay.primitives.compactMap { primitive in
+            guard visualFieldWidthMm > 0, visualFieldHeightMm > 0 else { return nil }
+            return ExpectedPathSegment(
+                startNorm: [
+                    primitive.startPaperMm.x / visualFieldWidthMm,
+                    primitive.startPaperMm.y / visualFieldHeightMm
+                ],
+                endNorm: [
+                    primitive.endPaperMm.x / visualFieldWidthMm,
+                    primitive.endPaperMm.y / visualFieldHeightMm
+                ],
+                startMachineMm: [],
+                endMachineMm: [],
+                lengthMm: primitive.lengthMm
+            )
+        }
+        if response.drawingCorrection?.status == "applied" {
+            predictedPathLabel = "Model-corrected batch"
+            predictedPathSegments = expectedPathSegments
+        } else {
+            predictedPathSegments = []
+        }
+    }
+
+    func activeDrawingCalibrationInkPrimitives() -> [InkProgramPrimitive] {
+        guard let overlay = latestDrawingCalibrationBatchRun?.previewOverlay
+            ?? latestDrawingCalibrationBatchPreview?.previewOverlay else {
+            return []
+        }
+        let grouped = Dictionary(grouping: overlay.primitives, by: \.primitiveId)
+        return grouped.keys.sorted().compactMap { primitiveId in
+            guard let primitives = grouped[primitiveId], !primitives.isEmpty else { return nil }
+            var points: [PaperPointMmSnapshot] = []
+            for primitive in primitives.sorted(by: { $0.segmentIndex < $1.segmentIndex }) {
+                if points.last != primitive.startPaperMm {
+                    points.append(primitive.startPaperMm)
+                }
+                points.append(primitive.endPaperMm)
+            }
+            if points.count == 1 {
+                return InkProgramPrimitive.mark(primitiveId: primitiveId, center: points[0])
+            }
+            return InkProgramPrimitive.denseStroke(primitiveId: primitiveId, points: points)
         }
     }
 

@@ -21,10 +21,14 @@ DEFAULT_RESIDUAL_GRID_ROWS = 5
 DEFAULT_RESIDUAL_GRID_UNCERTAINTY_LIMIT_MM = 14.0
 DEFAULT_RESIDUAL_GRID_MAX_CORRECTION_MM = 30.0
 DEFAULT_RESIDUAL_GRID_MIN_COVERAGE_FRACTION = 0.2
+DEFAULT_ACTION_RESIDUAL_REGULARIZATION = 4.0
+DEFAULT_ACTION_RESIDUAL_MIN_SAMPLE_COUNT = 8
+DEFAULT_ACTION_RESIDUAL_MAX_CORRECTION_MM = 5.0
 
 DrawingCalibrationStatus = Literal["collecting", "ready", "needs_more_evidence", "blocked"]
 DrawingCalibrationFreshness = Literal["unknown", "fresh", "stale"]
 DrawingCalibrationModelVersion = Literal["residual_grid_v1"]
+DrawingCalibrationCorrectionMode = Literal["uncorrected", "current_model", "validation", "retry"]
 DrawingCalibrationSampleKind = Literal[
     "mark",
     "stroke_endpoint",
@@ -219,7 +223,19 @@ class DrawingCalibrationSample(BaseModel):
     sample_id: str = Field(default_factory=lambda: f"drawing-sample-{uuid.uuid4().hex[:12]}")
     sample_kind: DrawingCalibrationSampleKind
     expected_mm: PaperPointMM
+    desired_mm: PaperPointMM | None = None
+    commanded_mm: PaperPointMM | None = None
+    predicted_observed_mm: PaperPointMM | None = None
     observed_mm: PaperPointMM
+    correction_mode: DrawingCalibrationCorrectionMode = "uncorrected"
+    model_id_used: str | None = None
+    session_id: str | None = None
+    batch_id: str | None = None
+    run_id: str | None = None
+    plan_hash: str | None = None
+    primitive_id: str | None = None
+    stroke_id: str | None = None
+    sample_index: int | None = None
     role: DrawingCalibrationSampleRole = "fit"
     source_observation_id: str | None = None
     geometry_id: str | None = None
@@ -265,13 +281,33 @@ class DrawingCalibrationSample(BaseModel):
     def _validate_action_features(cls, value: dict[str, float]) -> dict[str, float]:
         return {key: _finite_float(feature, f"sample action feature {key}") for key, feature in value.items()}
 
+    @field_validator("sample_index")
+    @classmethod
+    def _validate_sample_index(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("sample_index must be non-negative.")
+        return value
+
+    @model_validator(mode="after")
+    def _default_provenance_coordinates(self) -> DrawingCalibrationSample:
+        if self.desired_mm is None:
+            self.desired_mm = self.expected_mm
+        if self.commanded_mm is None:
+            self.commanded_mm = self.expected_mm
+        if self.geometry_id is None and self.primitive_id is not None:
+            self.geometry_id = self.primitive_id
+        return self
+
     def feature_vector(self) -> dict[str, float]:
-        features: dict[str, float] = {f"sample_kind:{self.sample_kind}": 1.0}
+        features: dict[str, float] = {}
         if self.action_metadata is not None:
             features.update(self.action_metadata.features)
-            features[f"action_kind:{self.action_metadata.action_kind}"] = 1.0
         features.update(self.action_features)
-        return features
+        return {
+            key: value
+            for key, value in features.items()
+            if _is_production_action_feature(key) and math.isfinite(value)
+        }
 
 
 class DrawingCalibrationObservation(BaseModel):
@@ -449,6 +485,7 @@ class DrawingActionResidualCoefficient(BaseModel):
     residual_x_mm: float
     residual_y_mm: float
     sample_count: int
+    regularization: float = DEFAULT_ACTION_RESIDUAL_REGULARIZATION
     rms_remaining_mm: float | None = None
 
 
@@ -496,10 +533,18 @@ class DrawingCalibrationModel(BaseModel):
     expected_to_observed: Homography2D | None = None
     observed_to_expected: Homography2D | None = None
     residual_grid: DrawingResidualGridV1 | None = None
+    action_model_kind: Literal["none", "regularized_linear_v1"] = "none"
+    action_feature_names: list[str] = Field(default_factory=list)
     action_residual_coefficients: list[DrawingActionResidualCoefficient] = Field(default_factory=list)
+    action_regularization: float | None = None
+    action_max_correction_mm: float = DEFAULT_ACTION_RESIDUAL_MAX_CORRECTION_MM
+    action_fit_metrics_without_action_residuals: DrawingCalibrationMetrics | None = None
+    action_fit_metrics_with_action_residuals: DrawingCalibrationMetrics | None = None
+    action_model_blockers: list[str] = Field(default_factory=list)
     coverage: DrawingCalibrationCoverage | None = None
     fit_metrics: DrawingCalibrationMetrics | None = None
     holdout_metrics: DrawingCalibrationMetrics | None = None
+    validation_metrics: DrawingCalibrationMetrics | None = None
     rms_residual_mm: float | None = None
     p95_residual_mm: float | None = None
     max_residual_mm: float | None = None
@@ -583,6 +628,11 @@ class DrawingCalibrationModel(BaseModel):
                 continue
             residual_x += coefficient.residual_x_mm * feature_value
             residual_y += coefficient.residual_y_mm * feature_value
+        norm = math.hypot(residual_x, residual_y)
+        if norm > self.action_max_correction_mm > 0.0:
+            scale = self.action_max_correction_mm / norm
+            residual_x *= scale
+            residual_y *= scale
         return (residual_x, residual_y)
 
     def correct_target_for_planning(
@@ -704,9 +754,14 @@ def drawing_observation_from_frame_observation(
             sample_id=f"{observation.observation_id}-corner-{corner.corner_index}",
             sample_kind="frame_corner",
             expected_mm=corner.expected_mm,
+            desired_mm=corner.expected_mm,
+            commanded_mm=corner.expected_mm,
             observed_mm=corner.observed_mm,
+            correction_mode="uncorrected",
             source_observation_id=observation.observation_id,
             geometry_id=f"corner-{corner.corner_index}",
+            primitive_id=f"corner-{corner.corner_index}",
+            sample_index=corner.corner_index,
             confidence=1.0,
             action_metadata=action,
         )
@@ -718,9 +773,14 @@ def drawing_observation_from_frame_observation(
                 sample_id=f"{observation.observation_id}-edge-{edge.edge_index}-start",
                 sample_kind="frame_edge_endpoint",
                 expected_mm=edge.expected_start_mm,
+                desired_mm=edge.expected_start_mm,
+                commanded_mm=edge.expected_start_mm,
                 observed_mm=edge.observed_start_mm,
+                correction_mode="uncorrected",
                 source_observation_id=observation.observation_id,
                 geometry_id=f"edge-{edge.edge_index}",
+                primitive_id=f"edge-{edge.edge_index}",
+                sample_index=edge.edge_index * 2,
                 confidence=_edge_confidence(edge),
                 action_metadata=action,
             )
@@ -730,9 +790,14 @@ def drawing_observation_from_frame_observation(
                 sample_id=f"{observation.observation_id}-edge-{edge.edge_index}-end",
                 sample_kind="frame_edge_endpoint",
                 expected_mm=edge.expected_end_mm,
+                desired_mm=edge.expected_end_mm,
+                commanded_mm=edge.expected_end_mm,
                 observed_mm=edge.observed_end_mm,
+                correction_mode="uncorrected",
                 source_observation_id=observation.observation_id,
                 geometry_id=f"edge-{edge.edge_index}",
+                primitive_id=f"edge-{edge.edge_index}",
+                sample_index=edge.edge_index * 2 + 1,
                 confidence=_edge_confidence(edge),
                 action_metadata=action,
             )
@@ -907,11 +972,31 @@ def build_drawing_calibration_model(
         field_height_mm=field_height_mm,
     )
 
+    model.action_fit_metrics_without_action_residuals = _evaluate_fit_samples(
+        model,
+        accepted_fit_samples,
+        include_action_residual=False,
+    )
     model.action_residual_coefficients = _fit_action_residuals(model, accepted_fit_samples)
-    fit_metrics = _evaluate_samples(model, accepted_fit_samples)
-    holdout_metrics = _evaluate_samples(model, holdout_samples)
+    model.action_feature_names = [coefficient.feature_name for coefficient in model.action_residual_coefficients]
+    if model.action_residual_coefficients:
+        model.action_model_kind = "regularized_linear_v1"
+        model.action_regularization = DEFAULT_ACTION_RESIDUAL_REGULARIZATION
+    else:
+        model.action_model_kind = "none"
+        model.action_model_blockers = [
+            f"Action residual model requires at least {DEFAULT_ACTION_RESIDUAL_MIN_SAMPLE_COUNT} usable samples per feature."
+        ]
+    model.action_fit_metrics_with_action_residuals = _evaluate_fit_samples(
+        model,
+        accepted_fit_samples,
+        include_action_residual=True,
+    )
+    fit_metrics = model.action_fit_metrics_with_action_residuals
+    holdout_metrics = _evaluate_validation_samples(model, holdout_samples)
     model.fit_metrics = fit_metrics
     model.holdout_metrics = holdout_metrics if holdout_samples else None
+    model.validation_metrics = holdout_metrics if holdout_samples else _evaluate_validation_samples(model, accepted_fit_samples)
     model.rms_residual_mm = fit_metrics.rms_mm
     model.p95_residual_mm = fit_metrics.p95_mm
     model.max_residual_mm = fit_metrics.max_mm
@@ -1002,7 +1087,7 @@ def _solve_sample_homography(
     field_height_mm: float,
 ) -> Homography2D:
     source_points = [
-        _normalize_mm(sample.expected_mm, field_width_mm=field_width_mm, field_height_mm=field_height_mm)
+        _normalize_mm(_fit_input_mm(sample), field_width_mm=field_width_mm, field_height_mm=field_height_mm)
         for sample in samples
     ]
     target_points = [
@@ -1023,7 +1108,7 @@ def _solve_reverse_sample_homography(
         for sample in samples
     ]
     target_points = [
-        _normalize_mm(sample.expected_mm, field_width_mm=field_width_mm, field_height_mm=field_height_mm)
+        _normalize_mm(_fit_input_mm(sample), field_width_mm=field_width_mm, field_height_mm=field_height_mm)
         for sample in samples
     ]
     return solve_homography(source_points, target_points)
@@ -1197,7 +1282,8 @@ def _build_residual_grid(
             nearest_distance = None
             distances: list[tuple[float, DrawingCalibrationSample, tuple[float, float]]] = []
             for sample, residual in zip(samples, residuals):
-                distance = math.hypot(sample.expected_mm.x - x_mm, sample.expected_mm.y - y_mm)
+                fit_input = _fit_input_mm(sample)
+                distance = math.hypot(fit_input.x - x_mm, fit_input.y - y_mm)
                 if nearest_distance is None or distance < nearest_distance:
                     nearest_distance = distance
                 distances.append((distance, sample, residual))
@@ -1254,7 +1340,7 @@ def _fit_action_residuals(
 ) -> list[DrawingActionResidualCoefficient]:
     feature_rows: dict[str, list[tuple[float, float, float]]] = {}
     for sample in samples:
-        predicted = model.apply_expected_to_observed(sample.expected_mm, include_action_residual=False)
+        predicted = model.apply_expected_to_observed(_fit_input_mm(sample), include_action_residual=False)
         residual_x = sample.observed_mm.x - predicted.x
         residual_y = sample.observed_mm.y - predicted.y
         for feature_name, feature_value in sample.feature_vector().items():
@@ -1264,9 +1350,9 @@ def _fit_action_residuals(
 
     coefficients: list[DrawingActionResidualCoefficient] = []
     for feature_name, rows in sorted(feature_rows.items()):
-        if len(rows) < 4:
+        if len(rows) < DEFAULT_ACTION_RESIDUAL_MIN_SAMPLE_COUNT:
             continue
-        denominator = sum(value * value for value, _, _ in rows)
+        denominator = sum(value * value for value, _, _ in rows) + DEFAULT_ACTION_RESIDUAL_REGULARIZATION
         if denominator <= 0.0:
             continue
         coefficient_x = sum(value * residual_x for value, residual_x, _ in rows) / denominator
@@ -1283,15 +1369,18 @@ def _fit_action_residuals(
                 residual_x_mm=coefficient_x,
                 residual_y_mm=coefficient_y,
                 sample_count=len(rows),
+                regularization=DEFAULT_ACTION_RESIDUAL_REGULARIZATION,
                 rms_remaining_mm=_rms(remaining),
             )
         )
     return coefficients
 
 
-def _evaluate_samples(
+def _evaluate_fit_samples(
     model: DrawingCalibrationModel,
     samples: list[DrawingCalibrationSample],
+    *,
+    include_action_residual: bool = True,
 ) -> DrawingCalibrationMetrics:
     residuals = [
         math.hypot(
@@ -1299,7 +1388,35 @@ def _evaluate_samples(
             sample.observed_mm.y - predicted.y,
         )
         for sample in samples
-        for predicted in [model.apply_expected_to_observed(sample.expected_mm, action_features=sample.feature_vector())]
+        for predicted in [
+            model.apply_expected_to_observed(
+                _fit_input_mm(sample),
+                action_features=sample.feature_vector(),
+                include_action_residual=include_action_residual,
+            )
+        ]
+    ]
+    if not residuals:
+        return DrawingCalibrationMetrics(sample_count=0)
+    return DrawingCalibrationMetrics(
+        sample_count=len(samples),
+        rms_mm=_rms(residuals),
+        p95_mm=_percentile(residuals, 0.95),
+        max_mm=max(residuals),
+    )
+
+
+def _evaluate_validation_samples(
+    model: DrawingCalibrationModel,
+    samples: list[DrawingCalibrationSample],
+) -> DrawingCalibrationMetrics:
+    residuals = [
+        math.hypot(
+            sample.observed_mm.x - target.x,
+            sample.observed_mm.y - target.y,
+        )
+        for sample in samples
+        for target in [_validation_target_mm(model, sample)]
     ]
     if not residuals:
         return DrawingCalibrationMetrics(sample_count=0)
@@ -1371,11 +1488,61 @@ def _sample_residual_after_global_model(
 ) -> tuple[float, float]:
     predicted_x, predicted_y = _apply_global_model(
         baseline,
-        sample.expected_mm,
+        _fit_input_mm(sample),
         field_width_mm=field_width_mm,
         field_height_mm=field_height_mm,
     )
     return (sample.observed_mm.x - predicted_x, sample.observed_mm.y - predicted_y)
+
+
+def _fit_input_mm(sample: DrawingCalibrationSample) -> PaperPointMM:
+    return sample.commanded_mm or sample.expected_mm
+
+
+def _validation_target_mm(
+    model: DrawingCalibrationModel,
+    sample: DrawingCalibrationSample,
+) -> PaperPointMM:
+    if sample.correction_mode in {"current_model", "validation", "retry"}:
+        return sample.desired_mm or sample.expected_mm
+    return model.apply_expected_to_observed(
+        _fit_input_mm(sample),
+        action_features=sample.feature_vector(),
+        include_action_residual=True,
+    )
+
+
+def _is_production_action_feature(feature_name: str) -> bool:
+    if feature_name.startswith("primitive_id:"):
+        return False
+    if feature_name.startswith("diagnostic:"):
+        return False
+    return feature_name in {
+        "direction_unit_x",
+        "direction_unit_y",
+        "approach_direction_unit_x",
+        "approach_direction_unit_y",
+        "feed_mm_min_scaled",
+        "segment_length_mm_scaled",
+        "curvature_abs_turns",
+        "pen_transition_down",
+        "pen_transition_up",
+        "stroke_order_bucket_0",
+        "stroke_order_bucket_1",
+        "stroke_order_bucket_2",
+        "stroke_order_bucket_3",
+        "opposite_direction_repeat",
+        "source_role:outline",
+        "source_role:hatch",
+        "source_role:mark",
+        "source_role:contour",
+        "semantic_role:line",
+        "semantic_role:arc",
+        "semantic_role:circle",
+        "semantic_role:point_mark",
+        "semantic_role:validation",
+        "semantic_role:direction_probe",
+    }
 
 
 def _apply_global_model(

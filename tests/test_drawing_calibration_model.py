@@ -146,6 +146,93 @@ def test_stale_registration_observations_are_rejected() -> None:
     assert any("paper_registration_id" in reason for reason in model.stale_reasons)
 
 
+def test_corrected_samples_fit_commanded_plant_input_and_validate_desired_target() -> None:
+    desired_points = [
+        (30.0, 30.0),
+        (170.0, 30.0),
+        (170.0, 120.0),
+        (30.0, 120.0),
+        (100.0, 75.0),
+    ]
+    samples = [
+        DrawingCalibrationSample(
+            sample_id=f"corrected-{index}",
+            sample_kind="mark",
+            expected_mm=PaperPointMM(x=x, y=y),
+            desired_mm=PaperPointMM(x=x, y=y),
+            commanded_mm=PaperPointMM(x=x - 8.0, y=y + 3.0),
+            predicted_observed_mm=PaperPointMM(x=x, y=y),
+            observed_mm=PaperPointMM(x=x, y=y),
+            correction_mode="current_model",
+            model_id_used="drawing-cal-old",
+            session_id="drawing-session-1",
+            batch_id="batch-1",
+            run_id="run-1",
+            plan_hash="plan-hash",
+            primitive_id=f"primitive-{index}",
+            sample_index=index,
+        )
+        for index, (x, y) in enumerate(desired_points)
+    ]
+
+    model = _build_model(samples, residual_grid_columns=3, residual_grid_rows=3)
+
+    predicted = model.apply_expected_to_observed(PaperPointMM(x=92.0, y=78.0))
+    assert predicted.x == pytest.approx(100.0, abs=0.3)
+    assert predicted.y == pytest.approx(75.0, abs=0.3)
+    assert model.validation_metrics is not None
+    assert model.validation_metrics.rms_mm == pytest.approx(0.0, abs=0.25)
+
+
+def test_action_residual_reduces_direction_dependent_error_and_persists(tmp_path) -> None:
+    samples: list[DrawingCalibrationSample] = []
+    for index, base in enumerate(_sample_grid(lambda x, y: (x, y), columns=5, rows=5)):
+        for direction in (-1.0, 1.0):
+            observed = PaperPointMM(
+                x=base.expected_mm.x + 2.0 * direction,
+                y=base.expected_mm.y,
+            )
+            samples.append(
+                DrawingCalibrationSample(
+                    sample_id=f"dir-{index}-{direction}",
+                    sample_kind="mark",
+                    expected_mm=base.expected_mm,
+                    observed_mm=observed,
+                    action_features={"direction_unit_x": direction},
+                )
+            )
+
+    model = _build_model(samples)
+
+    assert model.action_model_kind == "regularized_linear_v1"
+    assert "direction_unit_x" in model.action_feature_names
+    assert model.action_fit_metrics_without_action_residuals is not None
+    assert model.action_fit_metrics_with_action_residuals is not None
+    assert (
+        model.action_fit_metrics_with_action_residuals.rms_mm
+        < model.action_fit_metrics_without_action_residuals.rms_mm
+    )
+    assert model.action_residual_for_features({"direction_unit_x": 100.0})[0] <= model.action_max_correction_mm
+
+    path = tmp_path / "drawing-cal.json"
+    model.save_json(path)
+    loaded = type(model).load_json(path)
+    assert loaded.action_model_kind == "regularized_linear_v1"
+    assert loaded.action_feature_names == model.action_feature_names
+
+
+def test_insufficient_action_evidence_disables_action_residuals() -> None:
+    samples = _sample_grid(lambda x, y: (x, y), columns=2, rows=2)
+    for sample in samples:
+        sample.action_features = {"direction_unit_x": 1.0}
+
+    model = _build_model(samples, residual_grid_columns=3, residual_grid_rows=3)
+
+    assert model.action_model_kind == "none"
+    assert not model.action_residual_coefficients
+    assert model.action_model_blockers
+
+
 def _build_model(
     samples: list[DrawingCalibrationSample],
     *,

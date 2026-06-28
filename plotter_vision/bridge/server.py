@@ -43,6 +43,7 @@ from plotter_vision.calibration.binding import (
 )
 from plotter_vision.calibration.drawing_model import (
     DrawingCalibrationActionMetadata,
+    DrawingCalibrationCorrectionMode,
     DrawingCalibrationModel,
     DrawingCalibrationObservation,
     DrawingCalibrationSample,
@@ -51,6 +52,23 @@ from plotter_vision.calibration.drawing_model import (
     DrawingFrameObservation,
     build_drawing_calibration_model,
     drawing_observation_from_frame_observation,
+)
+from plotter_vision.calibration.drawing_session import (
+    DrawingCalibrationBatch,
+    DrawingCalibrationBatchPlan,
+    DrawingCalibrationSession,
+    build_drawing_calibration_batch_program,
+    latest_session_path,
+    load_latest_drawing_calibration_session,
+    load_latest_drawing_calibration_session_or_none,
+    plan_next_drawing_calibration_batch,
+    record_batch_observation,
+    record_batch_run,
+    save_drawing_calibration_session,
+    schedule_retry_if_allowed,
+    session_path,
+    start_drawing_calibration_session,
+    update_session_from_model,
 )
 from plotter_vision.calibration.probe_evidence import (
     VisualProbeCapSnapshot,
@@ -93,6 +111,7 @@ from plotter_vision.controller.parser import StatusReport
 from plotter_vision.controller.serial_transport import DEFAULT_BAUD, SerialTransport, list_serial_ports
 from plotter_vision.drawing import (
     CapabilityTestKind,
+    DrawingProgram,
     DrawingFrameMM,
     LuminanceRaster,
     PlannedPolyline,
@@ -521,8 +540,12 @@ class DrawingFrameObservationRequest(TraceContextFields):
 
 class DrawingProgramSampleObservationRequest(BaseModel):
     primitive_id: str
+    stroke_id: str | None = None
     sample_index: int
     expected_mm: PaperPointMM
+    desired_mm: PaperPointMM | None = None
+    commanded_mm: PaperPointMM | None = None
+    predicted_observed_mm: PaperPointMM | None = None
     expected_camera_norm: CameraPointNorm | None = None
     observed_mm: PaperPointMM | None = None
     observed_camera_norm: CameraPointNorm | None = None
@@ -551,6 +574,12 @@ class DrawingProgramObservationRequest(TraceContextFields):
     camera_name: str | None = None
     program_id: str
     program_kind: str
+    session_id: str | None = None
+    batch_id: str | None = None
+    run_id: str | None = None
+    plan_hash: str | None = None
+    correction_mode: DrawingCalibrationCorrectionMode = "uncorrected"
+    model_id_used: str | None = None
     expected_frame_corners_mm: list[PaperPointMM] | None = None
     primitives: list[DrawingProgramPrimitiveObservationRequest] = Field(default_factory=list)
     samples: list[DrawingProgramSampleObservationRequest] = Field(default_factory=list)
@@ -562,6 +591,7 @@ class DrawingProgramObservationRequest(TraceContextFields):
     p95_residual_mm: float | None = None
     max_residual_mm: float | None = None
     usable: bool = False
+    blockers: list[str] = Field(default_factory=list)
     request_id: str | None = None
 
 
@@ -582,6 +612,50 @@ class DrawingCalibrationProgramRequest(TraceContextFields):
     apply_drawing_calibration_model: bool = False
     expected_plan_hash: str | None = None
     request_id: str | None = None
+
+
+class DrawingCalibrationSessionStartRequest(TraceContextFields):
+    resume: bool = True
+    request_id: str | None = None
+
+
+class DrawingCalibrationSessionStatusResponse(BaseModel):
+    status: str
+    dry_run: bool
+    session: DrawingCalibrationSession | None = None
+    session_file: str = ""
+    calibration: DrawingCalibrationModel | None = None
+    calibration_file: str = ""
+    error: str | None = None
+
+
+class DrawingCalibrationSessionBatchRequest(TraceContextFields):
+    session_id: str | None = None
+    batch_id: str | None = None
+    correction_mode: DrawingCalibrationCorrectionMode | None = None
+    expected_plan_hash: str | None = None
+    request_id: str | None = None
+
+
+class DrawingCalibrationSessionObservationRequest(DrawingProgramObservationRequest):
+    program_id: str = "progressive_drawing_calibration"
+    program_kind: str = "progressive_drawing_calibration_batch"
+
+
+class DrawingCalibrationSessionActionResponse(BaseModel):
+    status: str
+    dry_run: bool
+    session: DrawingCalibrationSession | None = None
+    session_file: str = ""
+    calibration: DrawingCalibrationModel | None = None
+    calibration_file: str = ""
+    batch: DrawingCalibrationBatch | None = None
+    program: DrawingProgram | None = None
+    preview: DrawingCalibrationProgramResponse | None = None
+    run: DrawingCalibrationProgramResponse | None = None
+    observation_id: str | None = None
+    retry_scheduled: bool = False
+    error: str | None = None
 
 
 class VisualProbeSampleObservationRequest(TraceContextFields):
@@ -2476,6 +2550,7 @@ class PlotterBridge:
             self._latest_visual_readiness_path(),
             self._latest_visual_probe_run_path(),
             self._latest_visual_position_binding_path(),
+            self._latest_drawing_calibration_session_path(),
             self._latest_drawing_calibration_path(),
         ]
         cleared: list[str] = []
@@ -2764,6 +2839,401 @@ class PlotterBridge:
                 error=str(exc),
             )
 
+    def drawing_session_status(self) -> DrawingCalibrationSessionStatusResponse:
+        try:
+            session = self._load_latest_drawing_session()
+            registration = self._load_latest_paper_registration()
+            stale_reasons = session.stale_reasons_for(
+                paper_registration_id=registration.registration_id,
+                camera_id=registration.camera_id,
+                field_width_mm=registration.paper_size_mm.width,
+                field_height_mm=registration.paper_size_mm.height,
+            )
+            if stale_reasons:
+                session.status = "blocked"
+                session.blockers = list(dict.fromkeys([*session.blockers, *stale_reasons]))
+            calibration = self._load_latest_drawing_calibration_or_none()
+            return DrawingCalibrationSessionStatusResponse(
+                status=session.status,
+                dry_run=self.config.dry_run,
+                session=session,
+                session_file=str(self._drawing_session_path(session.session_id)),
+                calibration=calibration,
+                calibration_file=str(self._latest_drawing_calibration_path()),
+            )
+        except Exception as exc:
+            return DrawingCalibrationSessionStatusResponse(
+                status="missing",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def start_drawing_session(
+        self,
+        request: DrawingCalibrationSessionStartRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            registration = self._load_latest_paper_registration()
+            existing = self._load_latest_drawing_session_or_none() if request.resume else None
+            session = start_drawing_calibration_session(
+                paper_registration_id=registration.registration_id,
+                camera_id=registration.camera_id,
+                camera_name=registration.camera_name,
+                field_width_mm=registration.paper_size_mm.width,
+                field_height_mm=registration.paper_size_mm.height,
+                existing=existing,
+            )
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_session_started",
+                command_id=session.session_id,
+                request_id=request.request_id,
+                trace_id=request.trace_id,
+                status=session.status,
+                payload={
+                    "session_id": session.session_id,
+                    "paper_registration_id": session.paper_registration_id,
+                    "camera_id": session.camera_id,
+                    "resume": request.resume,
+                },
+            )
+            return self._drawing_session_action_response(session=session)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_session_start_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def preview_next_drawing_session_batch(
+        self,
+        request: DrawingCalibrationSessionBatchRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            model = self._load_latest_drawing_calibration_or_none()
+            batch_plan = plan_next_drawing_calibration_batch(
+                session,
+                model=model if model is not None and model.ready else None,
+                correction_mode=request.correction_mode,
+            )
+            preview = self._preview_session_batch(session=session, batch_plan=batch_plan)
+            batch_plan.batch.plan_hash = preview.plan_hash
+            batch_plan.batch.planned_trace_summary = _planned_trace_summary(preview.planned_trace)
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_batch_planned",
+                command_id=batch_plan.batch.batch_id,
+                status="ready",
+                payload={
+                    "session_id": session.session_id,
+                    "batch_id": batch_plan.batch.batch_id,
+                    "purpose": batch_plan.batch.purpose,
+                    "program_kind": batch_plan.batch.program_kind,
+                    "correction_mode": batch_plan.batch.correction_mode,
+                    "model_id_used": batch_plan.batch.model_id_used,
+                    "plan_hash": preview.plan_hash,
+                },
+            )
+            return self._drawing_session_action_response(
+                session=session,
+                batch=batch_plan.batch,
+                program=batch_plan.program,
+                preview=preview,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_batch_plan_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def run_drawing_session_batch(
+        self,
+        request: DrawingCalibrationSessionBatchRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        command_id = request.request_id or request.trace_id or f"drawing-session-run-{uuid.uuid4().hex[:12]}"
+        transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            batch = self._current_or_requested_batch(session, request.batch_id)
+            batch_plan = DrawingCalibrationBatchPlan(
+                batch=batch,
+                program=build_drawing_calibration_batch_program(
+                    session=session,
+                    batch_id=batch.batch_id,
+                    purpose=batch.purpose,
+                    model=self._load_latest_drawing_calibration_or_none(),
+                ),
+            )
+            run = self._run_session_batch(
+                session=session,
+                batch_plan=batch_plan,
+                command_id=command_id,
+                expected_plan_hash=request.expected_plan_hash,
+                transcript_path=transcript_path,
+            )
+            record_batch_run(
+                session,
+                batch_id=batch.batch_id,
+                command_id=run.command_id,
+                plan_hash=run.plan_hash,
+                planned_trace_summary=_planned_trace_summary(run.planned_trace),
+            )
+            batch.status = "awaiting_observation" if run.status == "completed" else "blocked"
+            if run.error:
+                batch.blockers = [run.error]
+                session.blockers = list(dict.fromkeys([*session.blockers, run.error]))
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_batch_run",
+                command_id=run.command_id,
+                status=run.status,
+                payload={
+                    "session_id": session.session_id,
+                    "batch_id": batch.batch_id,
+                    "purpose": batch.purpose,
+                    "plan_hash": run.plan_hash,
+                    "dry_run": run.dry_run,
+                    "error": run.error,
+                },
+            )
+            return self._drawing_session_action_response(
+                session=session,
+                batch=batch,
+                program=batch_plan.program,
+                run=run,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_batch_run_failed",
+                command_id=command_id,
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def observe_drawing_session_batch(
+        self,
+        request: DrawingCalibrationSessionObservationRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            registration = self._load_latest_paper_registration()
+            observation = _drawing_program_observation_from_request(
+                request,
+                registration=registration,
+            )
+            record, weak_reasons = record_batch_observation(
+                session,
+                observation=observation,
+                batch_id=request.batch_id or session.current_batch_id,
+            )
+            retry_scheduled = False
+            if weak_reasons and record.batch_id is not None:
+                retry_scheduled = schedule_retry_if_allowed(
+                    session,
+                    batch_id=record.batch_id,
+                    reasons=weak_reasons,
+                )
+            calibration = None
+            if not weak_reasons:
+                calibration = self._fit_drawing_session_model(session)
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_batch_observed",
+                command_id=observation.command_id or observation.observation_id,
+                status="retry" if retry_scheduled else ("accepted" if not weak_reasons else "blocked"),
+                payload={
+                    "session_id": session.session_id,
+                    "batch_id": record.batch_id,
+                    "observation_id": observation.observation_id,
+                    "disposition": record.disposition,
+                    "weak_reasons": weak_reasons,
+                    "retry_scheduled": retry_scheduled,
+                    "sample_count": len(observation.samples),
+                },
+            )
+            return self._drawing_session_action_response(
+                session=session,
+                batch=self._current_or_requested_batch(session, record.batch_id) if record.batch_id else None,
+                calibration=calibration,
+                observation_id=observation.observation_id,
+                retry_scheduled=retry_scheduled,
+            )
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_batch_observe_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def fit_drawing_session(
+        self,
+        request: DrawingCalibrationSessionBatchRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            session.status = "fitting"
+            calibration = self._fit_drawing_session_model(session)
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_fit_completed",
+                command_id=session.session_id,
+                status=calibration.validation_status,
+                payload={
+                    "session_id": session.session_id,
+                    "model_id": calibration.model_id,
+                    "sample_count": calibration.sample_count,
+                    "coverage": (
+                        calibration.coverage.coverage_fraction
+                        if calibration.coverage is not None
+                        else None
+                    ),
+                    "rms_mm": calibration.rms_residual_mm,
+                    "p95_mm": calibration.p95_residual_mm,
+                    "max_mm": calibration.max_residual_mm,
+                    "blockers": calibration.blockers,
+                },
+            )
+            return self._drawing_session_action_response(session=session, calibration=calibration)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_fit_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def validate_drawing_session(
+        self,
+        request: DrawingCalibrationSessionBatchRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            calibration = self._load_latest_drawing_calibration_or_none()
+            if calibration is None or calibration.model_id != session.latest_model_id:
+                calibration = self._fit_drawing_session_model(session)
+            session.status = "validating"
+            update_session_from_model(session, model=calibration, promoting=False)
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_validation_completed",
+                command_id=session.session_id,
+                status=session.status,
+                payload={
+                    "session_id": session.session_id,
+                    "model_id": calibration.model_id,
+                    "validation_metrics": (
+                        calibration.validation_metrics.model_dump()
+                        if calibration.validation_metrics is not None
+                        else None
+                    ),
+                    "blockers": session.blockers,
+                },
+            )
+            return self._drawing_session_action_response(session=session, calibration=calibration)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_validation_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
+    def finish_drawing_session(
+        self,
+        request: DrawingCalibrationSessionBatchRequest,
+    ) -> DrawingCalibrationSessionActionResponse:
+        try:
+            session = self._load_drawing_session_for_request(request.session_id)
+            self._validate_session_current(session)
+            calibration = self._load_latest_drawing_calibration_or_none()
+            if calibration is None or calibration.model_id != session.latest_model_id:
+                calibration = self._fit_drawing_session_model(session)
+            update_session_from_model(session, model=calibration, promoting=True)
+            if session.blockers:
+                session.status = "blocked"
+                session.promotion_status = "blocked"
+            else:
+                calibration.validation_status = "ready"
+                calibration.freshness_status = "fresh"
+                self._save_drawing_calibration(calibration)
+                session.status = "ready"
+                session.promotion_status = "promoted"
+            self._save_drawing_session(session)
+            self.event_log.emit(
+                "calibration.drawing_session_finished",
+                command_id=session.session_id,
+                status=session.status,
+                payload={
+                    "session_id": session.session_id,
+                    "model_id": calibration.model_id,
+                    "promotion_status": session.promotion_status,
+                    "blockers": session.blockers,
+                },
+            )
+            return self._drawing_session_action_response(session=session, calibration=calibration)
+        except Exception as exc:
+            self.event_log.emit(
+                "calibration.drawing_session_finish_failed",
+                status="failed",
+                payload={"error": str(exc)},
+            )
+            return DrawingCalibrationSessionActionResponse(
+                status="failed",
+                dry_run=self.config.dry_run,
+                session_file=str(self._latest_drawing_calibration_session_path()),
+                calibration_file=str(self._latest_drawing_calibration_path()),
+                error=str(exc),
+            )
+
     def observe_drawing_frame(
         self,
         request: DrawingFrameObservationRequest,
@@ -2796,31 +3266,26 @@ class PlotterBridge:
                 corner_max_residual_mm=request.corner_max_residual_mm,
                 usable=request.usable,
             )
-            previous = self._load_latest_drawing_calibration_or_none()
-            observations: list[DrawingCalibrationObservation] = []
-            if (
-                previous is not None
-                and previous.paper_registration_id == registration.registration_id
-                and (previous.camera_id in {None, observation.camera_id} or observation.camera_id is None)
-            ):
-                observations.extend(previous.observations)
-            observations.append(drawing_observation_from_frame_observation(observation))
-            observations = observations[-24:]
-
-            calibration = build_drawing_calibration_model(
-                observations=observations,
-                paper_registration_id=registration.registration_id,
+            session = self._load_or_start_compatible_drawing_session(registration=registration)
+            generic_observation = drawing_observation_from_frame_observation(observation)
+            record_batch_observation(
+                session,
+                observation=generic_observation,
+                batch_id=session.current_batch_id,
+            )
+            calibration = self._fit_drawing_session_model(
+                session,
                 camera_id=observation.camera_id,
                 camera_name=observation.camera_name,
-                field_width_mm=registration.paper_size_mm.width,
-                field_height_mm=registration.paper_size_mm.height,
             )
-            self._save_drawing_calibration(calibration)
+            self._save_drawing_session(session)
             self.event_log.emit(
-                "calibration.drawing_frame_observed",
+                "calibration.drawing_frame_compatibility_observed",
                 command_id=observation.command_id or observation.observation_id,
                 status=calibration.validation_status,
                 payload={
+                    "evidence_classification": "compatibility_setup_evidence",
+                    "session_id": session.session_id,
                     "observation_id": observation.observation_id,
                     "paper_registration_id": registration.registration_id,
                     "detected_edge_count": observation.detected_edge_count,
@@ -2870,31 +3335,28 @@ class PlotterBridge:
                 request,
                 registration=registration,
             )
-            previous = self._load_latest_drawing_calibration_or_none()
-            observations: list[DrawingCalibrationObservation] = []
-            if (
-                previous is not None
-                and previous.paper_registration_id == registration.registration_id
-                and (previous.camera_id in {None, observation.camera_id} or observation.camera_id is None)
-            ):
-                observations.extend(previous.observations)
-            observations.append(observation)
-            observations = observations[-24:]
-
-            calibration = build_drawing_calibration_model(
-                observations=observations,
-                paper_registration_id=registration.registration_id,
+            session = (
+                self._load_drawing_session_for_request(request.session_id)
+                if request.session_id
+                else self._load_or_start_compatible_drawing_session(registration=registration)
+            )
+            record_batch_observation(
+                session,
+                observation=observation,
+                batch_id=request.batch_id or session.current_batch_id,
+            )
+            calibration = self._fit_drawing_session_model(
+                session,
                 camera_id=observation.camera_id,
                 camera_name=observation.camera_name,
-                field_width_mm=registration.paper_size_mm.width,
-                field_height_mm=registration.paper_size_mm.height,
             )
-            self._save_drawing_calibration(calibration)
+            self._save_drawing_session(session)
             self.event_log.emit(
                 "calibration.drawing_program_observed",
                 command_id=observation.command_id or observation.observation_id,
                 status=calibration.validation_status,
                 payload={
+                    "session_id": session.session_id,
                     "observation_id": observation.observation_id,
                     "paper_registration_id": registration.registration_id,
                     "program_id": request.program_id,
@@ -4942,8 +5404,14 @@ class PlotterBridge:
         return self.config.calibration_dir / "latest_drawing_calibration.json"
 
     def _save_drawing_calibration(self, calibration: DrawingCalibrationModel) -> None:
-        calibration.save_json(self._drawing_calibration_path(calibration.model_id))
-        calibration.save_json(self._latest_drawing_calibration_path())
+        artifact = calibration.model_copy(
+            update={
+                "observations": [],
+                "frame_observations": [],
+            }
+        )
+        artifact.save_json(self._drawing_calibration_path(artifact.model_id))
+        artifact.save_json(self._latest_drawing_calibration_path())
 
     def _load_latest_drawing_calibration(self) -> DrawingCalibrationModel:
         path = self._latest_drawing_calibration_path()
@@ -4970,6 +5438,249 @@ class PlotterBridge:
             blockers = calibration.blockers or [calibration.validation_status]
             raise MotionSafetyError("Drawing calibration model is not ready: " + "; ".join(blockers))
         return calibration
+
+    def _drawing_session_path(self, session_id: str) -> Path:
+        return session_path(self.config.calibration_dir, session_id)
+
+    def _latest_drawing_calibration_session_path(self) -> Path:
+        return latest_session_path(self.config.calibration_dir)
+
+    def _save_drawing_session(self, session: DrawingCalibrationSession) -> None:
+        save_drawing_calibration_session(session, calibration_dir=self.config.calibration_dir)
+
+    def _load_latest_drawing_session(self) -> DrawingCalibrationSession:
+        return load_latest_drawing_calibration_session(calibration_dir=self.config.calibration_dir)
+
+    def _load_latest_drawing_session_or_none(self) -> DrawingCalibrationSession | None:
+        return load_latest_drawing_calibration_session_or_none(calibration_dir=self.config.calibration_dir)
+
+    def _load_drawing_session_for_request(self, session_id: str | None) -> DrawingCalibrationSession:
+        if session_id is None:
+            return self._load_latest_drawing_session()
+        return DrawingCalibrationSession.load_json(self._drawing_session_path(session_id))
+
+    def _validate_session_current(self, session: DrawingCalibrationSession) -> None:
+        registration = self._load_latest_paper_registration()
+        stale_reasons = session.stale_reasons_for(
+            paper_registration_id=registration.registration_id,
+            camera_id=registration.camera_id,
+            field_width_mm=registration.paper_size_mm.width,
+            field_height_mm=registration.paper_size_mm.height,
+        )
+        if stale_reasons:
+            raise MotionSafetyError("Drawing calibration session is stale: " + "; ".join(stale_reasons))
+
+    def _load_or_start_compatible_drawing_session(
+        self,
+        *,
+        registration: PaperFrameRegistration,
+    ) -> DrawingCalibrationSession:
+        existing = self._load_latest_drawing_session_or_none()
+        session = start_drawing_calibration_session(
+            paper_registration_id=registration.registration_id,
+            camera_id=registration.camera_id,
+            camera_name=registration.camera_name,
+            field_width_mm=registration.paper_size_mm.width,
+            field_height_mm=registration.paper_size_mm.height,
+            existing=existing,
+        )
+        self._save_drawing_session(session)
+        return session
+
+    def _current_or_requested_batch(
+        self,
+        session: DrawingCalibrationSession,
+        batch_id: str | None,
+    ) -> DrawingCalibrationBatch:
+        resolved = batch_id or session.current_batch_id
+        if resolved is None:
+            raise ValueError("No drawing calibration batch is active; preview the next batch first.")
+        for batch in session.batches:
+            if batch.batch_id == resolved:
+                return batch
+        raise ValueError(f"Drawing calibration batch {resolved} was not found in session {session.session_id}.")
+
+    def _fit_drawing_session_model(
+        self,
+        session: DrawingCalibrationSession,
+        *,
+        camera_id: str | None = None,
+        camera_name: str | None = None,
+    ) -> DrawingCalibrationModel:
+        observations = session.accepted_observations
+        calibration = build_drawing_calibration_model(
+            observations=observations,
+            paper_registration_id=session.paper_registration_id,
+            camera_id=camera_id or session.camera_id,
+            camera_name=camera_name or session.camera_name,
+            field_width_mm=session.field_width_mm,
+            field_height_mm=session.field_height_mm,
+        )
+        update_session_from_model(session, model=calibration, promoting=False)
+        if observations:
+            self._save_drawing_calibration(calibration)
+        return calibration
+
+    def _preview_session_batch(
+        self,
+        *,
+        session: DrawingCalibrationSession,
+        batch_plan: DrawingCalibrationBatchPlan,
+    ) -> DrawingCalibrationProgramResponse:
+        machine = self._load_machine_config()
+        drawing_model = self._drawing_model_for_batch(batch_plan.batch)
+        plan = build_polygon_draw_plan(
+            request=PolygonDrawRequest(
+                program=batch_plan.program,
+                frame=DrawingFrameMM(
+                    origin_x_mm=0.0,
+                    origin_y_mm=0.0,
+                    width_mm=session.field_width_mm,
+                    height_mm=session.field_height_mm,
+                ),
+                include_homing=False,
+                apply_drawing_calibration_model=drawing_model is not None,
+                max_segment_mm=12.0,
+                request_id=f"{batch_plan.batch.batch_id}-preview",
+            ),
+            machine=machine,
+            safety=SafetyState(dry_run=True),
+            command_id=f"{batch_plan.batch.batch_id}-preview",
+            drawing_calibration_model=drawing_model,
+        )
+        preview_overlay = self._preview_overlay_for_simulation(
+            command_id=plan.command_id,
+            simulation=plan.simulation,
+            machine=machine,
+        )
+        plan_hash = _planned_command_hash(plan.command_strings)
+        return DrawingCalibrationProgramResponse(
+            command_id=plan.command_id,
+            status="ready",
+            dry_run=True,
+            preview_only=True,
+            program_kind=batch_plan.batch.program_kind,
+            plan_hash=plan_hash,
+            planned_commands=plan.command_strings,
+            planned_trace=plan.planned_trace,
+            drawing_correction=plan.drawing_correction,
+            simulation=plan.simulation,
+            summary=plan.summary,
+            preview_overlay=preview_overlay,
+            event_log=str(self.config.event_log_path),
+            controller_transcript=None,
+        )
+
+    def _run_session_batch(
+        self,
+        *,
+        session: DrawingCalibrationSession,
+        batch_plan: DrawingCalibrationBatchPlan,
+        command_id: str,
+        expected_plan_hash: str | None,
+        transcript_path: Path,
+    ) -> DrawingCalibrationProgramResponse:
+        machine = self._load_machine_config()
+        self._require_axis_model_trusted(machine)
+        drawing_model = self._drawing_model_for_batch(batch_plan.batch)
+        plan = build_polygon_draw_plan(
+            request=PolygonDrawRequest(
+                program=batch_plan.program,
+                frame=DrawingFrameMM(
+                    origin_x_mm=0.0,
+                    origin_y_mm=0.0,
+                    width_mm=session.field_width_mm,
+                    height_mm=session.field_height_mm,
+                ),
+                include_homing=False,
+                visual_position_trusted=self._visual_ready_to_plot(),
+                apply_drawing_calibration_model=drawing_model is not None,
+                max_segment_mm=12.0,
+                request_id=command_id,
+            ),
+            machine=machine,
+            safety=self._safety_state(),
+            command_id=command_id,
+            drawing_calibration_model=drawing_model,
+        )
+        plan_hash = _planned_command_hash(plan.command_strings)
+        expected = expected_plan_hash or batch_plan.batch.plan_hash
+        if expected and expected != plan_hash:
+            raise MotionSafetyError("Drawing calibration batch changed after preview; preview it again.")
+        preview_overlay = self._preview_overlay_for_simulation(
+            command_id=command_id,
+            simulation=plan.simulation,
+            machine=machine,
+        )
+        machine_response = self._run_machine_action(
+            action="drawing_calibration_session_batch",
+            command_id=command_id,
+            planned_commands=plan.planned_commands,
+            transcript_path=transcript_path,
+        )
+        return DrawingCalibrationProgramResponse(
+            command_id=command_id,
+            status=machine_response.status,
+            dry_run=plan.dry_run,
+            preview_only=False,
+            program_kind=batch_plan.batch.program_kind,
+            plan_hash=plan_hash,
+            planned_commands=plan.command_strings,
+            planned_trace=plan.planned_trace,
+            drawing_correction=plan.drawing_correction,
+            simulation=plan.simulation,
+            summary=plan.summary,
+            preview_overlay=preview_overlay,
+            event_log=str(self.config.event_log_path),
+            controller_transcript=machine_response.controller_transcript,
+            machine_status=machine_response.machine_status,
+            error=machine_response.error,
+        )
+
+    def _drawing_model_for_batch(
+        self,
+        batch: DrawingCalibrationBatch,
+    ) -> DrawingCalibrationModel | None:
+        if batch.correction_mode == "uncorrected":
+            return None
+        if batch.correction_mode == "retry" and batch.model_id_used is None:
+            return None
+        model = self._drawing_calibration_for_planning()
+        if batch.model_id_used is not None and batch.model_id_used != model.model_id:
+            raise MotionSafetyError(
+                "Drawing calibration batch requested model "
+                f"{batch.model_id_used}, but latest valid model is {model.model_id}."
+            )
+        return model
+
+    def _drawing_session_action_response(
+        self,
+        *,
+        session: DrawingCalibrationSession,
+        batch: DrawingCalibrationBatch | None = None,
+        program: DrawingProgram | None = None,
+        calibration: DrawingCalibrationModel | None = None,
+        preview: DrawingCalibrationProgramResponse | None = None,
+        run: DrawingCalibrationProgramResponse | None = None,
+        observation_id: str | None = None,
+        retry_scheduled: bool = False,
+    ) -> DrawingCalibrationSessionActionResponse:
+        if calibration is None:
+            calibration = self._load_latest_drawing_calibration_or_none()
+        return DrawingCalibrationSessionActionResponse(
+            status=session.status,
+            dry_run=self.config.dry_run,
+            session=session,
+            session_file=str(self._drawing_session_path(session.session_id)),
+            calibration=calibration,
+            calibration_file=str(self._latest_drawing_calibration_path()),
+            batch=batch,
+            program=program,
+            preview=preview,
+            run=run,
+            observation_id=observation_id,
+            retry_scheduled=retry_scheduled,
+        )
 
     def _policy_safe_zone_or_none(
         self,
@@ -6187,6 +6898,23 @@ def _planned_command_hash(commands: list[str]) -> str:
     return digest[:16]
 
 
+def _planned_trace_summary(planned_trace: list[PlannedTraceStep]) -> dict[str, Any]:
+    draw_steps = [step for step in planned_trace if step.action == "draw"]
+    travel_steps = [step for step in planned_trace if step.action == "travel"]
+    primitive_ids = [
+        step.primitive_id
+        for step in planned_trace
+        if step.primitive_id is not None
+    ]
+    return {
+        "trace_step_count": len(planned_trace),
+        "draw_step_count": len(draw_steps),
+        "travel_step_count": len(travel_steps),
+        "primitive_count": len(set(primitive_ids)),
+        "primitive_ids": list(dict.fromkeys(primitive_ids))[:80],
+    }
+
+
 def _drawing_program_observation_from_request(
     request: DrawingProgramObservationRequest,
     *,
@@ -6210,25 +6938,62 @@ def _drawing_program_observation_from_request(
         },
     )
     samples: list[DrawingCalibrationSample] = []
+    detected_samples_by_primitive: dict[str, list[DrawingProgramSampleObservationRequest]] = {}
+    for sample in request.samples:
+        if sample.detected and sample.observed_mm is not None:
+            detected_samples_by_primitive.setdefault(sample.primitive_id, []).append(sample)
+    primitive_order = {
+        primitive_id: index
+        for index, primitive_id in enumerate(detected_samples_by_primitive)
+    }
+    previous_direction_by_primitive: dict[str, tuple[float, float]] = {}
     for sample in request.samples:
         if not sample.detected or sample.observed_mm is None:
             continue
         primitive_kind = primitive_kinds.get(sample.primitive_id, "dense_stroke")
         sample_kind = _drawing_sample_kind_for_primitive(primitive_kind)
+        sibling_samples = sorted(
+            detected_samples_by_primitive.get(sample.primitive_id, []),
+            key=lambda item: item.sample_index,
+        )
+        sample_position = next(
+            (index for index, sibling in enumerate(sibling_samples) if sibling.sample_index == sample.sample_index),
+            0,
+        )
+        action_features, previous_direction = _deterministic_action_features_for_sample(
+            sample=sample,
+            sibling_samples=sibling_samples,
+            sample_position=sample_position,
+            primitive_kind=primitive_kind,
+            primitive_order=primitive_order.get(sample.primitive_id, 0),
+            previous_direction=previous_direction_by_primitive.get(sample.primitive_id),
+        )
+        previous_direction_by_primitive[sample.primitive_id] = previous_direction
+        desired_mm = sample.desired_mm or sample.expected_mm
+        commanded_mm = sample.commanded_mm or sample.expected_mm
         samples.append(
             DrawingCalibrationSample(
                 sample_id=f"{request.program_id}-{sample.primitive_id}-{sample.sample_index}",
                 sample_kind=sample_kind,
                 expected_mm=sample.expected_mm,
+                desired_mm=desired_mm,
+                commanded_mm=commanded_mm,
+                predicted_observed_mm=sample.predicted_observed_mm,
                 observed_mm=sample.observed_mm,
+                correction_mode=request.correction_mode,
+                model_id_used=request.model_id_used,
+                session_id=request.session_id,
+                batch_id=request.batch_id,
+                run_id=request.run_id,
+                plan_hash=request.plan_hash,
+                primitive_id=sample.primitive_id,
+                stroke_id=sample.stroke_id,
+                sample_index=sample.sample_index,
                 source_observation_id=None,
                 geometry_id=sample.primitive_id,
                 confidence=1.0,
                 action_metadata=action,
-                action_features={
-                    f"primitive_kind:{primitive_kind}": 1.0,
-                    f"primitive_id:{sample.primitive_id}": 1.0,
-                },
+                action_features=action_features,
             )
         )
 
@@ -6248,8 +7013,81 @@ def _drawing_program_observation_from_request(
         action_metadata=action,
         samples=samples,
         usable=request.usable and len(samples) >= 4,
-        blockers=[] if request.usable else ["Drawing program observation was not marked usable."],
+        blockers=(
+            request.blockers
+            if request.usable
+            else list(dict.fromkeys(["Drawing program observation was not marked usable.", *request.blockers]))
+        ),
     )
+
+
+def _deterministic_action_features_for_sample(
+    *,
+    sample: DrawingProgramSampleObservationRequest,
+    sibling_samples: list[DrawingProgramSampleObservationRequest],
+    sample_position: int,
+    primitive_kind: str,
+    primitive_order: int,
+    previous_direction: tuple[float, float] | None,
+) -> tuple[dict[str, float], tuple[float, float]]:
+    point = sample.commanded_mm or sample.expected_mm
+    before = sibling_samples[max(0, sample_position - 1)] if sibling_samples else sample
+    after = sibling_samples[min(len(sibling_samples) - 1, sample_position + 1)] if sibling_samples else sample
+    before_point = before.commanded_mm or before.expected_mm
+    after_point = after.commanded_mm or after.expected_mm
+    dx = after_point.x - before_point.x
+    dy = after_point.y - before_point.y
+    length = math.hypot(dx, dy)
+    if length <= 1e-9 and sample_position > 0:
+        dx = point.x - before_point.x
+        dy = point.y - before_point.y
+        length = math.hypot(dx, dy)
+    direction = (dx / length, dy / length) if length > 1e-9 else (0.0, 0.0)
+    turn = 0.0
+    opposite_repeat = 0.0
+    if previous_direction is not None:
+        dot = direction[0] * previous_direction[0] + direction[1] * previous_direction[1]
+        cross = direction[0] * previous_direction[1] - direction[1] * previous_direction[0]
+        turn = abs(math.atan2(cross, dot)) / math.pi
+        opposite_repeat = 1.0 if dot < -0.75 else 0.0
+    bucket = min(3, primitive_order // 4)
+    features: dict[str, float] = {
+        "direction_unit_x": direction[0],
+        "direction_unit_y": direction[1],
+        "approach_direction_unit_x": direction[0],
+        "approach_direction_unit_y": direction[1],
+        "feed_mm_min_scaled": 0.18,
+        "segment_length_mm_scaled": min(length / 100.0, 2.0),
+        "curvature_abs_turns": turn,
+        "pen_transition_down": 1.0 if sample_position == 0 else 0.0,
+        "pen_transition_up": 1.0 if sample_position == len(sibling_samples) - 1 else 0.0,
+        f"stroke_order_bucket_{bucket}": 1.0,
+        "opposite_direction_repeat": opposite_repeat,
+        f"source_role:{_source_role_for_primitive_kind(primitive_kind)}": 1.0,
+        f"semantic_role:{_semantic_role_for_primitive_kind(primitive_kind)}": 1.0,
+        f"diagnostic:primitive_id:{sample.primitive_id}": 1.0,
+    }
+    return features, direction
+
+
+def _source_role_for_primitive_kind(primitive_kind: str) -> str:
+    normalized = primitive_kind.strip().lower()
+    if normalized == "mark":
+        return "mark"
+    if normalized in {"circle", "arc"}:
+        return "outline"
+    return "contour"
+
+
+def _semantic_role_for_primitive_kind(primitive_kind: str) -> str:
+    normalized = primitive_kind.strip().lower()
+    if normalized == "mark":
+        return "point_mark"
+    if normalized == "circle":
+        return "circle"
+    if normalized == "arc":
+        return "arc"
+    return "line"
 
 
 def _drawing_sample_kind_for_primitive(primitive_kind: str) -> str:
@@ -6499,6 +7337,41 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
             bridge.run_drawing_calibration_program,
             lambda response: getattr(response, "status", "") == "completed",
         ),
+        "/calibration/drawing/session/start": PostRoute(
+            DrawingCalibrationSessionStartRequest,
+            bridge.start_drawing_session,
+            lambda response: getattr(response, "status", "") in {"collecting", "awaiting_observation", "ready"},
+        ),
+        "/calibration/drawing/session/preview-next-batch": PostRoute(
+            DrawingCalibrationSessionBatchRequest,
+            bridge.preview_next_drawing_session_batch,
+            lambda response: getattr(response, "status", "") in {"collecting", "awaiting_observation", "ready"},
+        ),
+        "/calibration/drawing/session/run-batch": PostRoute(
+            DrawingCalibrationSessionBatchRequest,
+            bridge.run_drawing_session_batch,
+            lambda response: getattr(response, "status", "") in {"awaiting_observation", "collecting", "ready"},
+        ),
+        "/calibration/drawing/session/observe-batch": PostRoute(
+            DrawingCalibrationSessionObservationRequest,
+            bridge.observe_drawing_session_batch,
+            lambda response: getattr(response, "status", "") in {"collecting", "awaiting_observation", "ready", "blocked"},
+        ),
+        "/calibration/drawing/session/fit": PostRoute(
+            DrawingCalibrationSessionBatchRequest,
+            bridge.fit_drawing_session,
+            lambda response: getattr(response, "status", "") in {"collecting", "ready", "blocked"},
+        ),
+        "/calibration/drawing/session/validate": PostRoute(
+            DrawingCalibrationSessionBatchRequest,
+            bridge.validate_drawing_session,
+            lambda response: getattr(response, "status", "") in {"collecting", "ready", "blocked"},
+        ),
+        "/calibration/drawing/session/finish": PostRoute(
+            DrawingCalibrationSessionBatchRequest,
+            bridge.finish_drawing_session,
+            lambda response: getattr(response, "status", "") in {"ready", "blocked"},
+        ),
         "/calibration/drawing/program-observation": PostRoute(
             DrawingProgramObservationRequest,
             bridge.observe_drawing_program,
@@ -6544,6 +7417,9 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed_url.path == "/calibration/drawing/status":
                 self._write_model(HTTPStatus.OK, bridge.drawing_model_status())
+                return
+            if parsed_url.path == "/calibration/drawing/session/status":
+                self._write_model(HTTPStatus.OK, bridge.drawing_session_status())
                 return
             if parsed_url.path == "/paper/status":
                 response = bridge.paper_registration_status()

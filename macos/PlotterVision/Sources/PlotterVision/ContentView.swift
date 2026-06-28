@@ -173,6 +173,7 @@ struct ContentView: View {
             await bridge.refreshPaperStatus()
             applyPersistedVisualReadiness(await bridge.refreshVisualReadinessStatus())
             _ = await bridge.refreshDrawingCalibrationStatus()
+            await bridge.refreshDrawingCalibrationSessionStatus()
             var pollIteration = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -481,6 +482,10 @@ struct ContentView: View {
             runCalibrationWizardPrimaryAction()
         case .drawFrame:
             drawValidatedFieldFrame()
+        case .startDrawingSession, .previewDrawingBatch, .runDrawingBatch,
+             .observeDrawingBatch, .fitDrawingSession, .validateDrawingSession,
+             .finishDrawingSession:
+            handleProgressiveDrawingCalibrationCommand(command)
         case .reset:
             resetCalibrationWizard()
         case .hide:
@@ -509,7 +514,7 @@ struct ContentView: View {
         }
     }
 
-    private func refreshSetupSnapshot() {
+    func refreshSetupSnapshot() {
         workspace.setupSnapshot = SetupPanelSnapshot(
             instructionText: wizardInstructionText,
             fiducialDetail: wizardFiducialDetail,

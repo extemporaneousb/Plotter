@@ -424,6 +424,47 @@ struct BridgeDrawProgramResponse: Decodable {
     let status: String
     let dryRun: Bool
     let plannedCommands: [String]
+    let drawingCorrection: BridgeDrawingCorrectionSummary?
+    let simulation: BridgeShapeSimulation?
+    let summary: BridgeDrawProgramSummary?
+    let previewOverlay: BridgePreviewOverlay?
+    let eventLog: String
+    let controllerTranscript: String?
+    let machineStatus: MachineStatusResponse?
+    let error: String?
+}
+
+struct BridgeDrawingCorrectionPoint: Decodable, Equatable {
+    let desiredMm: PaperPointMmSnapshot
+    let commandedMm: PaperPointMmSnapshot
+    let primitiveId: String?
+    let strokeId: String?
+    let semanticRole: String?
+    let uncertaintyMm: Double?
+    let correctionNormMm: Double
+}
+
+struct BridgeDrawingCorrectionSummary: Decodable, Equatable {
+    let status: String
+    let modelId: String?
+    let modelFamily: String?
+    let solverKind: String?
+    let correctedPointCount: Int
+    let maxCorrectionMm: Double
+    let maxUncertaintyMm: Double?
+    let blockers: [String]
+    let points: [BridgeDrawingCorrectionPoint]
+}
+
+struct BridgeDrawingCalibrationProgramResponse: Decodable {
+    let commandId: String
+    let status: String
+    let dryRun: Bool
+    let previewOnly: Bool
+    let programKind: String
+    let planHash: String
+    let plannedCommands: [String]
+    let drawingCorrection: BridgeDrawingCorrectionSummary?
     let simulation: BridgeShapeSimulation?
     let summary: BridgeDrawProgramSummary?
     let previewOverlay: BridgePreviewOverlay?
@@ -1029,8 +1070,12 @@ struct BridgeDrawingFrameObservationRequest: Encodable {
 
 struct BridgeDrawingProgramSampleObservationRequest: Encodable {
     let primitiveId: String
+    let strokeId: String? = nil
     let sampleIndex: Int
     let expectedMm: PaperPointMmSnapshot
+    let desiredMm: PaperPointMmSnapshot? = nil
+    let commandedMm: PaperPointMmSnapshot? = nil
+    let predictedObservedMm: PaperPointMmSnapshot? = nil
     let expectedCameraNorm: NormPoint?
     let observedMm: PaperPointMmSnapshot?
     let observedCameraNorm: NormPoint?
@@ -1059,6 +1104,12 @@ struct BridgeDrawingProgramObservationRequest: Encodable {
     let cameraName: String?
     let programId: String
     let programKind: String
+    let sessionId: String?
+    let batchId: String?
+    let runId: String?
+    let planHash: String?
+    let correctionMode: String
+    let modelIdUsed: String?
     let expectedFrameCornersMm: [PaperPointMmSnapshot]?
     let primitives: [BridgeDrawingProgramPrimitiveObservationRequest]
     let samples: [BridgeDrawingProgramSampleObservationRequest]
@@ -1070,10 +1121,63 @@ struct BridgeDrawingProgramObservationRequest: Encodable {
     let p95ResidualMm: Double?
     let maxResidualMm: Double?
     let usable: Bool
+    let blockers: [String]
     let requestId: String? = nil
     let traceId: String? = nil
     let spanId: String? = nil
     let parentSpanId: String? = nil
+
+    init(
+        commandId: String?,
+        paperRegistrationId: String?,
+        cameraId: String?,
+        cameraName: String?,
+        programId: String,
+        programKind: String,
+        sessionId: String? = nil,
+        batchId: String? = nil,
+        runId: String? = nil,
+        planHash: String? = nil,
+        correctionMode: String = "uncorrected",
+        modelIdUsed: String? = nil,
+        expectedFrameCornersMm: [PaperPointMmSnapshot]?,
+        primitives: [BridgeDrawingProgramPrimitiveObservationRequest],
+        samples: [BridgeDrawingProgramSampleObservationRequest],
+        sampleCount: Int,
+        detectedSampleCount: Int,
+        totalGreenPixels: Int,
+        coverageFraction: Double,
+        rmsResidualMm: Double?,
+        p95ResidualMm: Double?,
+        maxResidualMm: Double?,
+        usable: Bool,
+        blockers: [String] = []
+    ) {
+        self.commandId = commandId
+        self.paperRegistrationId = paperRegistrationId
+        self.cameraId = cameraId
+        self.cameraName = cameraName
+        self.programId = programId
+        self.programKind = programKind
+        self.sessionId = sessionId
+        self.batchId = batchId
+        self.runId = runId
+        self.planHash = planHash
+        self.correctionMode = correctionMode
+        self.modelIdUsed = modelIdUsed
+        self.expectedFrameCornersMm = expectedFrameCornersMm
+        self.primitives = primitives
+        self.samples = samples
+        self.sampleCount = sampleCount
+        self.detectedSampleCount = detectedSampleCount
+        self.totalGreenPixels = totalGreenPixels
+        self.coverageFraction = coverageFraction
+        self.rmsResidualMm = rmsResidualMm
+        self.p95ResidualMm = p95ResidualMm
+        self.maxResidualMm = maxResidualMm
+        self.usable = usable
+        self.blockers = blockers
+    }
 }
 
 struct BridgeDrawingCalibrationResponse: Decodable {
@@ -1110,9 +1214,15 @@ struct BridgeDrawingCalibrationModel: Decodable, Equatable {
     let expectedToObserved: HomographySnapshot?
     let observedToExpected: HomographySnapshot?
     let residualGrid: BridgeDrawingResidualGrid?
+    let actionModelKind: String?
+    let actionFeatureNames: [String]?
+    let actionRegularization: Double?
+    let actionMaxCorrectionMm: Double?
+    let actionModelBlockers: [String]?
     let coverage: BridgeDrawingCalibrationCoverage?
     let fitMetrics: BridgeDrawingCalibrationMetrics?
     let holdoutMetrics: BridgeDrawingCalibrationMetrics?
+    let validationMetrics: BridgeDrawingCalibrationMetrics?
     let rmsResidualMm: Double?
     let p95ResidualMm: Double?
     let maxResidualMm: Double?
@@ -1166,6 +1276,107 @@ struct BridgeDrawingCalibrationMetrics: Decodable, Equatable {
     let rmsMm: Double?
     let p95Mm: Double?
     let maxMm: Double?
+}
+
+struct BridgeDrawingCalibrationSessionStartRequest: Encodable {
+    let resume: Bool = true
+    let requestId: String? = nil
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
+struct BridgeDrawingCalibrationSessionBatchRequest: Encodable {
+    let sessionId: String?
+    let batchId: String?
+    let correctionMode: String?
+    let expectedPlanHash: String?
+    let requestId: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
+struct BridgeDrawingCalibrationCompletionCriteria: Decodable, Equatable {
+    let minSampleCount: Int
+    let minCoverageFraction: Double
+    let maxNodeUncertaintyMm: Double
+    let fitRmsLimitMm: Double
+    let fitP95LimitMm: Double
+    let fitMaxLimitMm: Double
+    let validationRmsLimitMm: Double
+    let validationP95LimitMm: Double
+    let validationMaxLimitMm: Double
+    let maxRetriesPerBatch: Int
+}
+
+struct BridgeDrawingCalibrationBatch: Decodable, Equatable {
+    let batchId: String
+    let batchIndex: Int
+    let purpose: String
+    let programKind: String
+    let correctionMode: String
+    let modelIdUsed: String?
+    let commandId: String?
+    let planHash: String?
+    let retryCount: Int
+    let maxRetries: Int
+    let status: String
+    let fitMetrics: BridgeDrawingCalibrationMetrics?
+    let validationMetrics: BridgeDrawingCalibrationMetrics?
+    let blockers: [String]
+}
+
+struct BridgeDrawingCalibrationObservationRecord: Decodable, Equatable {
+    let observationId: String
+    let batchId: String?
+    let disposition: String
+    let reasons: [String]
+}
+
+struct BridgeDrawingCalibrationSession: Decodable, Equatable {
+    let sessionId: String
+    let schemaVersion: Int
+    let status: String
+    let paperRegistrationId: String
+    let cameraId: String?
+    let cameraName: String?
+    let fieldWidthMm: Double
+    let fieldHeightMm: Double
+    let startedAt: String
+    let updatedAt: String
+    let latestModelId: String?
+    let currentBatchId: String?
+    let batches: [BridgeDrawingCalibrationBatch]
+    let observations: [BridgeDrawingCalibrationObservationRecord]
+    let blockers: [String]
+    let completionCriteria: BridgeDrawingCalibrationCompletionCriteria?
+    let promotionStatus: String
+}
+
+struct BridgeDrawingCalibrationSessionStatusResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let session: BridgeDrawingCalibrationSession?
+    let sessionFile: String
+    let calibration: BridgeDrawingCalibrationModel?
+    let calibrationFile: String
+    let error: String?
+}
+
+struct BridgeDrawingCalibrationSessionActionResponse: Decodable {
+    let status: String
+    let dryRun: Bool
+    let session: BridgeDrawingCalibrationSession?
+    let sessionFile: String
+    let calibration: BridgeDrawingCalibrationModel?
+    let calibrationFile: String
+    let batch: BridgeDrawingCalibrationBatch?
+    let preview: BridgeDrawingCalibrationProgramResponse?
+    let run: BridgeDrawingCalibrationProgramResponse?
+    let observationId: String?
+    let retryScheduled: Bool
+    let error: String?
 }
 
 struct BridgeVisualProbeSampleResponse: Decodable {
@@ -1409,6 +1620,52 @@ final class PlotterBridgeClient {
 
     func drawingCalibrationStatus() async throws -> BridgeDrawingCalibrationResponse {
         try await get(path: "calibration/drawing/status")
+    }
+
+    func drawingCalibrationSessionStatus() async throws -> BridgeDrawingCalibrationSessionStatusResponse {
+        try await get(path: "calibration/drawing/session/status")
+    }
+
+    func startDrawingCalibrationSession(
+        _ request: BridgeDrawingCalibrationSessionStartRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/start", request: request)
+    }
+
+    func previewNextDrawingCalibrationBatch(
+        _ request: BridgeDrawingCalibrationSessionBatchRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/preview-next-batch", request: request)
+    }
+
+    func runDrawingCalibrationBatch(
+        _ request: BridgeDrawingCalibrationSessionBatchRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/run-batch", request: request)
+    }
+
+    func observeDrawingCalibrationBatch(
+        _ request: BridgeDrawingProgramObservationRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/observe-batch", request: request)
+    }
+
+    func fitDrawingCalibrationSession(
+        _ request: BridgeDrawingCalibrationSessionBatchRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/fit", request: request)
+    }
+
+    func validateDrawingCalibrationSession(
+        _ request: BridgeDrawingCalibrationSessionBatchRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/validate", request: request)
+    }
+
+    func finishDrawingCalibrationSession(
+        _ request: BridgeDrawingCalibrationSessionBatchRequest
+    ) async throws -> BridgeDrawingCalibrationSessionActionResponse {
+        try await post(path: "calibration/drawing/session/finish", request: request)
     }
 
     func observeVisualCap(_ request: BridgeVisualCapObservationRequest) async throws -> BridgeVisualReadinessResponse {

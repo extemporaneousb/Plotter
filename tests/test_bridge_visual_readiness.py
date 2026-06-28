@@ -335,6 +335,134 @@ def test_drawing_calibration_program_pipeline_persists_residual_grid_model(tmp_p
         assert status["calibration"]["latest_observation_id"] == observed["observation_id"]
 
 
+def test_progressive_drawing_session_runs_batch_observes_and_persists_without_model_accumulation(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+
+        status_code, started = client.post("/calibration/drawing/session/start", {})
+        assert status_code == 200
+        session_id = started["session"]["session_id"]
+        assert started["status"] == "collecting"
+        assert (
+            tmp_path
+            / "calibration"
+            / "latest_drawing_calibration_session.json"
+        ).exists()
+
+        status_code, previewed = client.post(
+            "/calibration/drawing/session/preview-next-batch",
+            {"session_id": session_id},
+        )
+        assert status_code == 200
+        batch = previewed["batch"]
+        preview = previewed["preview"]
+        assert batch["purpose"] == "bootstrap_sheet"
+        assert preview["program_kind"] == "progressive_bootstrap_sheet"
+        assert preview["preview_overlay"]["projected"] is True
+
+        status_code, run = client.post(
+            "/calibration/drawing/session/run-batch",
+            {
+                "session_id": session_id,
+                "batch_id": batch["batch_id"],
+                "expected_plan_hash": preview["plan_hash"],
+                "request_id": "progressive-batch-run",
+            },
+        )
+        assert status_code == 200
+        assert run["run"]["status"] == "completed"
+        assert run["status"] == "awaiting_observation"
+
+        payload = _drawing_program_observation_payload(
+            registration_id=registration_id,
+            command_id=run["run"]["command_id"],
+            preview_overlay=run["run"]["preview_overlay"],
+        )
+        payload.update(
+            {
+                "session_id": session_id,
+                "batch_id": batch["batch_id"],
+                "run_id": run["run"]["command_id"],
+                "plan_hash": run["run"]["plan_hash"],
+                "correction_mode": batch["correction_mode"],
+                "program_id": batch["batch_id"],
+                "program_kind": batch["program_kind"],
+            }
+        )
+        status_code, observed = client.post("/calibration/drawing/session/observe-batch", payload)
+        assert status_code == 200
+        assert observed["observation_id"]
+        assert observed["retry_scheduled"] is False
+        assert observed["calibration"]["model_family"] == "residual_grid_v1"
+        assert observed["session"]["observations"][0]["disposition"] == "accepted"
+
+        latest_model = tmp_path / "calibration" / "latest_drawing_calibration.json"
+        assert latest_model.exists()
+        model_artifact = json.loads(latest_model.read_text(encoding="utf-8"))
+        assert model_artifact["observations"] == []
+        assert model_artifact["latest_observation_id"] == observed["observation_id"]
+
+        status_code, second_preview = client.post(
+            "/calibration/drawing/session/preview-next-batch",
+            {"session_id": session_id},
+        )
+        assert status_code == 200
+        assert second_preview["batch"]["purpose"] in {
+            "coverage_fill",
+            "high_uncertainty_patch",
+            "direction_backlash_probe",
+            "validation_holdout",
+        }
+
+
+def test_progressive_drawing_session_retries_weak_observation_without_model_evidence(
+    tmp_path: Path,
+) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+        _, started = client.post("/calibration/drawing/session/start", {})
+        session_id = started["session"]["session_id"]
+        _, previewed = client.post(
+            "/calibration/drawing/session/preview-next-batch",
+            {"session_id": session_id},
+        )
+        batch_id = previewed["batch"]["batch_id"]
+
+        status_code, observed = client.post(
+            "/calibration/drawing/session/observe-batch",
+            {
+                "session_id": session_id,
+                "batch_id": batch_id,
+                "command_id": "weak-batch",
+                "paper_registration_id": registration_id,
+                "camera_id": "plotter-camera",
+                "camera_name": "Plotter Camera",
+                "program_id": batch_id,
+                "program_kind": previewed["batch"]["program_kind"],
+                "primitives": [],
+                "samples": [],
+                "sample_count": 8,
+                "detected_sample_count": 0,
+                "total_green_pixels": 0,
+                "coverage_fraction": 0.0,
+                "usable": False,
+            },
+        )
+        assert status_code == 200
+        assert observed["retry_scheduled"] is True
+        assert observed["batch"]["retry_count"] == 1
+        assert observed["session"]["observations"][0]["disposition"] == "rejected"
+        assert not (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+
+
 def test_valid_drawing_model_applies_to_sheet_run_and_refuses_stale_registration(
     tmp_path: Path,
 ) -> None:

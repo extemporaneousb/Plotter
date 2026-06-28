@@ -106,15 +106,29 @@ calibration and execution authority. Current segmentation and motion detection o
 by default, while green-cap tracking stays active for Visual Field Setup. Processing ROI is a
 separate Swift observation feature if it is added later.
 
-Drawing calibration sheets are `DrawingProgram`s. The current sheet contract is the
-`multi_shape_coordinate_sheet` capability program generated in Python and lowered through the
-planner, simulator, and projected preview before any execution. Do not add SVG import, a separate
-plotter-video grid, or a Swift-only calibration drawing path. A sheet-derived model may use
-`model_family: residual_grid_v1` only when the bridge persists observations from the planned sheet,
-the command/preview hash matches, the evidence belongs to the current Drawing Border registration
-and camera, and residual coverage is sufficient for planner use. Swift may show the current model
-family, solver kind, residuals, observation counts, blockers, and artifact path, but Python decides
-model persistence and planner authority.
+Drawing calibration sheets and progressive mini-batches are `DrawingProgram`s. The current session
+contract is Python-owned: start/resume a durable session, preview the next deterministic batch, run
+it through planner/simulator/executor gates, observe it from Swift video evidence, retry weak/faint
+recognition boundedly, fit, validate, and finish/persist promotion. Do not add SVG import, a
+separate plotter-video grid, or a Swift-only calibration drawing path.
+
+The setup-frame route is compatibility/setup evidence. It may seed bounded residual evidence, but it
+must not silently promote frame-only evidence to arbitrary drawing trust. Session state lives in
+`drawing_calibration_sessions/{session_id}.json` plus `latest_drawing_calibration_session.json`.
+Solved model artifacts live in `latest_drawing_calibration.json` and historical
+`drawing_calibrations/{model_id}.json`; the latest model file is not a rolling observation
+accumulator.
+
+A session-derived model may use `model_family: residual_grid_v1` only when the observed marks came
+from a planned `DrawingProgram` batch, the plan hash matches, the evidence belongs to the current
+Drawing Border registration and camera, coverage and uncertainty gates pass, validation holdout
+metrics are acceptable, and retry exhaustion has not blocked the session. Action residuals may add
+only bounded deterministic terms over direction, feed, segment length, curvature, pen transition,
+stroke order bucket, approach direction, and repeated opposite-direction strokes. `primitive_id` is
+diagnostic-only for production action residuals. No PyTorch/TensorFlow-style dependency or opaque
+neural-only correction is allowed. Swift may show the current session, batch, retry count, model
+family, solver kind, action model kind, residuals, validation error, blockers, and artifact paths,
+but Python decides model persistence and planner authority.
 
 ## Core entities
 

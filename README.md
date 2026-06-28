@@ -91,15 +91,27 @@ Simulation is not a decorative UI preview. It is the expected pen motion project
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
 
-The setup `Calibrate Drawing` action is the current operator bridge into that residual loop. The
-implemented path draws the inset Drawing Border, records the final cap closure residual, and, when
-the plotter camera has a usable frame, detects green stroke pixels near the expected frame, fits
-observed edge/corner geometry, overlays the observed frame against the expected frame, and sends the
-residual evidence to the bridge. The bridge persists `latest_drawing_calibration.json` under the
-calibration artifact directory, keeps historical models under `drawing_calibrations/`, and loads the
-latest model on later app startup. Frame observations are now adapted into the generic drawing
-observation schema and solved as `residual_grid_v1`; one inset rectangle remains limited evidence,
-so readiness still depends on freshness, coverage, residual, and blocker gates.
+The setup `Calibrate Drawing` action remains a compatibility/setup-evidence lane. It draws the inset
+Drawing Border, records cap closure residuals, detects green frame ink when a plotter-camera frame is
+usable, overlays expected versus observed frame geometry, and submits that evidence through the same
+generic drawing-observation schema. It does not make the frame the accidental authority for arbitrary
+drawing correction.
+
+Progressive drawing calibration is the Python-owned authority path after Setup has calibrated motion
+and the current Drawing Border is usable. The bridge starts a durable drawing-calibration session,
+plans deterministic mini-batches as `DrawingProgram`s, previews/runs them through the planner and
+simulator, accepts Swift video-derived ink observations, retries weak/faint/no-frame batches
+boundedly, fits `residual_grid_v1`, selects the next batch from coverage and uncertainty, optionally
+adds bounded deterministic action residuals, validates holdout batches, and only then promotes a
+fresh latest model. Production correction is traceable geometry plus residual grids and optional
+regularized action terms; it does not depend on an opaque neural model or live servo loop.
+
+Session state and model artifacts are separate. Sessions live under
+`artifacts/calibration_sessions/drawing_calibration_sessions/{session_id}.json`, with
+`latest_drawing_calibration_session.json` as the current pointer. Promoted/latest model output stays
+in `latest_drawing_calibration.json`, with historical models under `drawing_calibrations/{model_id}.json`.
+Raw, accepted, and rejected observations, retry history, blockers, batch provenance, and completion
+criteria stay in the session artifact rather than in the latest model artifact.
 
 The richer calibration sheet is a `DrawingProgram`, not an SVG file and not a separate plotter-video
 grid. The backend `multi_shape_coordinate_sheet` capability program is the current sheet contract:
@@ -299,6 +311,10 @@ The canonical bridge surfaces for agents are:
 - `GET /calibration/drawing/status`: drawing-calibration model visibility, including model family,
   solver kind, observation counts, residuals, blockers, and the `latest_drawing_calibration.json`
   path.
+- `GET /calibration/drawing/session/status`: progressive drawing-calibration session visibility,
+  including active session, batch, retry state, completion blockers, latest model id, and artifact
+  paths. Session mutation uses the `/calibration/drawing/session/*` POST routes for start,
+  preview-next-batch, run-batch, observe-batch, fit, validate, and finish.
 - `GET /codex/events`: recent normalized app, bridge, and controller-adjacent events using the shared
   agent event envelope.
 - `GET /codex/snapshot`: the first read for debugging current state. It includes app/bridge build

@@ -131,6 +131,13 @@ struct SetupPanelCommandRequest: Identifiable, Equatable {
 enum SetupPanelCommand: Equatable {
     case primary
     case drawFrame
+    case startDrawingSession
+    case previewDrawingBatch
+    case runDrawingBatch
+    case observeDrawingBatch
+    case fitDrawingSession
+    case validateDrawingSession
+    case finishDrawingSession
     case reset
     case hide
 }

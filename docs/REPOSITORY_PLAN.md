@@ -140,22 +140,39 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 Drawing calibration has two model lanes:
 
-- The implemented setup-frame lane is operator-facing today. `Calibrate Drawing` traces the canonical
+- The setup-frame lane is compatibility/setup evidence. `Calibrate Drawing` traces the canonical
   Drawing Border, records expected and observed green-frame geometry, converts those measurements
-  into generic drawing samples, persists `latest_drawing_calibration.json`, and exposes status
-  through `/calibration/drawing/status` and the Setup model-estimate detail. Its current model family
-  is `residual_grid_v1`; classify a single frame as narrow evidence, not full drawing trust.
-- The sheet lane is the richer `DrawingProgram` calibration path. It should persist
-  `model_family: residual_grid_v1` only when the observed marks came from a planned calibration
-  sheet program, the plan hash matches the expected command stream, the observations belong to the
-  current Drawing Border registration and camera, and the model records per-cell or per-node residual
-  vectors with residual metrics and blockers.
+  into generic drawing samples, and writes them through drawing-calibration session persistence. A
+  single frame is narrow evidence and must not promote broad drawing trust by itself.
+- The progressive session lane is the active richer `DrawingProgram` calibration path. Python owns
+  `/calibration/drawing/session/start`, `/status`, `/preview-next-batch`, `/run-batch`,
+  `/observe-batch`, `/fit`, `/validate`, and `/finish`. Batches record session id, batch id/index,
+  purpose, program kind, correction mode, model id used, command id, plan hash, expected primitives,
+  planned trace summary, observation summary, retry count, and fit/validation metrics.
+- Batch selection is deterministic and coverage-aware. The planner starts with bootstrap marks,
+  fills sparse coverage, targets high-uncertainty `residual_grid_v1` nodes, probes direction and
+  backlash, and then emits validation holdouts. Weak/faint/no-frame observations are stored as
+  rejected session evidence and retried/redrawn within a small explicit retry budget before blocking.
+- Model artifacts are solved/promotion output, not rolling observation stores. Sessions live at
+  `drawing_calibration_sessions/{session_id}.json`; `latest_drawing_calibration_session.json` points
+  to the active session. `latest_drawing_calibration.json` and `drawing_calibrations/{model_id}.json`
+  hold solved model artifacts without raw observation accumulation.
 
 A `residual_grid_v1` estimate is planner input only after freshness, coverage, and residual gates
 mark it ready. Outside covered cells, or when the Drawing Border/camera/plan hash no longer matches,
 the planner should either leave motion uncorrected or block execution explicitly. Swift may display
-the current model family, solver kind, residuals, observation counts, and blockers, but Python owns
-persistence, trust, and whether the planner may use the estimate.
+the current session id, batch id/index, correction mode, model id used, model family, solver kind,
+action model kind, grid/control count, sample count, coverage, residuals, validation error, retry
+count, and blockers, but Python owns persistence, retry policy, trust, and whether the planner may
+use the estimate.
+Python owns persistence, trust, retry policy, promotion, and planner authority for drawing
+calibration sessions and models.
+
+Deterministic action residuals are optional bounded corrections over real action features: direction
+unit vector, feed, segment length, curvature, pen transition, stroke order bucket, approach
+direction, and repeated opposite-direction strokes. `primitive_id` is diagnostic-only and must not be
+used as a production action residual feature. Heavyweight ML dependencies and opaque neural-only
+production correction are out of scope.
 
 Usage-scan guard for this area:
 
