@@ -3088,7 +3088,7 @@ struct ContentView: View {
             fieldWidthMm: $workspace.visualFieldWidthMm,
             fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,
-            reset: resetCalibrationWizard,
+            resetVisionMachine: resetVisionMachineCalibration,
             resetDrawingTraining: resetDrawingTraining,
             hide: hideCalibrationWizard
         )
@@ -3627,17 +3627,17 @@ struct ContentView: View {
         publishOperatorUIState(reason: "operator_ui_setup_hidden")
     }
 
-    private func resetCalibrationWizard() {
+    private func resetVisionMachineCalibration() {
         let message = "This clears current Drawing Border, motion, pen confirmation, drawing session, and drawing model pointers. History is preserved."
         guard confirmCalibrationReset(title: "Reset Vision-Machine Setup?", message: message) else {
             calibrationStatusText = "FIELD reset canceled"
             return
         }
-        clearWizardLocalState(resetFiducials: true)
-        calibrationStatusText = "FIELD reset requested"
+        clearVisionMachineWizardState(resetFiducials: true)
+        calibrationStatusText = "FIELD full reset requested"
         Task {
             _ = await bridge.resetCalibrationSetup(scope: "vision_machine")
-            clearWizardLocalState(resetFiducials: true)
+            clearVisionMachineWizardState(resetFiducials: true)
             calibrationStatusText = "FIELD reset; confirm green cap"
         }
     }
@@ -3663,7 +3663,7 @@ struct ContentView: View {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func clearWizardLocalState(resetFiducials: Bool) {
+    private func clearVisionMachineWizardState(resetFiducials: Bool) {
         workspace.calibrationWizardActive = true
         manualFiducialMode = false
         manualPenMode = false

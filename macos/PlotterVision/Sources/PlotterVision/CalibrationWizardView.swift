@@ -24,7 +24,7 @@ struct CalibrationWizardView: View {
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
-    let reset: () -> Void
+    let resetVisionMachine: () -> Void
     let resetDrawingTraining: () -> Void
     let hide: () -> Void
 
@@ -177,14 +177,50 @@ struct CalibrationWizardView: View {
             .disabled(!primaryActionEnabled)
             .help(primaryActionDisabledReason ?? primaryActionTitle)
 
-            Button("Reset Training", action: resetDrawingTraining)
-                .buttonStyle(.bordered)
-                .disabled(workflow?.freshness.drawingSessionId == nil && workflow?.freshness.drawingModelId == nil)
+            if showsDrawingTrainingReset {
+                Button("Reset Training", action: resetDrawingTraining)
+                    .buttonStyle(.bordered)
+                    .disabled(!hasDrawingTrainingArtifacts)
+            }
 
-            Button("Reset Setup", action: reset)
+            if showsVisionMachineReset {
+                Button(role: .destructive, action: resetVisionMachine) {
+                    Label("Full Reset", systemImage: "exclamationmark.triangle")
+                }
                 .buttonStyle(.bordered)
+            }
         }
         .controlSize(.small)
+    }
+
+    private var hasDrawingTrainingArtifacts: Bool {
+        workflow?.freshness.drawingSessionId != nil || workflow?.freshness.drawingModelId != nil
+    }
+
+    private var showsDrawingTrainingReset: Bool {
+        hasDrawingTrainingArtifacts || isDrawingTrainingPhase
+    }
+
+    private var showsVisionMachineReset: Bool {
+        guard let phase = workflow?.phase else { return true }
+        return !isDownstreamDrawingPhase(phase)
+    }
+
+    private var isDrawingTrainingPhase: Bool {
+        guard let phase = workflow?.phase else { return false }
+        return isDownstreamDrawingPhase(phase)
+    }
+
+    private func isDownstreamDrawingPhase(_ phase: String) -> Bool {
+        [
+            "motion_validated",
+            "pen_ready",
+            "drawing_training",
+            "drawing_retry",
+            "drawing_validated",
+            "ready_to_draw",
+            "blocked"
+        ].contains(phase)
     }
 
     @ViewBuilder
