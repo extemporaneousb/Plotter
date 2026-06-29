@@ -565,16 +565,27 @@ struct PaperRegistrationResponse: Decodable {
 }
 
 struct BridgeSetupResetRequest: Encodable {
-    let requestId: String? = nil
-    let preserveHistory: Bool = true
+    let requestId: String?
+    let scope: String
+    let confirmed: Bool
+    let preserveHistory: Bool
     let traceId: String? = nil
     let spanId: String? = nil
     let parentSpanId: String? = nil
+
+    init(scope: String, confirmed: Bool, requestId: String? = nil, preserveHistory: Bool = true) {
+        self.requestId = requestId
+        self.scope = scope
+        self.confirmed = confirmed
+        self.preserveHistory = preserveHistory
+    }
 }
 
 struct BridgeSetupResetResponse: Decodable {
     let status: String
     let dryRun: Bool
+    let scope: String
+    let confirmed: Bool
     let preserveHistory: Bool
     let clearedFiles: [String]
     let missingFiles: [String]
@@ -938,8 +949,53 @@ struct BridgeVisualReadinessResponse: Decodable {
     let status: String
     let dryRun: Bool
     let readiness: BridgeVisualReadinessState?
+    let workflow: BridgeCalibrationWorkflow?
     let readinessFile: String
     let error: String?
+}
+
+struct BridgeCalibrationWorkflow: Decodable, Equatable {
+    let phase: String
+    let readyToDraw: Bool
+    let steps: [BridgeCalibrationWorkflowStep]
+    let currentBlocker: String?
+    let nextPrimaryAction: BridgeCalibrationWorkflowAction
+    let safeAutoActions: [String]
+    let freshness: BridgeCalibrationWorkflowFreshness
+    let overlayBadge: BridgeCalibrationWorkflowBadge
+}
+
+struct BridgeCalibrationWorkflowStep: Decodable, Equatable, Identifiable {
+    let id: String
+    let label: String
+    let state: String
+    let detail: String
+}
+
+struct BridgeCalibrationWorkflowAction: Decodable, Equatable {
+    let id: String
+    let label: String
+    let enabled: Bool
+    let requiresMotion: Bool
+    let requiresDrawing: Bool
+}
+
+struct BridgeCalibrationWorkflowFreshness: Decodable, Equatable {
+    let paperRegistrationId: String?
+    let cameraId: String?
+    let visualReadinessStateId: String?
+    let latestVisualProbeRunId: String?
+    let probeStaleSampleCount: Int
+    let drawingSessionId: String?
+    let drawingModelId: String?
+    let penReadyConfirmed: Bool
+    let staleReasons: [String]
+}
+
+struct BridgeCalibrationWorkflowBadge: Decodable, Equatable {
+    let state: String
+    let label: String
+    let color: String
 }
 
 struct BridgeVisualBindingObservationRequest: Encodable {
@@ -1279,11 +1335,25 @@ struct BridgeDrawingCalibrationMetrics: Decodable, Equatable {
 }
 
 struct BridgeDrawingCalibrationSessionStartRequest: Encodable {
-    let resume: Bool = true
-    let requestId: String? = nil
+    let resume: Bool
+    let penReadyConfirmed: Bool
+    let penReadyConfirmation: [String: String]
+    let requestId: String?
     let traceId: String? = nil
     let spanId: String? = nil
     let parentSpanId: String? = nil
+
+    init(
+        resume: Bool = true,
+        penReadyConfirmed: Bool,
+        penReadyConfirmation: [String: String],
+        requestId: String? = nil
+    ) {
+        self.resume = resume
+        self.penReadyConfirmed = penReadyConfirmed
+        self.penReadyConfirmation = penReadyConfirmation
+        self.requestId = requestId
+    }
 }
 
 struct BridgeDrawingCalibrationSessionBatchRequest: Encodable {
@@ -1343,6 +1413,8 @@ struct BridgeDrawingCalibrationSession: Decodable, Equatable {
     let cameraName: String?
     let fieldWidthMm: Double
     let fieldHeightMm: Double
+    let penReadyConfirmed: Bool
+    let penReadyConfirmedAt: String?
     let startedAt: String
     let updatedAt: String
     let latestModelId: String?

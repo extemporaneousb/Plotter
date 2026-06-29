@@ -70,17 +70,20 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert '"machine_video_agreement_estimate_present": machineVideoAgreementModel != nil' in workspace
     assert "machine_video_agreement_valid" not in workspace
     assert "CalibrationWizardView(" in setup_panel
+    assert "workflow: bridge.calibrationWorkflow" in setup_panel
     assert "workspace.requestSetupCommand(.primary)" in setup_panel
-    assert "workspace.requestSetupCommand(.drawFrame)" in setup_panel
-    assert "workspace.requestSetupCommand(.startDrawingSession)" in setup_panel
-    assert "workspace.requestSetupCommand(.previewDrawingBatch)" in setup_panel
-    assert "workspace.requestSetupCommand(.runDrawingBatch)" in setup_panel
-    assert "workspace.requestSetupCommand(.observeDrawingBatch)" in setup_panel
-    assert "workspace.requestSetupCommand(.fitDrawingSession)" in setup_panel
-    assert "workspace.requestSetupCommand(.validateDrawingSession)" in setup_panel
-    assert "workspace.requestSetupCommand(.finishDrawingSession)" in setup_panel
-    assert "drawFrameVisible" in workspace
-    assert "drawFrameEnabled" in workspace
+    assert "workspace.requestSetupCommand(.drawFrame)" not in setup_panel
+    assert "ProgressiveDrawingCalibrationControls" not in setup_panel
+    assert "workspace.requestSetupCommand(.startDrawingSession)" not in setup_panel
+    assert "workspace.requestSetupCommand(.previewDrawingBatch)" not in setup_panel
+    assert "workspace.requestSetupCommand(.runDrawingBatch)" not in setup_panel
+    assert "workspace.requestSetupCommand(.observeDrawingBatch)" not in setup_panel
+    assert "workspace.requestSetupCommand(.fitDrawingSession)" not in setup_panel
+    assert "workspace.requestSetupCommand(.validateDrawingSession)" not in setup_panel
+    assert "workspace.requestSetupCommand(.finishDrawingSession)" not in setup_panel
+    assert "workspace.requestSetupCommand(.resetDrawingTraining)" in setup_panel
+    assert "drawFrameVisible" not in workspace
+    assert "drawFrameEnabled" not in workspace
     assert "fieldAspectYPerX" in workspace
     assert '"visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0' in workspace
     assert "fieldWidthMm: $workspace.visualFieldWidthMm" in setup_panel
@@ -363,12 +366,14 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
 
     assert "CalibrationWizardView(" in setup_panel
-    assert "Visual Field Setup" in wizard
+    assert "Calibrate Vision-Machine Interface" in wizard
+    assert "BridgeCalibrationWorkflow" in wizard
     assert 'title: "Confirm Green Cap"' in wizard
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
-    assert 'title: "Calibrate Drawing"' in wizard
+    assert 'title: "Drawing Training"' in wizard
+    assert 'title: "Calibrate Drawing"' not in wizard
     assert "let fieldAspectYPerX: Double?" not in wizard
     assert "@Binding var fieldWidthMm" in wizard
     assert "@Binding var fieldHeightMm" in wizard
@@ -401,12 +406,14 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "currentGreenCapCameraObservation" in content
     assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
     assert "Validate Motion" in content
-    assert "Calibrate Drawing" in wizard
+    assert "Calibrate Drawing" not in wizard
     assert "wizardDrawingCalibrationStatus" in content
     assert "wizardDrawingCalibrationDetail" in content
-    assert "wizardDrawFrameVisible" in content
-    assert "wizardDrawFrameEnabled" in content
-    assert "drawValidatedFieldFrame" in content
+    assert "wizardDrawFrameVisible" not in content
+    assert "wizardDrawFrameEnabled" not in content
+    assert "drawValidatedFieldFrame" not in content
+    assert "runDrawingWorkflowPrimaryAction" in content
+    assert "Confirm Pen Ready" in content
     assert "recordDrawingFrameInspection" in frame_drawing + _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     assert "expectedPathLabel" in _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert '"Expected frame"' in _read(SWIFT_DIR / "PlotterBridgeModel.swift")
@@ -580,9 +587,11 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "BORDER adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) drawing border locked" in content
     assert "Run Motion Calibration" in content
     assert "CAL motion calibration using adjusted drawing border" in content
-    assert "resetCalibrationSetup()" in content
+    assert 'resetCalibrationSetup(scope: "vision_machine")' in content
+    assert 'resetCalibrationSetup(scope: "drawing_training")' in content
+    assert "NSAlert" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
-    assert "Visual Field Setup" in wizard
+    assert "Calibrate Vision-Machine Interface" in wizard
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
     assert "Stored visual field in use" not in content
@@ -604,6 +613,7 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
+    assert 'title: "Drawing Training"' in wizard
     assert 'title: "Fiducials"' not in wizard
     assert 'title: "Drawing Calibration"' not in wizard
     assert 'title: "Tool"' not in wizard

@@ -70,16 +70,20 @@ The app-first drawing flow is:
    These validation moves are setup relative jogs and must not be blocked by absolute `MPos`
    workspace projection. Success for this milestone means predictable green-cap motion in the
    user-defined visual drawing field.
-7. Treat field registration, cap localization, and a valid relative motion model as the active setup
-   authority. During setup, the cap and tip are colocated until explicit binding evidence proves
-   otherwise. Cap-to-tip offset and general drawing trust remain future work.
-   The separate setup `Calibrate Drawing` action may draw an inset border after validation. It must
-   compare the expected frame to observed green stroke geometry when the plotter camera can see it,
-   overlay both `Expected frame` and `Observed frame`, and persist edge/corner ink residuals as a
-   drawing-calibration artifact. Frame observations are adapted into the generic drawing-observation
-   schema and solved as `residual_grid_v1`; the result must not claim arbitrary drawing trust until
-   enough frame or mark evidence exists.
-8. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
+7. Continue in the same **Calibrate Vision-Machine Interface** wizard. Python owns
+   `/calibration/workflow/status` as the composed workflow authority: phase, `ready_to_draw`,
+   ordered steps, current blocker, next primary action, safe auto-actions, freshness ids, stale
+   downstream evidence, and overlay badge state. Swift displays that state and calls typed routes.
+   During setup, the cap and tip are colocated until explicit binding evidence proves otherwise.
+8. After motion validation, require operator `pen_ready_confirmed=true` before
+   `/calibration/drawing/session/start`. That confirmation belongs to the current Drawing
+   Border/camera/field and becomes invalid with stale downstream evidence. Preview, run, observe,
+   retry, fit, validate, and promote drawing training through Python-owned session routes.
+   Machine movement and drawing require explicit clicks; safe non-motion steps may auto-run.
+9. The old setup-frame drawing route is backend compatibility/setup evidence only. It may compare an
+   inset Drawing Border against observed green stroke geometry and persist generic drawing
+   observations, but it is not a visible wizard action and must not promote arbitrary drawing trust.
+10. Future drawing surfaces must preview capability checks, shape programs, or portrait/image-derived
    programs through:
 
 ```text
@@ -106,14 +110,15 @@ calibration and execution authority. Current segmentation and motion detection o
 by default, while green-cap tracking stays active for Visual Field Setup. Processing ROI is a
 separate Swift observation feature if it is added later.
 
-Drawing calibration sheets and progressive mini-batches are `DrawingProgram`s. The current session
-contract is Python-owned: start/resume a durable session, preview the next deterministic batch, run
-it through planner/simulator/executor gates, observe it from Swift video evidence, retry weak/faint
-recognition boundedly, fit, validate, and finish/persist promotion. Do not add SVG import, a
-separate plotter-video grid, or a Swift-only calibration drawing path.
+Drawing calibration sheets and mini-batches are `DrawingProgram`s. The current session contract is
+Python-owned: start/resume a durable session only after pen-ready confirmation, preview the next
+deterministic batch, run it through planner/simulator/executor gates, observe it from Swift video
+evidence, retry weak/faint recognition boundedly, fit, validate, and finish/persist promotion.
+Do not add SVG import, a separate plotter-video grid, or a Swift-only calibration drawing path.
 
-The setup-frame route is compatibility/setup evidence. It may seed bounded residual evidence, but it
-must not silently promote frame-only evidence to arbitrary drawing trust. Session state lives in
+The setup-frame route is compatibility/setup evidence. It may seed bounded residual evidence through
+backend routes, but it is not part of the primary wizard UI and must not silently promote frame-only
+evidence to arbitrary drawing trust. Session state lives in
 `drawing_calibration_sessions/{session_id}.json` plus `latest_drawing_calibration_session.json`.
 Solved model artifacts live in `latest_drawing_calibration.json` and historical
 `drawing_calibrations/{model_id}.json`; the latest model file is not a rolling observation

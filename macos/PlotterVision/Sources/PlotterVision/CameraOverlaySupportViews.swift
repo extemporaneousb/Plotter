@@ -6,6 +6,19 @@ enum CalibrationWizardStepStatus {
     case done
     case blocked
 
+    init(workflowState: String) {
+        switch workflowState {
+        case "done":
+            self = .done
+        case "active":
+            self = .active
+        case "blocked":
+            self = .blocked
+        default:
+            self = .pending
+        }
+    }
+
     var label: String {
         switch self {
         case .pending:
@@ -739,6 +752,63 @@ struct CameraPaneBadge: View {
         if camera.isRunning && camera.isReceivingFrames { return .green }
         if camera.isRunning { return .yellow }
         return .gray
+    }
+}
+
+struct CalibrationWorkflowOverlayBadge: View {
+    let workflow: BridgeCalibrationWorkflow?
+
+    var body: some View {
+        VStack {
+            HStack {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(badgeColor)
+                        .frame(width: 8, height: 8)
+                    Text(badgeLabel)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.88))
+                    if let blocker = workflow?.currentBlocker, !blocker.isEmpty {
+                        Text(blocker)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.58))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 18)
+            .padding(.horizontal, 18)
+            Spacer(minLength: 0)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var badgeLabel: String {
+        workflow?.overlayBadge.label ?? "Uncalibrated"
+    }
+
+    private var badgeColor: Color {
+        switch workflow?.overlayBadge.color {
+        case "green":
+            return .green
+        case "red":
+            return .red
+        case "yellow":
+            return .yellow
+        case "cyan":
+            return .cyan
+        default:
+            return .gray
+        }
     }
 }
 

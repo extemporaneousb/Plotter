@@ -72,12 +72,20 @@ The normal development target is the fixed-camera drawing loop:
    relative model through setup relative jogs, not absolute workspace-projected drawing moves.
    Success for this milestone means the green cap can be moved predictably inside the user-defined
    field.
-7. Persist the field registration, cap observation, and relative motion model as the current setup
-   authority. During setup the cap and tip are treated as colocated until explicit binding evidence
-   proves otherwise. Cap-to-tip offset and general drawing trust remain future work; the separate
-   drawing-calibration actions below record bounded ink evidence without making arbitrary drawings
-   trustworthy.
-8. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
+7. Continue in the same **Calibrate Vision-Machine Interface** wizard. Python composes
+   `/calibration/workflow/status`, including the current phase, next valid action, safe auto-actions,
+   stale downstream evidence, freshness ids, and plotter-video badge state. Swift displays that
+   state and triggers typed routes; it does not decide calibration readiness. During setup the
+   cap and tip are treated as colocated until explicit binding evidence proves otherwise.
+8. After motion validation, the operator confirms pen readiness. That acknowledgement starts or
+   resumes the Python-owned drawing training session for the current Drawing Border/camera/field.
+   Changing the Drawing Border invalidates downstream motion validation, pen confirmation, active
+   drawing session, and drawing model pointers unless their freshness ids match the current setup.
+9. Preview, run, observe, retry, fit, validate, and promote deterministic `DrawingProgram` training
+   batches. Only explicit clicks may move the machine or draw. Safe non-motion steps may auto-run:
+   refresh status, start the session after pen confirmation, preview the next batch, fit accepted
+   observations, validate metrics, and promote when gates pass.
+10. Use Face Video for portrait capture and portrait drawing controls. Capability-check examples are
    currently removed from the operator UI until the next real drawing surface is defined.
 
 Future drawing lanes must run through the same bridge-owned pipeline before real ink motion:
@@ -91,15 +99,14 @@ Simulation is not a decorative UI preview. It is the expected pen motion project
 video stream, and the residual loop compares that expected geometry with video observations of the
 actual pen marks.
 
-The setup `Calibrate Drawing` action remains a compatibility/setup-evidence lane. It draws the inset
-Drawing Border, records cap closure residuals, detects green frame ink when a plotter-camera frame is
-usable, overlays expected versus observed frame geometry, and submits that evidence through the same
-generic drawing-observation schema. It does not make the frame the accidental authority for arbitrary
-drawing correction.
+The old setup-frame drawing route remains backend compatibility/setup evidence only. It may draw the
+inset Drawing Border, record cap closure residuals, detect green frame ink, and submit generic
+drawing observations, but it is not a visible wizard action and cannot be the primary authority for
+arbitrary drawing correction.
 
-Progressive drawing calibration is the Python-owned authority path after Setup has calibrated motion
-and the current Drawing Border is usable. The bridge starts a durable drawing-calibration session,
-plans deterministic mini-batches as `DrawingProgram`s, previews/runs them through the planner and
+Drawing training is the Python-owned authority path after Setup has calibrated motion and the
+operator has confirmed pen readiness. The bridge starts a durable drawing-calibration session, plans
+deterministic mini-batches as `DrawingProgram`s, previews/runs them through the planner and
 simulator, accepts Swift video-derived ink observations, retries weak/faint/no-frame batches
 boundedly, fits `residual_grid_v1`, selects the next batch from coverage and uncertainty, optionally
 adds bounded deterministic action residuals, validates holdout batches, and only then promotes a
@@ -141,8 +148,9 @@ The operator sequence should stay explicit:
 | 2 | Machine-Video Agreement Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-video basis | Cap-to-tip offset, ink binding, or drawing authority. |
 | 3 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
-| 5 | Calibrate Drawing | Execution transcript, cap closure residual, expected/observed frame overlays, green frame edge/corner observations, persisted drawing-calibration residual model | Full nonlinear drawing correction from one rectangle or future drawing trust without fresh evidence. |
-| 5a | Calibration Sheet | Planned `multi_shape_coordinate_sheet` `DrawingProgram`, plan hash, projected preview, observed mark residuals, candidate `residual_grid_v1` cells and blockers | Active correction unless the bridge has persisted a fresh ready model for the current Drawing Border and camera. |
+| 5 | Confirm Pen Ready | Operator acknowledgement with current Drawing Border/camera/field ids | Ink quality or model validity. |
+| 6 | Drawing Training | Planned `DrawingProgram` batch, plan hash, projected preview, explicit run, observed mark residuals, retry history, fit/validation metrics, candidate `residual_grid_v1` cells and blockers | Active correction unless the bridge has promoted a fresh ready model for the current Drawing Border and camera. |
+| Compatibility | Setup-frame route | Cap closure residuals, expected/observed frame overlays, green frame edge/corner observations | A primary wizard path or full drawing correction from one rectangle. |
 | 6 | Future drawing work | Preview, simulation, execution transcript, ink observations, residuals | A future run if camera, field, controller, or tool state is stale. |
 
 Swift may collect and display probe samples, residuals, and operator events, but Python owns durable
@@ -306,8 +314,9 @@ The canonical bridge surfaces for agents are:
   latest known machine position.
 - `GET /paper/status`: visual-field registration state. The route name is historical; active setup
   treats the artifact as the user-defined drawing field.
-- `GET /calibration/workflow/status`: Visual Field Setup state, including field registration, cap
-  localization, relative motion-model validity, and current blockers.
+- `GET /calibration/workflow/status`: composed calibration workflow authority, preserving visual
+  readiness fields while adding phase, `ready_to_draw`, ordered steps, current blocker, next primary
+  action, safe auto-actions, freshness ids, stale downstream evidence, and overlay badge state.
 - `GET /calibration/drawing/status`: drawing-calibration model visibility, including model family,
   solver kind, observation counts, residuals, blockers, and the `latest_drawing_calibration.json`
   path.

@@ -46,6 +46,12 @@ extension ContentView {
                 return
             }
             await bridge.recordProgressiveDrawingCalibrationObservation(result)
+            if bridge.currentDrawingCalibrationBatch?.status == "accepted" {
+                await bridge.fitProgressiveDrawingCalibrationSession()
+                await bridge.validateProgressiveDrawingCalibrationSession()
+                await bridge.finishProgressiveDrawingCalibrationSession()
+            }
+            _ = await bridge.refreshVisualReadinessStatus()
             refreshSetupSnapshot()
         }
     }

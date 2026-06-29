@@ -57,6 +57,7 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var bindingMarkPreviewStatus = "BIND --"
     @Published var adaptiveProbeStatus = "PROBE --"
     @Published var latestVisualReadiness: BridgeVisualReadinessState?
+    @Published var calibrationWorkflow: BridgeCalibrationWorkflow?
     @Published var visualCenterDotStatus = "VIS --"
     @Published var visualBindingStatus = "BIND --"
     @Published var visualBindingDetail = "No binding observations"
@@ -241,18 +242,24 @@ final class PlotterBridgeModel: ObservableObject {
         return runId
     }
 
-    func resetCalibrationSetup() async -> Bool {
+    func resetCalibrationSetup(scope: String = "vision_machine") async -> Bool {
         guard isOnline else {
             statusText = "Bridge offline"
             return false
         }
         do {
-            let response = try await client.resetCalibrationSetup(BridgeSetupResetRequest())
-            paperRegistrationSnapshot = nil
-            paperTransformStatus = "FIELD --"
-            learnedCapToTipModel = nil
-            drawableSafeZone = nil
-            _ = resetVisualCalibrationSession(prefix: "swift-reset")
+            let response = try await client.resetCalibrationSetup(
+                BridgeSetupResetRequest(scope: scope, confirmed: true)
+            )
+            if scope == "vision_machine" {
+                paperRegistrationSnapshot = nil
+                paperTransformStatus = "FIELD --"
+                learnedCapToTipModel = nil
+                drawableSafeZone = nil
+                latestVisualReadiness = nil
+                calibrationWorkflow = nil
+                _ = resetVisualCalibrationSession(prefix: "swift-reset")
+            }
             drawVerifyStatus = "DRAW --"
             drawVerifyDetail = "No drawing run"
             clearExpectedPathOverlay()
@@ -271,6 +278,8 @@ final class PlotterBridgeModel: ObservableObject {
                 "visual_setup_reset",
                 [
                     "status": response.status,
+                    "scope": response.scope,
+                    "confirmed": response.confirmed,
                     "cleared_files": response.clearedFiles,
                     "missing_files": response.missingFiles
                 ],
@@ -1041,6 +1050,7 @@ final class PlotterBridgeModel: ObservableObject {
         do {
             let response = try await client.visualReadinessStatus()
             latestVisualReadiness = response.readiness
+            calibrationWorkflow = response.workflow
             adaptiveProbeStatus = response.status == "ready" ? "PROBE READY" : "PROBE BLOCK"
             if let blockers = response.readiness?.blockers, !blockers.isEmpty {
                 statusText = blockers.joined(separator: ", ")
@@ -1049,6 +1059,8 @@ final class PlotterBridgeModel: ObservableObject {
                 "visual_readiness_refreshed",
                 [
                     "status": response.status,
+                    "workflow_phase": response.workflow?.phase ?? "",
+                    "ready_to_draw": response.workflow?.readyToDraw ?? false,
                     "motion_model_valid": response.readiness?.motionModelValid ?? false,
                     "has_relative_motion_model": response.readiness?.relativeMotionModel != nil,
                     "blockers": response.readiness?.blockers ?? []
@@ -2931,7 +2943,7 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func startProgressiveDrawingCalibrationSession() async {
+    func startProgressiveDrawingCalibrationSession(penReadyConfirmed: Bool = true) async {
         guard isOnline else {
             drawingCalibrationSessionStatus = "SESSION OFF"
             drawingCalibrationSessionDetail = "Bridge offline"
@@ -2939,7 +2951,14 @@ final class PlotterBridgeModel: ObservableObject {
         }
         do {
             let response = try await client.startDrawingCalibrationSession(
-                BridgeDrawingCalibrationSessionStartRequest()
+                BridgeDrawingCalibrationSessionStartRequest(
+                    penReadyConfirmed: penReadyConfirmed,
+                    penReadyConfirmation: [
+                        "source": "operator_confirmed",
+                        "surface": "calibration_wizard"
+                    ],
+                    requestId: "swift-confirm-pen-ready"
+                )
             )
             applyDrawingCalibrationSessionResponse(response)
             diagnosticsEvent("drawing_calibration_session_started", drawingSessionDiagnostics(response), snapshot: true)

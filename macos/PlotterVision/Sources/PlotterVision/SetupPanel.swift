@@ -7,6 +7,7 @@ struct SetupPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             CalibrationWizardView(
+                workflow: bridge.calibrationWorkflow,
                 instructionText: workspace.setupSnapshot.instructionText,
                 fiducialDetail: workspace.setupSnapshot.fiducialDetail,
                 fiducialStatus: workspace.setupSnapshot.fiducialStatus,
@@ -21,9 +22,6 @@ struct SetupPanel: View {
                 primaryActionTitle: workspace.setupSnapshot.primaryActionTitle,
                 primaryActionEnabled: workspace.setupSnapshot.primaryActionEnabled,
                 primaryActionDisabledReason: workspace.setupSnapshot.primaryActionDisabledReason,
-                drawFrameVisible: workspace.setupSnapshot.drawFrameVisible,
-                drawFrameEnabled: workspace.setupSnapshot.drawFrameEnabled,
-                drawFrameDisabledReason: workspace.setupSnapshot.drawFrameDisabledReason,
                 hasPaperLock: workspace.setupSnapshot.hasPaperLock,
                 capStateLabel: workspace.setupSnapshot.capStateLabel,
                 isLiveMotionMode: workspace.setupSnapshot.isLiveMotionMode,
@@ -31,87 +29,15 @@ struct SetupPanel: View {
                 fieldWidthMm: $workspace.visualFieldWidthMm,
                 fieldHeightMm: $workspace.visualFieldHeightMm,
                 primaryAction: { workspace.requestSetupCommand(.primary) },
-                drawFrame: { workspace.requestSetupCommand(.drawFrame) },
                 reset: { workspace.requestSetupCommand(.reset) },
+                resetDrawingTraining: { workspace.requestSetupCommand(.resetDrawingTraining) },
                 hide: { workspace.requestSetupCommand(.hide) }
             )
-            ProgressiveDrawingCalibrationControls(workspace: workspace, bridge: bridge)
             SetupLogDisclosure(workspace: workspace)
             SetupModelEstimatesDisclosure(workspace: workspace, bridge: bridge)
         }
         .frame(width: 430, alignment: .topLeading)
         .padding(14)
-    }
-}
-
-private struct ProgressiveDrawingCalibrationControls: View {
-    @ObservedObject var workspace: OperatorWorkspaceState
-    @ObservedObject var bridge: PlotterBridgeModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Label("Progressive Drawing Calibration", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 12, weight: .bold))
-                Spacer()
-                Text(bridge.drawingCalibrationSessionStatus)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            Text(bridge.drawingCalibrationSessionDetail)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 6) {
-                Button {
-                    workspace.requestSetupCommand(.startDrawingSession)
-                } label: {
-                    Label("Start", systemImage: "play.circle")
-                }
-                Button {
-                    workspace.requestSetupCommand(.previewDrawingBatch)
-                } label: {
-                    Label("Preview", systemImage: "eye")
-                }
-                Button {
-                    workspace.requestSetupCommand(.runDrawingBatch)
-                } label: {
-                    Label("Run", systemImage: "paperplane")
-                }
-                Button {
-                    workspace.requestSetupCommand(.observeDrawingBatch)
-                } label: {
-                    Label("Observe / Retry", systemImage: "camera.metering.center.weighted")
-                }
-            }
-            .controlSize(.mini)
-            HStack(spacing: 6) {
-                Button {
-                    workspace.requestSetupCommand(.fitDrawingSession)
-                } label: {
-                    Label("Fit", systemImage: "function")
-                }
-                Button {
-                    workspace.requestSetupCommand(.validateDrawingSession)
-                } label: {
-                    Label("Validate", systemImage: "checkmark.seal")
-                }
-                Button {
-                    workspace.requestSetupCommand(.finishDrawingSession)
-                } label: {
-                    Label("Finish", systemImage: "flag.checkered")
-                }
-            }
-            .controlSize(.mini)
-            .disabled(bridge.latestDrawingCalibrationSession == nil)
-        }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
     }
 }
 

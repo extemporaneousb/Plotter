@@ -34,6 +34,9 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert status_code == 200
         assert status["status"] == "blocked"
         assert any("Visual field registration" in blocker for blocker in status["readiness"]["blockers"])
+        assert status["workflow"]["ready_to_draw"] is False
+        assert status["workflow"]["phase"] == "needs_cap"
+        assert status["workflow"]["next_primary_action"]["id"] == "confirm_green_cap"
 
         registration = _register_field(client)
         assert registration["registration"]["paper_size_mm"] == {"width": 200.0, "height": 150.0}
@@ -48,6 +51,8 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert readiness["relative_motion_model"] is None
         assert readiness["visual_ready_to_plot"] is False
         assert any("Motion calibration" in blocker for blocker in readiness["blockers"])
+        assert observed["workflow"]["phase"] == "drawing_border_locked"
+        assert observed["workflow"]["overlay_badge"]["state"] == "border_locked"
 
 
 def test_setup_safe_zone_uses_current_visual_field_not_stale_tool_offset(tmp_path: Path) -> None:
@@ -116,6 +121,10 @@ def test_probe_samples_solve_valid_relative_motion_models(
     readiness = status["readiness"]
     model = readiness["relative_motion_model"]
     assert status["status"] == "ready"
+    assert status["workflow"]["phase"] == "motion_validated"
+    assert status["workflow"]["ready_to_draw"] is False
+    assert status["workflow"]["next_primary_action"]["id"] == "confirm_pen_ready"
+    assert status["workflow"]["overlay_badge"]["state"] == "motion_ready"
     assert readiness["motion_model_valid"] is True
     assert readiness["visual_ready_to_plot"] is True
     assert readiness["probe_observation_count"] == 4
@@ -195,9 +204,18 @@ def test_setup_reset_clears_latest_field_cap_and_motion_authority(tmp_path: Path
         assert historical_field.exists()
         assert historical_probe.exists()
 
-        status_code, reset = client.post("/calibration/setup/reset", {})
+        status_code, unconfirmed = client.post("/calibration/setup/reset", {})
+        assert status_code == 400
+        assert unconfirmed["status"] == "failed"
+        assert "confirmed=true" in unconfirmed["error"]
+
+        status_code, reset = client.post(
+            "/calibration/setup/reset",
+            {"scope": "vision_machine", "confirmed": True},
+        )
         assert status_code == 200
         assert reset["status"] == "reset"
+        assert reset["scope"] == "vision_machine"
 
         assert not (tmp_path / "calibration" / "latest_paper_registration.json").exists()
         assert not (tmp_path / "calibration" / "latest_visual_readiness.json").exists()
@@ -269,11 +287,75 @@ def test_setup_reset_clears_latest_drawing_calibration_pointer(tmp_path: Path) -
         )
         assert historical_model.exists()
 
-        status_code, reset = client.post("/calibration/setup/reset", {})
+        status_code, reset = client.post(
+            "/calibration/setup/reset",
+            {"scope": "vision_machine", "confirmed": True},
+        )
         assert status_code == 200
         assert reset["status"] == "reset"
         assert not (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
         assert historical_model.exists()
+
+
+def test_drawing_training_reset_scope_preserves_vision_machine_setup(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        registration = _register_field(client)
+        registration_id = registration["registration"]["registration_id"]
+        status_code, response = client.post(
+            "/calibration/drawing/frame-observation",
+            _drawing_frame_observation_payload(registration_id=registration_id),
+        )
+        assert status_code == 200
+        assert (tmp_path / "calibration" / "latest_paper_registration.json").exists()
+        assert (tmp_path / "calibration" / "latest_drawing_calibration_session.json").exists()
+        assert (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+
+        status_code, reset = client.post(
+            "/calibration/setup/reset",
+            {"scope": "drawing_training", "confirmed": True},
+        )
+
+        assert status_code == 200
+        assert reset["status"] == "reset"
+        assert reset["scope"] == "drawing_training"
+        assert (tmp_path / "calibration" / "latest_paper_registration.json").exists()
+        assert not (tmp_path / "calibration" / "latest_drawing_calibration_session.json").exists()
+        assert not (tmp_path / "calibration" / "latest_drawing_calibration.json").exists()
+        assert (
+            tmp_path
+            / "calibration"
+            / "drawing_calibrations"
+            / f"{response['calibration']['model_id']}.json"
+        ).exists()
+
+
+def test_workflow_surfaces_stale_drawing_border_downstream_evidence(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-stale-border"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+        _, started = client.post(
+            "/calibration/drawing/session/start",
+            {"pen_ready_confirmed": True, "pen_ready_confirmation": {"source": "operator_confirmed"}},
+        )
+        assert started["session"]["pen_ready_confirmed"] is True
+
+        _register_shifted_field(client)
+        status_code, workflow_status = client.get("/calibration/workflow/status")
+
+    assert status_code == 200
+    workflow = workflow_status["workflow"]
+    assert workflow["phase"] == "stale_downstream"
+    assert workflow["ready_to_draw"] is False
+    assert workflow["current_blocker"].startswith("Current Drawing Border invalidated downstream evidence")
+    assert workflow["next_primary_action"]["id"] == "run_motion_calibration"
+    assert workflow["overlay_badge"]["state"] == "blocked"
+    assert any("Drawing calibration session" in reason for reason in workflow["freshness"]["stale_reasons"])
 
 
 def test_drawing_calibration_program_pipeline_persists_residual_grid_model(tmp_path: Path) -> None:
@@ -344,10 +426,21 @@ def test_progressive_drawing_session_runs_batch_observes_and_persists_without_mo
         registration = _register_field(client)
         registration_id = registration["registration"]["registration_id"]
 
-        status_code, started = client.post("/calibration/drawing/session/start", {})
+        status_code, unconfirmed = client.post("/calibration/drawing/session/start", {})
+        assert status_code == 400
+        assert "pen_ready_confirmed=true" in unconfirmed["error"]
+
+        status_code, started = client.post(
+            "/calibration/drawing/session/start",
+            {
+                "pen_ready_confirmed": True,
+                "pen_ready_confirmation": {"source": "operator_confirmed", "operator": "test"},
+            },
+        )
         assert status_code == 200
         session_id = started["session"]["session_id"]
         assert started["status"] == "collecting"
+        assert started["session"]["pen_ready_confirmed"] is True
         assert (
             tmp_path
             / "calibration"
@@ -428,7 +521,10 @@ def test_progressive_drawing_session_retries_weak_observation_without_model_evid
     with _running_bridge(bridge) as client:
         registration = _register_field(client)
         registration_id = registration["registration"]["registration_id"]
-        _, started = client.post("/calibration/drawing/session/start", {})
+        _, started = client.post(
+            "/calibration/drawing/session/start",
+            {"pen_ready_confirmed": True, "pen_ready_confirmation": {"source": "operator_confirmed"}},
+        )
         session_id = started["session"]["session_id"]
         _, previewed = client.post(
             "/calibration/drawing/session/preview-next-batch",

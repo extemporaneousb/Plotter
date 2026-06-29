@@ -124,6 +124,9 @@ class DrawingCalibrationSession(BaseModel):
     camera_name: str | None = None
     field_width_mm: float
     field_height_mm: float
+    pen_ready_confirmed: bool = False
+    pen_ready_confirmed_at: str | None = None
+    pen_ready_confirmation: dict[str, Any] = Field(default_factory=dict)
     started_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     latest_model_id: str | None = None
@@ -234,14 +237,26 @@ def start_drawing_calibration_session(
     camera_name: str | None,
     field_width_mm: float,
     field_height_mm: float,
+    pen_ready_confirmed: bool = False,
+    pen_ready_confirmation: dict[str, Any] | None = None,
+    require_pen_ready: bool = True,
     existing: DrawingCalibrationSession | None = None,
 ) -> DrawingCalibrationSession:
+    if require_pen_ready and not pen_ready_confirmed:
+        raise ValueError("Drawing calibration session start requires operator pen_ready_confirmed=true.")
+    confirmation = dict(pen_ready_confirmation or {})
+    if pen_ready_confirmed:
+        confirmation.setdefault("source", "operator_confirmed")
     if existing is not None and not existing.stale_reasons_for(
         paper_registration_id=paper_registration_id,
         camera_id=camera_id,
         field_width_mm=field_width_mm,
         field_height_mm=field_height_mm,
     ):
+        if pen_ready_confirmed:
+            existing.pen_ready_confirmed = True
+            existing.pen_ready_confirmed_at = utc_now_iso()
+            existing.pen_ready_confirmation = confirmation
         existing.status = "collecting" if existing.status in {"idle", "blocked"} else existing.status
         existing.mark_updated()
         return existing
@@ -251,6 +266,9 @@ def start_drawing_calibration_session(
         camera_name=camera_name,
         field_width_mm=field_width_mm,
         field_height_mm=field_height_mm,
+        pen_ready_confirmed=pen_ready_confirmed,
+        pen_ready_confirmed_at=utc_now_iso() if pen_ready_confirmed else None,
+        pen_ready_confirmation=confirmation,
     )
 
 

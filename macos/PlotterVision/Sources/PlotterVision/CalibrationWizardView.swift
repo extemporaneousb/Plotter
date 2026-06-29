@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 
 struct CalibrationWizardView: View {
+    let workflow: BridgeCalibrationWorkflow?
     let instructionText: String
     let fiducialDetail: String
     let fiducialStatus: CalibrationWizardStepStatus
@@ -16,9 +17,6 @@ struct CalibrationWizardView: View {
     let primaryActionTitle: String
     let primaryActionEnabled: Bool
     let primaryActionDisabledReason: String?
-    let drawFrameVisible: Bool
-    let drawFrameEnabled: Bool
-    let drawFrameDisabledReason: String?
     let hasPaperLock: Bool
     let capStateLabel: String
     let isLiveMotionMode: Bool
@@ -26,8 +24,8 @@ struct CalibrationWizardView: View {
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
-    let drawFrame: () -> Void
     let reset: () -> Void
+    let resetDrawingTraining: () -> Void
     let hide: () -> Void
 
     var body: some View {
@@ -66,7 +64,7 @@ struct CalibrationWizardView: View {
             Image(systemName: "checklist.checked")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(.cyan)
-            Text("Visual Field Setup")
+            Text("Calibrate Vision-Machine Interface")
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.92))
             Spacer(minLength: 0)
@@ -84,11 +82,22 @@ struct CalibrationWizardView: View {
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 5) {
-            CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
-            CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-            CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
-            CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
-            CalibrationWizardStepRow(index: 5, title: "Calibrate Drawing", detail: drawingCalibrationDetail, status: drawingCalibrationStatus)
+            if let workflow {
+                ForEach(Array(workflow.steps.enumerated()), id: \.element.id) { offset, step in
+                    CalibrationWizardStepRow(
+                        index: offset + 1,
+                        title: step.label,
+                        detail: step.detail,
+                        status: CalibrationWizardStepStatus(workflowState: step.state)
+                    )
+                }
+            } else {
+                CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
+                CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+                CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
+                CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
+                CalibrationWizardStepRow(index: 5, title: "Drawing Training", detail: drawingCalibrationDetail, status: drawingCalibrationStatus)
+            }
         }
     }
 
@@ -159,7 +168,7 @@ struct CalibrationWizardView: View {
         HStack(spacing: 8) {
             Button(action: primaryAction) {
                 Label(
-                    primaryActionTitle,
+                    workflow?.nextPrimaryAction.label ?? primaryActionTitle,
                     systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
                 )
             }
@@ -168,20 +177,11 @@ struct CalibrationWizardView: View {
             .disabled(!primaryActionEnabled)
             .help(primaryActionDisabledReason ?? primaryActionTitle)
 
-            if drawFrameVisible {
-                Button(action: drawFrame) {
-                    Label(
-                        "Calibrate Drawing",
-                        systemImage: drawFrameEnabled ? "rectangle" : "lock.fill"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(drawFrameEnabled ? .green : .gray)
-                .disabled(!drawFrameEnabled)
-                .help(drawFrameDisabledReason ?? "Draw, evaluate, and persist drawing calibration")
-            }
+            Button("Reset Training", action: resetDrawingTraining)
+                .buttonStyle(.bordered)
+                .disabled(workflow?.freshness.drawingSessionId == nil && workflow?.freshness.drawingModelId == nil)
 
-            Button("Reset", action: reset)
+            Button("Reset Setup", action: reset)
                 .buttonStyle(.bordered)
         }
         .controlSize(.small)

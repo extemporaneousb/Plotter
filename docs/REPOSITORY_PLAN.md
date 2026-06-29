@@ -104,15 +104,16 @@ The fixed-camera workflow is:
    relative jogs that bypass absolute workspace projection. The model may swap axes, reverse signs,
    rotate, or skew machine motion relative to the field if the 2x2 matrix
    remains stable, invertible, and validated by observed cap motion.
-7. Treat field registration, cap localization, and a valid relative motion model as the setup
-   authority for this milestone. During setup, the cap and tip are colocated until explicit binding
-   evidence proves otherwise. Cap-to-tip offset and general drawing trust remain future work.
-   The setup `Calibrate Drawing` action draws an inset Drawing Border, then compares the expected
-   frame against observed green stroke geometry from the plotter camera when available. The bridge
-   persists those edge/corner ink residuals as `latest_drawing_calibration.json` plus a historical
-   model file. Frame observations are converted into generic drawing samples and solved as
-   `residual_grid_v1`; one frame is narrow evidence and does not promote full drawing trust.
-8. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
+7. Continue in the same **Calibrate Vision-Machine Interface** wizard. Python composes
+   `/calibration/workflow/status` from current field registration, cap/motion readiness, drawing
+   session state, drawing model freshness, and stale downstream evidence. Swift renders that state,
+   displays the plotter-video badge, and calls typed routes only.
+8. After motion validation, require operator pen-ready acknowledgement before starting drawing
+   training. The drawing session stores that confirmation and is fresh only for the current Drawing
+   Border/camera/field. Preview, run, observe, retry, fit, validate, and promote deterministic
+   `DrawingProgram` batches through Python-owned drawing session routes. Machine movement and
+   drawing require explicit clicks; safe non-motion steps may auto-run.
+9. Use Face Video for portrait/image-derived drawing after bridge preview. Capability-check examples
    are currently backend tests only and are not exposed in the operator UI.
 
 Both post-calibration drawing lanes use the same pipeline:
@@ -140,10 +141,11 @@ DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview Overlay
 
 Drawing calibration has two model lanes:
 
-- The setup-frame lane is compatibility/setup evidence. `Calibrate Drawing` traces the canonical
-  Drawing Border, records expected and observed green-frame geometry, converts those measurements
-  into generic drawing samples, and writes them through drawing-calibration session persistence. A
-  single frame is narrow evidence and must not promote broad drawing trust by itself.
+- The setup-frame lane is backend compatibility/setup evidence only. It can trace the canonical
+  Drawing Border, record expected and observed green-frame geometry, convert those measurements
+  into generic drawing samples, and write them through drawing-calibration session persistence. It
+  is not a visible wizard action, and a single frame is narrow evidence that must not promote broad
+  drawing trust by itself.
 - The progressive session lane is the active richer `DrawingProgram` calibration path. Python owns
   `/calibration/drawing/session/start`, `/status`, `/preview-next-batch`, `/run-batch`,
   `/observe-batch`, `/fit`, `/validate`, and `/finish`. Batches record session id, batch id/index,
@@ -202,7 +204,7 @@ and transforms:
 
 The Plotter Video has no separate grid overlay for setup. The Drawing Border is the only setup
 rectangle overlay, the bottom-left border corner is logical `(0,0)`, and that same registered border
-is the geometry Calibrate Drawing traces and evaluates.
+is the geometry the backend compatibility setup-frame route may trace and evaluate.
 
 The bridge still has shape and capability-test routes for backend validation, but the current macOS
 operator UI does not expose the old Draw/Verify examples. New operator drawing surfaces should route

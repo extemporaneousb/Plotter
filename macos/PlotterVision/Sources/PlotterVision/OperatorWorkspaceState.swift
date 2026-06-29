@@ -130,7 +130,6 @@ struct SetupPanelCommandRequest: Identifiable, Equatable {
 
 enum SetupPanelCommand: Equatable {
     case primary
-    case drawFrame
     case startDrawingSession
     case previewDrawingBatch
     case runDrawingBatch
@@ -138,6 +137,7 @@ enum SetupPanelCommand: Equatable {
     case fitDrawingSession
     case validateDrawingSession
     case finishDrawingSession
+    case resetDrawingTraining
     case reset
     case hide
 }
@@ -172,9 +172,6 @@ struct SetupPanelSnapshot: Equatable {
     var primaryActionTitle: String
     var primaryActionEnabled: Bool
     var primaryActionDisabledReason: String?
-    var drawFrameVisible: Bool
-    var drawFrameEnabled: Bool
-    var drawFrameDisabledReason: String?
     var hasPaperLock: Bool
     var capStateLabel: String
     var isLiveMotionMode: Bool
@@ -196,9 +193,6 @@ struct SetupPanelSnapshot: Equatable {
         primaryActionTitle: "Start Setup",
         primaryActionEnabled: true,
         primaryActionDisabledReason: nil,
-        drawFrameVisible: false,
-        drawFrameEnabled: false,
-        drawFrameDisabledReason: nil,
         hasPaperLock: false,
         capStateLabel: "--",
         isLiveMotionMode: false,

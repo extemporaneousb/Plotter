@@ -491,6 +491,7 @@ class VisualReadinessResponse(BaseModel):
     status: str
     dry_run: bool
     readiness: dict[str, Any] | None = None
+    workflow: dict[str, Any] | None = None
     readiness_file: str = ""
     error: str | None = None
 
@@ -616,6 +617,8 @@ class DrawingCalibrationProgramRequest(TraceContextFields):
 
 class DrawingCalibrationSessionStartRequest(TraceContextFields):
     resume: bool = True
+    pen_ready_confirmed: bool = False
+    pen_ready_confirmation: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = None
 
 
@@ -698,12 +701,16 @@ class VisualProbeSampleObservationResponse(BaseModel):
 
 class CalibrationSetupResetRequest(TraceContextFields):
     request_id: str | None = None
+    scope: Literal["vision_machine", "drawing_training"] = "vision_machine"
+    confirmed: bool = False
     preserve_history: bool = True
 
 
 class CalibrationSetupResetResponse(BaseModel):
     status: str
     dry_run: bool
+    scope: Literal["vision_machine", "drawing_training"] = "vision_machine"
+    confirmed: bool = False
     preserve_history: bool = True
     cleared_files: list[str] = Field(default_factory=list)
     missing_files: list[str] = Field(default_factory=list)
@@ -2545,17 +2552,25 @@ class PlotterBridge:
         request: CalibrationSetupResetRequest,
     ) -> CalibrationSetupResetResponse:
         command_id = request.request_id or request.trace_id or f"setup-reset-{uuid.uuid4().hex[:12]}"
-        pointer_paths = [
-            self._latest_paper_registration_path(),
-            self._latest_visual_readiness_path(),
-            self._latest_visual_probe_run_path(),
-            self._latest_visual_position_binding_path(),
-            self._latest_drawing_calibration_session_path(),
-            self._latest_drawing_calibration_path(),
-        ]
+        if request.scope == "drawing_training":
+            pointer_paths = [
+                self._latest_drawing_calibration_session_path(),
+                self._latest_drawing_calibration_path(),
+            ]
+        else:
+            pointer_paths = [
+                self._latest_paper_registration_path(),
+                self._latest_visual_readiness_path(),
+                self._latest_visual_probe_run_path(),
+                self._latest_visual_position_binding_path(),
+                self._latest_drawing_calibration_session_path(),
+                self._latest_drawing_calibration_path(),
+            ]
         cleared: list[str] = []
         missing: list[str] = []
         try:
+            if not request.confirmed:
+                raise ValueError(f"Calibration setup reset requires confirmed=true for scope {request.scope}.")
             for path in pointer_paths:
                 if path.exists():
                     path.unlink()
@@ -2567,6 +2582,8 @@ class PlotterBridge:
                 command_id=command_id,
                 status="reset",
                 payload={
+                    "scope": request.scope,
+                    "confirmed": request.confirmed,
                     "preserve_history": request.preserve_history,
                     "cleared_files": cleared,
                     "missing_files": missing,
@@ -2575,6 +2592,8 @@ class PlotterBridge:
             return CalibrationSetupResetResponse(
                 status="reset",
                 dry_run=self.config.dry_run,
+                scope=request.scope,
+                confirmed=request.confirmed,
                 preserve_history=request.preserve_history,
                 cleared_files=cleared,
                 missing_files=missing,
@@ -2590,6 +2609,8 @@ class PlotterBridge:
             return CalibrationSetupResetResponse(
                 status="failed",
                 dry_run=self.config.dry_run,
+                scope=request.scope,
+                confirmed=request.confirmed,
                 preserve_history=request.preserve_history,
                 cleared_files=cleared,
                 missing_files=missing,
@@ -2623,6 +2644,7 @@ class PlotterBridge:
                 status="blocked",
                 dry_run=self.config.dry_run,
                 readiness=state.model_dump(mode="json"),
+                workflow=self._calibration_workflow(state),
                 readiness_file=str(self._latest_visual_readiness_path()),
                 error=str(exc),
             )
@@ -2883,6 +2905,9 @@ class PlotterBridge:
                 camera_name=registration.camera_name,
                 field_width_mm=registration.paper_size_mm.width,
                 field_height_mm=registration.paper_size_mm.height,
+                pen_ready_confirmed=request.pen_ready_confirmed,
+                pen_ready_confirmation=request.pen_ready_confirmation,
+                require_pen_ready=True,
                 existing=existing,
             )
             self._save_drawing_session(session)
@@ -2896,6 +2921,7 @@ class PlotterBridge:
                     "session_id": session.session_id,
                     "paper_registration_id": session.paper_registration_id,
                     "camera_id": session.camera_id,
+                    "pen_ready_confirmed": session.pen_ready_confirmed,
                     "resume": request.resume,
                 },
             )
@@ -5482,6 +5508,9 @@ class PlotterBridge:
             camera_name=registration.camera_name,
             field_width_mm=registration.paper_size_mm.width,
             field_height_mm=registration.paper_size_mm.height,
+            pen_ready_confirmed=False,
+            pen_ready_confirmation={"source": "compatibility_setup_frame"},
+            require_pen_ready=False,
             existing=existing,
         )
         self._save_drawing_session(session)
@@ -5917,8 +5946,344 @@ class PlotterBridge:
             status="ready" if state.visual_ready_to_plot else "blocked",
             dry_run=self.config.dry_run,
             readiness=state.model_dump(mode="json"),
+            workflow=self._calibration_workflow(state),
             readiness_file=str(self._latest_visual_readiness_path()),
         )
+
+    def _calibration_workflow(self, state: VisualReadinessState) -> dict[str, Any]:
+        registration = self._load_latest_paper_registration_or_none()
+        session = self._load_latest_drawing_session_or_none()
+        model = self._load_latest_drawing_calibration_or_none()
+
+        session_stale_reasons: list[str] = []
+        model_stale_reasons: list[str] = []
+        if registration is not None:
+            if session is not None:
+                session_stale_reasons = session.stale_reasons_for(
+                    paper_registration_id=registration.registration_id,
+                    camera_id=registration.camera_id,
+                    field_width_mm=registration.paper_size_mm.width,
+                    field_height_mm=registration.paper_size_mm.height,
+                )
+            if model is not None:
+                model_stale_reasons = model.stale_reasons_for(
+                    paper_registration_id=registration.registration_id,
+                    camera_id=registration.camera_id,
+                )
+
+        stale_reasons = list(
+            dict.fromkeys(
+                [
+                    *(
+                        ["Current Drawing Border invalidated motion calibration evidence."]
+                        if state.probe_stale_sample_count > 0 and not state.motion_model_valid
+                        else []
+                    ),
+                    *session_stale_reasons,
+                    *model_stale_reasons,
+                ]
+            )
+        )
+        session_current = session is not None and not session_stale_reasons
+        model_current = model is not None and not model_stale_reasons
+        pen_ready = bool(session_current and session.pen_ready_confirmed)
+        current_batch = self._workflow_current_batch(session) if session_current and session is not None else None
+        model_promoted = bool(
+            session_current
+            and model_current
+            and session is not None
+            and model is not None
+            and session.status == "ready"
+            and session.promotion_status == "promoted"
+            and session.latest_model_id == model.model_id
+            and model.ready
+        )
+        ready_to_draw = bool(state.visual_ready_to_plot and pen_ready and model_promoted)
+
+        phase = "uncalibrated"
+        blocker: str | None = None
+        next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap", enabled=True)
+        if ready_to_draw:
+            phase = "ready_to_draw"
+            next_action = self._workflow_action("ready_to_draw", "Ready to Draw", enabled=False)
+        elif stale_reasons and registration is not None:
+            phase = "stale_downstream"
+            blocker = "Current Drawing Border invalidated downstream evidence; run motion calibration for this border."
+            next_action = self._workflow_action(
+                "run_motion_calibration",
+                "Run Motion Calibration",
+                requires_motion=True,
+            )
+        elif session_current and session is not None and session.status == "blocked":
+            phase = "blocked"
+            blocker = (session.blockers or ["Drawing training blocked."])[0]
+            next_action = self._workflow_action("recovery_action", "Recovery Action", enabled=False)
+        elif not state.cap_localized:
+            phase = "needs_cap"
+            blocker = "Green cap not confirmed."
+            next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap")
+        elif registration is None or not state.paper_registered:
+            phase = "machine_video_agreement"
+            blocker = "Drawing Border is not locked."
+            next_action = self._workflow_action(
+                "run_machine_video_probe",
+                "Run Machine-Video Probe",
+                requires_motion=True,
+            )
+        elif not state.motion_model_valid:
+            phase = "drawing_border_locked"
+            blocker = (state.motion_model_blockers or ["Motion calibration is not current for this Drawing Border."])[0]
+            next_action = self._workflow_action(
+                "run_motion_calibration",
+                "Run Motion Calibration",
+                requires_motion=True,
+            )
+        elif not pen_ready:
+            phase = "motion_validated"
+            next_action = self._workflow_action("confirm_pen_ready", "Confirm Pen Ready")
+        elif current_batch is None:
+            phase = "pen_ready"
+            next_action = self._workflow_action("preview_batch", "Preview Batch")
+        elif current_batch.status == "retry" or (
+            current_batch.status == "planned" and current_batch.retry_count > 0
+        ):
+            phase = "drawing_retry"
+            blocker = (current_batch.blockers or ["Weak/no ink observation; redraw the same batch."])[0]
+            next_action = self._workflow_action(
+                "redraw_same_batch",
+                "Redraw Same Batch",
+                requires_drawing=True,
+            )
+        elif current_batch.status == "planned":
+            phase = "drawing_training"
+            next_action = self._workflow_action(
+                "run_batch",
+                "Run Batch",
+                requires_drawing=True,
+            )
+        elif current_batch.status == "awaiting_observation":
+            phase = "drawing_training"
+            next_action = self._workflow_action("observe_ink", "Observe Ink")
+        elif session_current and session is not None and session.status == "ready":
+            phase = "drawing_validated"
+            next_action = self._workflow_action("promote_model", "Promote Current Model")
+        else:
+            phase = "drawing_training"
+            next_action = self._workflow_action("validate_metrics", "Validate Metrics")
+
+        steps = self._workflow_steps(
+            state=state,
+            registration=registration,
+            session=session if session_current else None,
+            model=model if model_current else None,
+            current_batch=current_batch,
+            phase=phase,
+            ready_to_draw=ready_to_draw,
+            stale_downstream=bool(stale_reasons and registration is not None),
+        )
+        safe_auto_actions = self._workflow_safe_auto_actions(
+            phase=phase,
+            session=session if session_current else None,
+            current_batch=current_batch,
+            model=model if model_current else None,
+        )
+        return {
+            "phase": phase,
+            "ready_to_draw": ready_to_draw,
+            "steps": steps,
+            "current_blocker": blocker,
+            "next_primary_action": next_action,
+            "safe_auto_actions": safe_auto_actions,
+            "freshness": {
+                "paper_registration_id": registration.registration_id if registration is not None else state.paper_registration_id,
+                "camera_id": registration.camera_id if registration is not None else None,
+                "visual_readiness_state_id": state.state_id,
+                "latest_visual_probe_run_id": state.latest_visual_probe_run_id,
+                "probe_stale_sample_count": state.probe_stale_sample_count,
+                "drawing_session_id": session.session_id if session is not None else None,
+                "drawing_model_id": model.model_id if model is not None else None,
+                "pen_ready_confirmed": pen_ready,
+                "stale_reasons": stale_reasons,
+            },
+            "overlay_badge": self._workflow_overlay_badge(
+                phase=phase,
+                ready_to_draw=ready_to_draw,
+                pen_ready=pen_ready,
+            ),
+        }
+
+    def _workflow_action(
+        self,
+        action_id: str,
+        label: str,
+        *,
+        enabled: bool = True,
+        requires_motion: bool = False,
+        requires_drawing: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "id": action_id,
+            "label": label,
+            "enabled": enabled,
+            "requires_motion": requires_motion,
+            "requires_drawing": requires_drawing,
+        }
+
+    def _workflow_current_batch(
+        self,
+        session: DrawingCalibrationSession | None,
+    ) -> DrawingCalibrationBatch | None:
+        if session is None or not session.batches:
+            return None
+        if session.current_batch_id is not None:
+            for batch in session.batches:
+                if batch.batch_id == session.current_batch_id:
+                    return batch
+        return session.batches[-1]
+
+    def _workflow_steps(
+        self,
+        *,
+        state: VisualReadinessState,
+        registration: PaperFrameRegistration | None,
+        session: DrawingCalibrationSession | None,
+        model: DrawingCalibrationModel | None,
+        current_batch: DrawingCalibrationBatch | None,
+        phase: str,
+        ready_to_draw: bool,
+        stale_downstream: bool,
+    ) -> list[dict[str, str]]:
+        pen_ready = bool(session is not None and session.pen_ready_confirmed)
+        return [
+            self._workflow_step(
+                "green_cap",
+                "Confirm Green Cap",
+                "done" if state.cap_localized else ("blocked" if phase == "needs_cap" else "pending"),
+                "Green cap confirmed" if state.cap_localized else "Waiting for operator cap confirmation",
+            ),
+            self._workflow_step(
+                "machine_video_agreement",
+                "Machine-Video Agreement",
+                "done" if state.latest_visual_probe_run_id else ("active" if state.cap_localized else "pending"),
+                state.latest_visual_probe_run_id or "Run probe before locking Drawing Border",
+            ),
+            self._workflow_step(
+                "drawing_border",
+                "Set Drawing Border",
+                "done" if registration is not None and state.paper_registered else ("active" if state.cap_localized else "pending"),
+                (
+                    f"{registration.paper_size_mm.width:.0f}x{registration.paper_size_mm.height:.0f} mm locked"
+                    if registration is not None
+                    else "Confirm/edit Drawing Border X/Y"
+                ),
+            ),
+            self._workflow_step(
+                "motion_calibration",
+                "Run Motion Calibration",
+                "done" if state.motion_model_valid else ("blocked" if stale_downstream else ("active" if registration is not None else "pending")),
+                "Current motion model valid" if state.motion_model_valid else "Motion evidence required for this Drawing Border",
+            ),
+            self._workflow_step(
+                "motion_validation",
+                "Validate Cap Target",
+                "done" if state.visual_ready_to_plot else ("active" if state.motion_model_valid else "pending"),
+                "Cap target validated" if state.visual_ready_to_plot else "Move cap to a visual-field target",
+            ),
+            self._workflow_step(
+                "pen_ready",
+                "Confirm Pen Ready",
+                "done" if pen_ready else ("active" if state.visual_ready_to_plot else "pending"),
+                "Operator confirmed pen/ink ready" if pen_ready else "Operator acknowledgement required",
+            ),
+            self._workflow_step(
+                "preview_batch",
+                "Preview Batch",
+                "done" if current_batch is not None else ("active" if pen_ready else "pending"),
+                current_batch.batch_id if current_batch is not None else "Preview next deterministic DrawingProgram batch",
+            ),
+            self._workflow_step(
+                "run_batch",
+                "Run Batch",
+                "done" if current_batch is not None and current_batch.status in {"awaiting_observation", "accepted", "retry"} else ("active" if current_batch is not None else "pending"),
+                current_batch.status if current_batch is not None else "Explicit drawing click required",
+            ),
+            self._workflow_step(
+                "observe_ink",
+                "Observe Ink",
+                "done" if current_batch is not None and current_batch.status == "accepted" else ("blocked" if current_batch is not None and current_batch.status == "blocked" else ("active" if current_batch is not None and current_batch.status in {"awaiting_observation", "retry"} else "pending")),
+                "Retry scheduled"
+                if current_batch is not None and current_batch.retry_count > 0 and current_batch.status in {"planned", "retry"}
+                else "Video ink observation",
+            ),
+            self._workflow_step(
+                "fit",
+                "Fit",
+                "done" if model is not None and session is not None and session.latest_model_id == model.model_id else ("active" if session is not None and session.accepted_observations else "pending"),
+                model.model_id if model is not None else "Fit accepted observations",
+            ),
+            self._workflow_step(
+                "validate",
+                "Validate",
+                "done" if model is not None and model.ready else ("active" if model is not None else "pending"),
+                model.validation_status if model is not None else "Validate coverage and residual gates",
+            ),
+            self._workflow_step(
+                "ready",
+                "Ready",
+                "done" if ready_to_draw else ("blocked" if phase == "blocked" else "pending"),
+                "Ready to Draw" if ready_to_draw else "Promote current model after gates pass",
+            ),
+        ]
+
+    def _workflow_step(self, step_id: str, label: str, state: str, detail: str) -> dict[str, str]:
+        return {
+            "id": step_id,
+            "label": label,
+            "state": state,
+            "detail": detail,
+        }
+
+    def _workflow_safe_auto_actions(
+        self,
+        *,
+        phase: str,
+        session: DrawingCalibrationSession | None,
+        current_batch: DrawingCalibrationBatch | None,
+        model: DrawingCalibrationModel | None,
+    ) -> list[str]:
+        actions = ["refresh_status"]
+        if phase == "pen_ready":
+            actions.append("preview_next_batch")
+        if session is not None and session.accepted_observations and (model is None or not model.ready):
+            actions.extend(["fit_accepted_observations", "validate_metrics"])
+        if session is not None and session.status == "ready" and model is not None and model.ready:
+            actions.append("promote_current_model")
+        if current_batch is not None and current_batch.retry_count > 0 and current_batch.status in {"planned", "retry"}:
+            actions.append("preview_retry_batch")
+        return actions
+
+    def _workflow_overlay_badge(
+        self,
+        *,
+        phase: str,
+        ready_to_draw: bool,
+        pen_ready: bool,
+    ) -> dict[str, str]:
+        if ready_to_draw:
+            return {"state": "ready_to_draw", "label": "Ready to Draw", "color": "green"}
+        if phase in {"blocked", "stale_downstream"}:
+            return {"state": "blocked", "label": "Blocked", "color": "red"}
+        if phase == "needs_cap":
+            return {"state": "needs_cap", "label": "Needs Cap", "color": "yellow"}
+        if phase == "drawing_border_locked":
+            return {"state": "border_locked", "label": "Border Locked", "color": "cyan"}
+        if phase == "motion_validated":
+            return {"state": "motion_ready", "label": "Motion Ready", "color": "cyan"}
+        if pen_ready and phase == "pen_ready":
+            return {"state": "pen_ready", "label": "Pen Ready", "color": "cyan"}
+        if phase in {"drawing_training", "drawing_retry", "drawing_validated"}:
+            return {"state": "training", "label": "Training", "color": "yellow"}
+        return {"state": "uncalibrated", "label": "Uncalibrated", "color": "gray"}
 
     def _visual_state_with_latest_probe_evidence(
         self,
