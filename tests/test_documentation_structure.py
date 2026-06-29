@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GENERATED_DOC_ROOTS = {"artifacts"}
 
 EXPECTED_MARKDOWN_DOCS = {
     "AGENTS.md",
@@ -36,6 +37,7 @@ def test_documentation_structure_is_exact() -> None:
         path.relative_to(ROOT).as_posix()
         for path in ROOT.rglob("*.md")
         if not any(part.startswith(".") for part in path.relative_to(ROOT).parts)
+        and path.relative_to(ROOT).parts[0] not in GENERATED_DOC_ROOTS
     }
 
     assert actual == EXPECTED_MARKDOWN_DOCS
