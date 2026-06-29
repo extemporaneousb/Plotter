@@ -342,7 +342,7 @@ def test_machine_panel_has_explicit_manual_jog_boundary_override() -> None:
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     panel = _read(SWIFT_DIR / "MachineControlPanel.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
-    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
+    contract = _read(ROOT / "docs" / "ARCHITECTURE.md")
 
     assert "@Published var manualJogWorkspaceOverride = false" in model
     assert "var manualMotionGateMessage" in model
@@ -710,9 +710,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     models = _read(SWIFT_DIR / "Models.swift")
     readme = _read(ROOT / "README.md")
-    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
-    plan = _read(ROOT / "docs" / "REPOSITORY_PLAN.md")
-    readme_flat = " ".join(readme.split())
+    contract = _read(ROOT / "docs" / "ARCHITECTURE.md")
+    plan = _read(ROOT / "docs" / "ARCHITECTURE.md")
     contract_flat = " ".join(contract.split())
     plan_flat = " ".join(plan.split())
 
@@ -881,51 +880,52 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "applyPersistedVisualReadiness(await bridge.refreshVisualReadinessStatus())" in content
     assert "BORDER loaded saved motion transform" in content
 
-    assert "before locking or drawing the Drawing Border" in readme
-    assert "publishes each solved 2x2 estimate as the current online state" in readme
-    assert "current 2x2 machine-video transform" in readme
-    assert "typed X/Y millimeter values are then assigned to that rectangle" in readme
-    assert "editing X and Y sets those dimensions directly without inferring either value from video aspect" in readme
+    assert "docs/ARCHITECTURE.md" in readme
+    assert "before locking or drawing the Drawing Border" in contract_flat
+    assert "Every subsequent solved estimate becomes the current online transform" in contract_flat
+    assert "current 2x2 transform" in contract
+    assert "The operator can type explicit X and Y millimeter values" in contract_flat
+    assert "does not infer the other from video aspect" in contract_flat
     assert "estimate Y from the rectangle's video aspect" not in readme
-    assert "relative update magnitude as the convergence signal" in readme_flat
-    assert "every later solved estimate updates the provisional" in readme_flat
-    assert "seeded video border is operator-adjustable as a rectangle" in readme
-    assert "top-right handle to resize it while it remains rectangular" in readme
-    assert "Changing the declared width/height also re-locks" in readme
-    assert "cap and tip are treated as colocated until explicit binding evidence" in readme
-    assert "before locking or drawing the Drawing Border" in contract
+    assert "update magnitude as the convergence signal" in contract_flat
+    assert "Every later solved estimate updates the provisional" in contract_flat
+    assert "seeded video border is operator-adjustable as a rectangle" in contract_flat
+    assert "top-right handle to resize it while it remains rectangular" in contract_flat
+    assert "Changing field dimensions re-locks" in contract_flat
+    assert "cap and tip are colocated until explicit binding evidence" in contract_flat
+    assert "before locking or drawing the Drawing Border" in contract_flat
     assert "There is no identity matrix as calibration evidence" in contract
-    assert "reports update magnitude as the" in contract
+    assert "reports update magnitude as the" in contract_flat
     assert "magnitude approaching zero" in contract_flat
-    assert "uses every later solved estimate" in plan
-    assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract
-    assert "Every subsequent solved estimate becomes the current online" in contract
-    assert "later relative vectors are chosen from that latest estimate" in contract
+    assert "uses every later solved estimate" in plan_flat
+    assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract_flat
+    assert "Every subsequent solved estimate becomes the current online" in contract_flat
+    assert "later relative vectors are chosen from that latest estimate" in contract_flat
     assert "Every later solved estimate updates the provisional Drawing Border" in contract_flat
-    assert "operator can type explicit X and Y millimeter values" in contract
-    assert "does not infer the other from video aspect" in contract
+    assert "operator can type explicit X and Y millimeter values" in contract_flat
+    assert "does not infer the other from video aspect" in contract_flat
     assert "seeded video border" in contract_flat
-    assert "resize it while it remains rectangular" in contract
-    assert "release to re-lock border registration" in contract
-    assert "cap and tip are colocated until explicit binding evidence" in contract
+    assert "resize it while it remains rectangular" in contract_flat
+    assert "release to re-lock border registration" in contract_flat
+    assert "cap and tip are colocated until explicit binding evidence" in contract_flat
     assert "before locking or drawing the Drawing Border" in plan_flat
-    assert "first empirical 2x2 estimate" in plan
-    assert "Update magnitude is the convergence signal" in plan
-    assert "accepted-estimate gate" in plan
+    assert "first empirical 2x2 machine-to-video estimate" in plan_flat
+    assert "Update magnitude is the convergence signal" in plan_flat
+    assert "accepted-estimate gate" in plan_flat
     assert "Every later solved estimate updates the provisional Drawing Border" in plan_flat
-    assert "assign typed X/Y" in plan
-    assert "Editing X and Y sets" in plan
-    assert "aspect-ratio inference" in plan
+    assert "assign typed X/Y" in plan_flat
+    assert "Editing X and Y sets" in plan_flat
+    assert "aspect-ratio inference" in plan_flat
     assert "video Drawing Border remains operator-adjustable as a" in plan_flat
-    assert "Plotter Video has no separate grid overlay" in plan
-    assert "bottom-left border corner is logical `(0,0)`" in plan
+    assert "Plotter Video has no separate grid overlay" in plan_flat
+    assert "bottom-left border corner is logical `(0,0)`" in plan_flat
     assert "correct perspective" not in readme + contract + plan
 
 
 def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> None:
     readme = _read(ROOT / "README.md")
-    contract = _read(ROOT / "codex_prompts" / "04_PROJECT_CONTRACT.md")
-    plan = _read(ROOT / "docs" / "REPOSITORY_PLAN.md")
+    contract = _read(ROOT / "docs" / "ARCHITECTURE.md")
+    plan = _read(ROOT / "docs" / "ROADMAP.md")
     server = _read(ROOT / "plotter_vision" / "bridge" / "server.py")
     planner = _read(ROOT / "plotter_vision" / "bridge" / "planner.py")
     capabilities = _read(ROOT / "plotter_vision" / "drawing" / "capabilities.py")
@@ -955,9 +955,9 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     docs = readme + contract + plan
     assert "multi_shape_coordinate_sheet" in docs
     assert "residual_grid_v1" in docs
-    assert "GET /calibration/drawing/status" in readme
+    assert "GET /calibration/drawing/status" in contract
     assert "latest_drawing_calibration.json" in docs
-    assert "runtime hits outside tests" in plan
+    assert "runtime hits outside tests" in plan_flat
     assert "model-aware drawing planner stage" in plan_flat
     assert "Do not add SVG import" in contract
     assert "Swift may show" in contract

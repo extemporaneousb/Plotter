@@ -4,11 +4,11 @@ profile_version = 1
 
 [paths]
 control_dir = "@git-common/blackdog"
-worktrees_dir = "../.worktrees"
+worktrees_dir = ".blackdog/worktrees"
 
 [taxonomy]
 validation_commands = ["make check"]
-doc_routing_defaults = ["AGENTS.md", "README.md", "codex_prompts/04_PROJECT_CONTRACT.md", "docs/REPOSITORY_PLAN.md"]
+doc_routing_defaults = ["AGENTS.md", "README.md", "docs/ARCHITECTURE.md", "docs/RUNBOOK.md", "docs/ROADMAP.md"]
 
 [[handlers]]
 id = "python"
