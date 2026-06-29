@@ -99,7 +99,7 @@ extension ContentView {
             )
         }
 
-        if workspace.setupWindowActive {
+        if workspace.calibrationWizardActive {
             manualPenMode = false
         }
         Task {

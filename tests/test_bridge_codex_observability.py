@@ -46,7 +46,7 @@ def test_codex_snapshot_merges_bridge_state_and_app_diagnostics(tmp_path: Path) 
                         },
                         "windows": {
                             "machine_controls": True,
-                            "setup_panel": False,
+                            "calibration_wizard": False,
                             "plotter_video_panel": False,
                             "face_video_panel": True,
                         },

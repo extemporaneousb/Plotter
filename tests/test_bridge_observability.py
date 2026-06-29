@@ -41,7 +41,7 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
                     },
                     "windows": {
                         "machine_controls": False,
-                        "setup_panel": True,
+                        "calibration_wizard": True,
                         "plotter_video_panel": False,
                         "face_video_panel": False,
                     },
@@ -88,7 +88,7 @@ def test_codex_snapshot_reads_app_artifacts_without_status_poll(tmp_path: Path) 
     assert snapshot["app_diagnostics"]["latest_event"]["trace_id"] == "bridge.health.completed"
     assert snapshot["state_summary"]["app_build_id"] == "app-build-123"
     assert snapshot["state_summary"]["ui"]["workspace"]["empty"] is True
-    assert snapshot["state_summary"]["ui"]["windows"]["setup_panel"] is True
+    assert snapshot["state_summary"]["ui"]["windows"]["calibration_wizard"] is True
     assert not list((tmp_path / "transcripts").glob("status-*.jsonl"))
 
 
@@ -124,7 +124,7 @@ def test_app_diagnostic_ingest_is_visible_in_codex_snapshot(tmp_path: Path) -> N
                         },
                         "windows": {
                             "machine_controls": True,
-                            "setup_panel": False,
+                            "calibration_wizard": False,
                             "plotter_video_panel": True,
                             "face_video_panel": True,
                         },

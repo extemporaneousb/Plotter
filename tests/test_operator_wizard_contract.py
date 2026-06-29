@@ -13,14 +13,14 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
+def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
-    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     plotter_panel = _read(SWIFT_DIR / "PlotterVideoPanel.swift")
     face_panel = _read(SWIFT_DIR / "FaceVideoPanel.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     window_support = _read(SWIFT_DIR / "OperatorWindowSupport.swift")
+    swift_text = "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
     removed_labels = [
         "Triangle Residual Runner Pending",
         "Square Residual Runner Pending",
@@ -48,19 +48,27 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert not (SWIFT_DIR / "VisualControlsMenu.swift").exists()
     assert not (SWIFT_DIR / "DrawVerifyMenu.swift").exists()
     assert not (SWIFT_DIR / "ToolbarControls.swift").exists()
-    assert (SWIFT_DIR / "SetupPanel.swift").exists()
+    assert not (SWIFT_DIR / "SetupPanel.swift").exists()
     assert (SWIFT_DIR / "PlotterVideoPanel.swift").exists()
     assert (SWIFT_DIR / "FaceVideoPanel.swift").exists()
     assert (SWIFT_DIR / "OperatorWorkspaceState.swift").exists()
     assert (SWIFT_DIR / "OperatorWindowSupport.swift").exists()
     assert 'static let machineControls = "machine-controls"' in window_support
-    assert 'static let setupPanel = "setup-panel"' in window_support
+    assert 'static let setupPanel = "setup-panel"' not in window_support
     assert 'static let plotterVideoPanel = "plotter-video-panel"' in window_support
     assert 'static let faceVideoPanel = "face-video-panel"' in window_support
-    assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" in app_main
+    assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" not in app_main
     assert "Window(PlotterWindowConfiguration.plotterVideoTitle, id: OperatorWindowID.plotterVideoPanel)" in app_main
     assert "Window(PlotterWindowConfiguration.faceVideoTitle, id: OperatorWindowID.faceVideoPanel)" in app_main
-    assert "SetupPanel(workspace: workspace, bridge: bridge)" in app_main
+    assert "SetupPanel(workspace: workspace, bridge: bridge)" not in app_main
+    assert "calibrationWizardOverlay" in content
+    assert "if workspace.calibrationWizardActive" in content
+    assert "toggleCalibrationWizard()" in content
+    assert "openWindow(id: OperatorWindowID.setupPanel)" not in content
+    assert "pendingSetupCommand" not in swift_text
+    assert "requestSetupCommand" not in swift_text
+    assert "SetupPanelCommand" not in swift_text
+    assert "ProgressiveDrawingCalibrationFlow" not in swift_text
     assert "PlotterVideoPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "FaceVideoPanel(workspace: workspace, bridge: bridge)" in app_main
     assert "@Published var visualFieldWidthMm = 200.0" in workspace
@@ -69,34 +77,26 @@ def test_operator_ui_uses_windowed_setup_and_video_panels() -> None:
     assert '"visual_field_height_mm": visualFieldHeightMm' in workspace
     assert '"machine_video_agreement_estimate_present": machineVideoAgreementModel != nil' in workspace
     assert "machine_video_agreement_valid" not in workspace
-    assert "CalibrationWizardView(" in setup_panel
-    assert "workflow: bridge.calibrationWorkflow" in setup_panel
-    assert "workspace.requestSetupCommand(.primary)" in setup_panel
-    assert "workspace.requestSetupCommand(.drawFrame)" not in setup_panel
-    assert "ProgressiveDrawingCalibrationControls" not in setup_panel
-    assert "workspace.requestSetupCommand(.startDrawingSession)" not in setup_panel
-    assert "workspace.requestSetupCommand(.previewDrawingBatch)" not in setup_panel
-    assert "workspace.requestSetupCommand(.runDrawingBatch)" not in setup_panel
-    assert "workspace.requestSetupCommand(.observeDrawingBatch)" not in setup_panel
-    assert "workspace.requestSetupCommand(.fitDrawingSession)" not in setup_panel
-    assert "workspace.requestSetupCommand(.validateDrawingSession)" not in setup_panel
-    assert "workspace.requestSetupCommand(.finishDrawingSession)" not in setup_panel
-    assert "workspace.requestSetupCommand(.resetDrawingTraining)" in setup_panel
+    assert "CalibrationWizardView(" in content
+    assert "workflow: bridge.calibrationWorkflow" in content
+    assert "primaryAction: runCalibrationWizardPrimaryAction" in content
+    assert ".drawFrame" not in content
+    assert "ProgressiveDrawingCalibrationControls" not in content
     assert "drawFrameVisible" not in workspace
     assert "drawFrameEnabled" not in workspace
     assert "fieldAspectYPerX" in workspace
-    assert '"visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0' in workspace
-    assert "fieldWidthMm: $workspace.visualFieldWidthMm" in setup_panel
-    assert "fieldHeightMm: $workspace.visualFieldHeightMm" in setup_panel
-    assert "fieldAspectYPerX: workspace.setupSnapshot.fieldAspectYPerX" not in setup_panel
-    assert "Drawing Checkout" not in setup_panel
+    assert '"visual_field_video_aspect_y_per_x": calibrationWizardSnapshot.fieldAspectYPerX ?? 0.0' in workspace
+    assert "fieldWidthMm: $workspace.visualFieldWidthMm" in content
+    assert "fieldHeightMm: $workspace.visualFieldHeightMm" in content
+    assert "fieldAspectYPerX: workspace.calibrationWizardSnapshot.fieldAspectYPerX" not in content
+    assert "Drawing Checkout" not in content
     assert "Sample Cap Color" in plotter_panel
     assert "Reset Cap Color" in plotter_panel
     assert "Field Grid" not in plotter_panel
     assert "Calibrated Grid" not in plotter_panel
-    assert "showGrid" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
+    assert "showGrid" not in swift_text
     assert "PortraitPanel(" in face_panel
-    assert "CameraLayoutMode" not in "\n".join(_read(path) for path in SWIFT_DIR.glob("*.swift"))
+    assert "CameraLayoutMode" not in swift_text
     assert "CameraSelector(camera: plotterCamera)" in content
     assert "CameraSelector(camera: faceCamera)" in content
     assert "toggleCameraVisibility(plotterCamera, source: \"top_bar\")" in content
@@ -364,15 +364,16 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
-    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
 
-    assert "CalibrationWizardView(" in setup_panel
-    assert "private var calibrationWizardOverlay" not in content
-    assert "SetupLogDisclosure" not in setup_panel
-    assert "SetupModelEstimatesDisclosure" not in setup_panel
-    assert 'static let setupTitle = "Calibrate Vision-Machine Interface"' in app_main
+    assert not (SWIFT_DIR / "SetupPanel.swift").exists()
+    assert "CalibrationWizardView(" in content
+    assert "private var calibrationWizardOverlay" in content
+    assert "SetupLogDisclosure" not in content
+    assert "SetupModelEstimatesDisclosure" not in content
+    assert 'static let setupTitle = "Calibrate Vision-Machine Interface"' not in app_main
+    assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" not in app_main
     assert "Calibrate Vision-Machine Interface" in wizard
     assert "BridgeCalibrationWorkflow" in wizard
     assert "BridgeCalibrationCapConfirmationRequest" in client
@@ -527,14 +528,12 @@ def test_old_binding_runner_is_not_active_setup() -> None:
 def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
-    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
     assert "Confirm Setup" not in wizard
     assert "confirmSetup" not in wizard
     assert "canConfirmSetup" not in content
-    assert "canConfirmSetup" not in setup_panel
     assert "canConfirmSetup" not in workspace
     assert "confirmSetup: confirmWizardSetupFromExistingRegistration" not in content
     assert "private func confirmWizardSetupFromExistingRegistration" not in content
@@ -722,7 +721,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         "private var plotterCameraPane",
         1,
     )[0]
-    assert "workspace.setupWindowActive" in overlay_gate
+    assert "workspace.calibrationWizardActive" in overlay_gate
     assert "machineVideoAgreementModel == nil" in overlay_gate
     assert "isOnlineEstimateUsable" not in overlay_gate
     assert "return nil" in overlay_gate
@@ -799,7 +798,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         "private func relockEditableVisualField",
         1,
     )[0]
-    assert "workspace.setupWindowActive" in live_update
+    assert "workspace.calibrationWizardActive" in live_update
     assert "manualFiducials = corners" in live_update
 
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
@@ -950,9 +949,7 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     assert "latestDrawingCalibration" in bridge_model
     assert "latestDrawingCalibrationSession" in bridge_model
     assert "currentDrawingCalibrationBatch" in bridge_model
-    assert "Action model kind" not in _read(SWIFT_DIR / "SetupPanel.swift")
-    assert "Validation error" not in _read(SWIFT_DIR / "SetupPanel.swift")
-    assert "Retry count" not in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert not (SWIFT_DIR / "SetupPanel.swift").exists()
     assert "wizardDrawingCalibrationDetail" in content
 
     docs = readme + contract + plan
@@ -970,7 +967,6 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
 def test_operator_log_and_model_estimates_do_not_live_under_setup_wizard() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
-    setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
     support = _read(SWIFT_DIR / "OperatorWindowSupport.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     log_panel = _read(SWIFT_DIR / "OperatorLogPanel.swift")
@@ -980,12 +976,15 @@ def test_operator_log_and_model_estimates_do_not_live_under_setup_wizard() -> No
     assert "OperatorLogPanel" in app_main
     assert 'static let operatorLog = "operator-log"' in support
     assert "appendOperatorLog" in workspace
-    assert "@Published var setupLogExpanded" in workspace
-    assert "@Published var setupModelEstimatesExpanded" in workspace
-    assert "SetupLogDisclosure" not in setup_panel
-    assert "SetupModelEstimatesDisclosure" not in setup_panel
-    assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' not in setup_panel
-    assert 'Label("Model Estimates", systemImage: "function")' not in setup_panel
+    assert "@Published var setupLogExpanded" not in workspace
+    assert "@Published var setupModelEstimatesExpanded" not in workspace
+    assert '"setup_log_expanded"' not in workspace
+    assert '"setup_model_estimates_expanded"' not in workspace
+    assert not (SWIFT_DIR / "SetupPanel.swift").exists()
+    assert "SetupLogDisclosure" not in content
+    assert "SetupModelEstimatesDisclosure" not in content
+    assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' not in content
+    assert 'Label("Model Estimates", systemImage: "function")' not in content
     for label in [
         "Paper homography",
         "Motion 2x2",
@@ -999,7 +998,7 @@ def test_operator_log_and_model_estimates_do_not_live_under_setup_wizard() -> No
         "Blockers",
         "Model id",
     ]:
-        assert label not in setup_panel
+        assert label not in content
     assert 'label: "Log"' not in content
     assert "OperatorWindowID.operatorLog" not in content
     assert "workspace.appendOperatorLog(newValue" in content
@@ -1124,7 +1123,7 @@ def test_main_window_placement_only_filters_main_window_candidates() -> None:
     assert "window.identifier == PlotterWindowConfiguration.mainIdentifier" in app_main
     assert "window.title == PlotterWindowConfiguration.mainTitle" in app_main
     assert "OperatorWindowID.machineControls" in app_main
-    assert "OperatorWindowID.setupPanel" in app_main
+    assert "OperatorWindowID.setupPanel" not in app_main
     assert "OperatorWindowID.plotterVideoPanel" in app_main
     assert "OperatorWindowID.faceVideoPanel" in app_main
 

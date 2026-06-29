@@ -14,7 +14,7 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var drawingFrame = DrawingFrameSettings()
     @Published var frameLearning = FrameLearningState.idle
     @Published var calibrationStatusText = "CAL idle"
-    @Published var setupWindowActive = false
+    @Published var calibrationWizardActive = false
     @Published var showImageProcessingPanel = true
     @Published var portraitContourMonitorEnabled = true
     @Published var portraitContourMonitorStatus = "LIVE --"
@@ -34,10 +34,7 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var visualMotionSamples: [VisualMotionSample] = []
     @Published var visualCenterDotTaskActive = false
     @Published var operatorLog: [OperatorLogEntry] = []
-    @Published var setupLogExpanded = false
-    @Published var setupModelEstimatesExpanded = false
-    @Published var setupSnapshot = SetupPanelSnapshot.idle
-    @Published var pendingSetupCommand: SetupPanelCommandRequest?
+    @Published var calibrationWizardSnapshot = CalibrationWizardSnapshot.idle
     @Published var pendingPanelCommand: OperatorPanelCommandRequest?
 
     private init() {}
@@ -68,10 +65,6 @@ final class OperatorWorkspaceState: ObservableObject {
         }
     }
 
-    func requestSetupCommand(_ command: SetupPanelCommand) {
-        pendingSetupCommand = SetupPanelCommandRequest(command: command)
-    }
-
     func requestPanelCommand(_ command: OperatorPanelCommand) {
         pendingPanelCommand = OperatorPanelCommandRequest(command: command)
     }
@@ -86,7 +79,7 @@ final class OperatorWorkspaceState: ObservableObject {
             ],
             "windows": [
                 "machine_controls": OperatorWindowSupport.isWindowOpen(title: "Machine", identifier: OperatorWindowID.machineControls),
-                "setup_panel": setupWindowActive,
+                "calibration_wizard": calibrationWizardActive,
                 "plotter_video_panel": OperatorWindowSupport.isWindowOpen(title: "Plotter Video", identifier: OperatorWindowID.plotterVideoPanel),
                 "face_video_panel": OperatorWindowSupport.isWindowOpen(title: "Face Video", identifier: OperatorWindowID.faceVideoPanel),
                 "operator_log": OperatorWindowSupport.isWindowOpen(title: "Log", identifier: OperatorWindowID.operatorLog)
@@ -112,34 +105,13 @@ final class OperatorWorkspaceState: ObservableObject {
                 "cap_color_pick_mode": manualCapColorMode,
                 "visual_field_width_mm": visualFieldWidthMm,
                 "visual_field_height_mm": visualFieldHeightMm,
-                "visual_field_video_aspect_y_per_x": setupSnapshot.fieldAspectYPerX ?? 0.0,
+                "visual_field_video_aspect_y_per_x": calibrationWizardSnapshot.fieldAspectYPerX ?? 0.0,
                 "machine_video_agreement_samples": machineVideoAgreementSamples.count,
                 "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
-                "setup_log_expanded": setupLogExpanded,
-                "setup_model_estimates_expanded": setupModelEstimatesExpanded,
                 "operator_log_entries": operatorLog.count
             ]
         ]
     }
-}
-
-struct SetupPanelCommandRequest: Identifiable, Equatable {
-    let id = UUID()
-    let command: SetupPanelCommand
-}
-
-enum SetupPanelCommand: Equatable {
-    case primary
-    case startDrawingSession
-    case previewDrawingBatch
-    case runDrawingBatch
-    case observeDrawingBatch
-    case fitDrawingSession
-    case validateDrawingSession
-    case finishDrawingSession
-    case resetDrawingTraining
-    case reset
-    case hide
 }
 
 struct OperatorPanelCommandRequest: Identifiable, Equatable {
@@ -157,7 +129,7 @@ enum OperatorPanelCommand: Equatable {
     case selectPortraitCapture(UUID)
 }
 
-struct SetupPanelSnapshot: Equatable {
+struct CalibrationWizardSnapshot: Equatable {
     var instructionText: String
     var fiducialDetail: String
     var fiducialStatus: CalibrationWizardStepStatus
@@ -178,7 +150,7 @@ struct SetupPanelSnapshot: Equatable {
     var capDetected: Bool
     var fieldAspectYPerX: Double?
 
-    static let idle = SetupPanelSnapshot(
+    static let idle = CalibrationWizardSnapshot(
         instructionText: "Open the plotter camera and start setup.",
         fiducialDetail: "No setup state",
         fiducialStatus: .pending,

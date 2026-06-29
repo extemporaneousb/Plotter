@@ -81,8 +81,8 @@ tests/
 The fixed-camera workflow is:
 
 1. Start the app.
-2. Open Setup. The Setup button opens or closes the single **Calibrate Vision-Machine Interface**
-   wizard surface.
+2. Open Setup. The Setup button opens or closes the single in-main
+   **Calibrate Vision-Machine Interface** wizard surface.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
    The bridge persists this as workflow cap-confirmation state before Drawing Border registration;
    it does not claim field-localized cap evidence or motion trust.
@@ -274,9 +274,9 @@ human opt-in flags.
 
 ### Phase 3 — Human-Assisted Calibration
 
-Status: implemented around the Setup window plus non-homed Visual Field Setup. Field registration,
-cap/probe evidence, and relative motion-model validation are owned by the bridge; the Swift app is
-the operator surface.
+Status: implemented inside the single in-main **Calibrate Vision-Machine Interface** wizard plus
+non-homed Visual Field Setup. Field registration, cap/probe evidence, and relative motion-model
+validation are owned by the bridge; the Swift app is the operator surface.
 
 - Continue manual measurements, scale/sign solving, affine solving, residuals, and calibration
   artifact JSON.

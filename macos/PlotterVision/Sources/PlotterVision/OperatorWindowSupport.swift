@@ -2,7 +2,6 @@ import AppKit
 
 enum OperatorWindowID {
     static let machineControls = "machine-controls"
-    static let setupPanel = "setup-panel"
     static let plotterVideoPanel = "plotter-video-panel"
     static let faceVideoPanel = "face-video-panel"
     static let operatorLog = "operator-log"

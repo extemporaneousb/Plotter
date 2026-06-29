@@ -1,27 +1,6 @@
 import Foundation
 
 extension ContentView {
-    func handleProgressiveDrawingCalibrationCommand(_ command: SetupPanelCommand) {
-        switch command {
-        case .startDrawingSession:
-            Task { await bridge.startProgressiveDrawingCalibrationSession(); refreshSetupSnapshot() }
-        case .previewDrawingBatch:
-            Task { await bridge.previewNextProgressiveDrawingCalibrationBatch(); refreshSetupSnapshot() }
-        case .runDrawingBatch:
-            Task { await bridge.runProgressiveDrawingCalibrationBatch(); refreshSetupSnapshot() }
-        case .observeDrawingBatch:
-            observeProgressiveDrawingCalibrationBatch()
-        case .fitDrawingSession:
-            Task { await bridge.fitProgressiveDrawingCalibrationSession(); refreshSetupSnapshot() }
-        case .validateDrawingSession:
-            Task { await bridge.validateProgressiveDrawingCalibrationSession(); refreshSetupSnapshot() }
-        case .finishDrawingSession:
-            Task { await bridge.finishProgressiveDrawingCalibrationSession(); refreshSetupSnapshot() }
-        default:
-            break
-        }
-    }
-
     func observeProgressiveDrawingCalibrationBatch() {
         Task {
             guard let registration = bridge.paperRegistrationSnapshot else {

@@ -158,6 +158,9 @@ struct ContentView: View {
             }
             .padding(18)
 
+            if workspace.calibrationWizardActive {
+                calibrationWizardOverlay
+            }
         }
         .background(Color.black)
         .onAppear {
@@ -197,11 +200,6 @@ struct ContentView: View {
                 refreshSetupSnapshot()
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
-        }
-        .onChange(of: workspace.pendingSetupCommand) { _, request in
-            guard let request else { return }
-            handleSetupCommand(request.command)
-            workspace.pendingSetupCommand = nil
         }
         .onChange(of: workspace.pendingPanelCommand) { _, request in
             guard let request else { return }
@@ -280,7 +278,7 @@ struct ContentView: View {
 
     private var visualFieldOverlayTransform: PaperRegistrationSnapshot? {
         guard let registration = bridge.paperRegistrationSnapshot else { return nil }
-        if workspace.setupWindowActive,
+        if workspace.calibrationWizardActive,
            machineVideoAgreementModel == nil,
            !visualMotionValidated {
             return nil
@@ -351,7 +349,7 @@ struct ContentView: View {
                 corners: editableVisualFieldCorners,
                 fieldWidthMm: desiredVisualFieldWidthMm,
                 fieldHeightMm: desiredVisualFieldHeightMm,
-                isVisible: workspace.setupWindowActive && editableVisualFieldCorners.count == 4,
+                isVisible: workspace.calibrationWizardActive && editableVisualFieldCorners.count == 4,
                 isActive: canEditVisualFieldBox,
                 onUpdate: updateEditableVisualFieldCorners
             )
@@ -462,9 +460,6 @@ struct ContentView: View {
                 "window_toggled",
                 details: ["window_id": id, "visible": false, "source": source]
             )
-            if id == OperatorWindowID.setupPanel {
-                hideCalibrationWizard()
-            }
             publishOperatorUIState(reason: "operator_ui_window_toggled")
             return
         }
@@ -476,23 +471,6 @@ struct ContentView: View {
             details: ["window_id": id, "visible": true, "source": source]
         )
         publishOperatorUIState(reason: "operator_ui_window_toggled")
-    }
-
-    private func handleSetupCommand(_ command: SetupPanelCommand) {
-        switch command {
-        case .primary:
-            runCalibrationWizardPrimaryAction()
-        case .startDrawingSession, .previewDrawingBatch, .runDrawingBatch,
-             .observeDrawingBatch, .fitDrawingSession, .validateDrawingSession,
-             .finishDrawingSession:
-            handleProgressiveDrawingCalibrationCommand(command)
-        case .resetDrawingTraining:
-            resetDrawingTraining()
-        case .reset:
-            resetCalibrationWizard()
-        case .hide:
-            hideCalibrationWizard()
-        }
     }
 
     private func handlePanelCommand(_ command: OperatorPanelCommand) {
@@ -517,7 +495,7 @@ struct ContentView: View {
     }
 
     func refreshSetupSnapshot() {
-        workspace.setupSnapshot = SetupPanelSnapshot(
+        workspace.calibrationWizardSnapshot = CalibrationWizardSnapshot(
             instructionText: wizardInstructionText,
             fiducialDetail: wizardFiducialDetail,
             fiducialStatus: wizardFiducialStatus,
@@ -1457,7 +1435,7 @@ struct ContentView: View {
         from model: MachineVideoAgreementModel,
         center: CGPoint
     ) {
-        guard workspace.setupWindowActive, !bridge.hasPaperLock else { return }
+        guard workspace.calibrationWizardActive, !bridge.hasPaperLock else { return }
         guard let corners = seededFieldCorners(
             from: model,
             center: center,
@@ -1534,7 +1512,7 @@ struct ContentView: View {
     }
 
     private var canEditVisualFieldBox: Bool {
-        workspace.setupWindowActive
+        workspace.calibrationWizardActive
             && editableVisualFieldCorners.count == 4
             && !manualPenMode
             && !manualCapColorMode
@@ -1573,7 +1551,7 @@ struct ContentView: View {
         source: String,
         delayNanoseconds: UInt64 = 220_000_000
     ) {
-        guard workspace.setupWindowActive, editableVisualFieldCorners.count == 4 else { return }
+        guard workspace.calibrationWizardActive, editableVisualFieldCorners.count == 4 else { return }
         guard visualFieldCornersAreConvex(editableVisualFieldCorners) else {
             blockInvalidVisualFieldCorners(source: source)
             return
@@ -3071,14 +3049,9 @@ struct ContentView: View {
                     systemName: "checklist.checked",
                     label: "Setup",
                     help: "Open or close setup",
-                    isActive: workspace.setupWindowActive || manualFiducialMode
+                    isActive: workspace.calibrationWizardActive || manualFiducialMode
                 ) {
-                    toggleOperatorWindow(
-                        id: OperatorWindowID.setupPanel,
-                        title: "Calibrate Vision-Machine Interface",
-                        source: "top_bar",
-                        beforeOpen: startCalibrationWizard
-                    )
+                    toggleCalibrationWizard()
                 }
             }
         }
@@ -3088,6 +3061,36 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    private var calibrationWizardOverlay: some View {
+        CalibrationWizardView(
+            workflow: bridge.calibrationWorkflow,
+            instructionText: wizardInstructionText,
+            fiducialDetail: wizardFiducialDetail,
+            fiducialStatus: wizardFiducialStatus,
+            greenCapDetail: wizardGreenCapDetail,
+            greenCapStatus: wizardGreenCapStatus,
+            visualCalibrationDetail: frameLearning.detail,
+            visualCalibrationStatus: wizardMotionProbeStatus,
+            bindingDetail: wizardMotionValidationDetail,
+            bindingStatus: wizardMotionValidationStatus,
+            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
+            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
+            primaryActionTitle: wizardPrimaryActionTitle,
+            primaryActionEnabled: wizardPrimaryActionEnabled,
+            primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
+            hasPaperLock: bridge.hasPaperLock,
+            capStateLabel: wizardCapStateLabel,
+            isLiveMotionMode: bridge.isLiveMotionMode,
+            capDetected: currentCarriageMarker != nil,
+            fieldWidthMm: $workspace.visualFieldWidthMm,
+            fieldHeightMm: $workspace.visualFieldHeightMm,
+            primaryAction: runCalibrationWizardPrimaryAction,
+            reset: resetCalibrationWizard,
+            resetDrawingTraining: resetDrawingTraining,
+            hide: hideCalibrationWizard
         )
     }
 
@@ -3573,8 +3576,25 @@ struct ContentView: View {
         return PaperPointMmSnapshot(x: min(max(current.x, minX), maxX), y: targetY)
     }
 
+    private func toggleCalibrationWizard() {
+        if workspace.calibrationWizardActive {
+            hideCalibrationWizard()
+        } else {
+            startCalibrationWizard()
+            bridge.recordOperatorEvent(
+                "window_toggled",
+                details: [
+                    "window_id": "calibration-wizard",
+                    "visible": true,
+                    "source": "top_bar"
+                ]
+            )
+            publishOperatorUIState(reason: "operator_ui_window_toggled")
+        }
+    }
+
     private func startCalibrationWizard() {
-        workspace.setupWindowActive = true
+        workspace.calibrationWizardActive = true
         showPlotterCameraForSetup(source: "setup")
         refreshSetupSnapshot()
 
@@ -3593,10 +3613,17 @@ struct ContentView: View {
     }
 
     private func hideCalibrationWizard() {
-        workspace.setupWindowActive = false
-        _ = OperatorWindowSupport.closeWindow(title: "Calibrate Vision-Machine Interface", identifier: OperatorWindowID.setupPanel)
+        workspace.calibrationWizardActive = false
         manualFiducialMode = false; manualPenMode = false; manualCapColorMode = false
         calibrationStatusText = "FIELD hidden"
+        bridge.recordOperatorEvent(
+            "window_toggled",
+            details: [
+                "window_id": "calibration-wizard",
+                "visible": false,
+                "source": "wizard"
+            ]
+        )
         publishOperatorUIState(reason: "operator_ui_setup_hidden")
     }
 
@@ -3637,7 +3664,7 @@ struct ContentView: View {
     }
 
     private func clearWizardLocalState(resetFiducials: Bool) {
-        workspace.setupWindowActive = true
+        workspace.calibrationWizardActive = true
         manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false

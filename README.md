@@ -48,8 +48,8 @@ active-command locks, alarms, pen/drawing gates, or Visual Field Setup validatio
 The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open Setup. The Setup button opens or closes the single **Calibrate Vision-Machine Interface**
-   wizard surface.
+2. Open Setup. The Setup button opens or closes the single in-main
+   **Calibrate Vision-Machine Interface** wizard surface.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
    This creates Python-visible workflow cap-confirmation state before any Drawing Border exists; it
    is not field-localized cap evidence yet.
