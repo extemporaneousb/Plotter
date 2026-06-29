@@ -100,22 +100,22 @@ struct ContentView: View {
         nonmutating set { workspace.manualFiducials = newValue }
     }
 
-    private var manualFiducialMode: Bool {
+    var manualFiducialMode: Bool {
         get { workspace.manualFiducialMode }
         nonmutating set { workspace.manualFiducialMode = newValue }
     }
 
-    private var manualPenMode: Bool {
+    var manualPenMode: Bool {
         get { workspace.manualPenMode }
         nonmutating set { workspace.manualPenMode = newValue }
     }
 
-    private var manualCapColorMode: Bool {
+    var manualCapColorMode: Bool {
         get { workspace.manualCapColorMode }
         nonmutating set { workspace.manualCapColorMode = newValue }
     }
 
-    private var confirmedCapPoint: ConfirmedCapPoint? {
+    var confirmedCapPoint: ConfirmedCapPoint? {
         get { workspace.confirmedCapPoint }
         nonmutating set { workspace.confirmedCapPoint = newValue }
     }
@@ -1489,7 +1489,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func applyPersistedVisualReadiness(_ readiness: BridgeVisualReadinessState?) {
+    func applyPersistedVisualReadiness(_ readiness: BridgeVisualReadinessState?) {
         guard let readiness,
               readiness.motionModelValid == true,
               readiness.paperRegistrationId == bridge.paperRegistrationSnapshot?.registrationId,
@@ -2277,7 +2277,7 @@ struct ContentView: View {
         )
     }
 
-    private var currentCarriageMarker: CarriageMarker? {
+    var currentCarriageMarker: CarriageMarker? {
         plotterCamera.stabilizedCarriageMarker ?? plotterCamera.carriageMarker
     }
 
@@ -3075,7 +3075,7 @@ struct ContentView: View {
                 ) {
                     toggleOperatorWindow(
                         id: OperatorWindowID.setupPanel,
-                        title: "Setup",
+                        title: "Calibrate Vision-Machine Interface",
                         source: "top_bar",
                         beforeOpen: startCalibrationWizard
                     )
@@ -3148,36 +3148,6 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .help(bridge.plotterConnectionHelp)
-    }
-
-    private var calibrationWizardOverlay: some View {
-        CalibrationWizardView(
-            workflow: bridge.calibrationWorkflow,
-            instructionText: wizardInstructionText,
-            fiducialDetail: wizardFiducialDetail,
-            fiducialStatus: wizardFiducialStatus,
-            greenCapDetail: wizardGreenCapDetail,
-            greenCapStatus: wizardGreenCapStatus,
-            visualCalibrationDetail: frameLearning.detail,
-            visualCalibrationStatus: wizardMotionProbeStatus,
-            bindingDetail: wizardMotionValidationDetail,
-            bindingStatus: wizardMotionValidationStatus,
-            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
-            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
-            primaryActionTitle: wizardPrimaryActionTitle,
-            primaryActionEnabled: wizardPrimaryActionEnabled,
-            primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
-            hasPaperLock: bridge.hasPaperLock,
-            capStateLabel: wizardCapStateLabel,
-            isLiveMotionMode: bridge.isLiveMotionMode,
-            capDetected: currentCarriageMarker != nil,
-            fieldWidthMm: $workspace.visualFieldWidthMm,
-            fieldHeightMm: $workspace.visualFieldHeightMm,
-            primaryAction: runCalibrationWizardPrimaryAction,
-            reset: resetCalibrationWizard,
-            resetDrawingTraining: resetDrawingTraining,
-            hide: hideCalibrationWizard
-        )
     }
 
     private var wizardFiducialStatus: CalibrationWizardStepStatus {
@@ -3342,7 +3312,7 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionTitle: String {
-        if visualMotionValidated, let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
             return action.label
         }
         if confirmedCapPoint == nil {
@@ -3360,8 +3330,21 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionEnabled: Bool {
-        if visualMotionValidated, let action = bridge.calibrationWorkflow?.nextPrimaryAction {
-            return action.enabled && action.id != "ready_to_draw" && action.id != "recovery_action"
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+            if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
+                return false
+            }
+            switch action.id {
+            case "confirm_green_cap":
+                return true
+            case "run_machine_video_probe", "run_motion_calibration":
+                return frameLearning.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
+            case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
+                 "observe_ink", "fit_model", "validate_metrics", "promote_model":
+                return visualMotionValidated || bridge.latestVisualReadiness?.visualReadyToPlot == true
+            default:
+                return true
+            }
         }
         if confirmedCapPoint == nil {
             return true
@@ -3376,6 +3359,18 @@ struct ContentView: View {
 
     private var wizardPrimaryActionDisabledReason: String? {
         guard !wizardPrimaryActionEnabled else { return nil }
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+            if action.id == "ready_to_draw" || action.id == "recovery_action" {
+                return bridge.calibrationWorkflow?.currentBlocker
+            }
+            if action.requiresMotion {
+                if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
+                if bridge.isMachineAlarm { return "machine alarm" }
+                if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
+                if currentCarriageMarker == nil { return "green cap not detected" }
+            }
+            return bridge.calibrationWorkflow?.currentBlocker
+        }
         if confirmedCapPoint == nil {
             return "cap marker not confirmed"
         }
@@ -3397,6 +3392,29 @@ struct ContentView: View {
     }
 
     private func runCalibrationWizardPrimaryAction() {
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+            switch action.id {
+            case "confirm_green_cap":
+                if currentCarriageMarker != nil {
+                    useDetectedCarriageMarker()
+                } else {
+                    startManualPenClick()
+                }
+                return
+            case "run_machine_video_probe", "run_motion_calibration":
+                break
+            case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
+                 "observe_ink", "fit_model", "validate_metrics", "promote_model":
+                runDrawingWorkflowPrimaryAction()
+                return
+            case "ready_to_draw", "recovery_action":
+                calibrationStatusText = bridge.calibrationWorkflow?.currentBlocker ?? action.label
+                return
+            default:
+                break
+            }
+        }
+
         if confirmedCapPoint == nil {
             if currentCarriageMarker != nil {
                 useDetectedCarriageMarker()
@@ -3576,7 +3594,7 @@ struct ContentView: View {
 
     private func hideCalibrationWizard() {
         workspace.setupWindowActive = false
-        _ = OperatorWindowSupport.closeWindow(title: "Setup", identifier: OperatorWindowID.setupPanel)
+        _ = OperatorWindowSupport.closeWindow(title: "Calibrate Vision-Machine Interface", identifier: OperatorWindowID.setupPanel)
         manualFiducialMode = false; manualPenMode = false; manualCapColorMode = false
         calibrationStatusText = "FIELD hidden"
         publishOperatorUIState(reason: "operator_ui_setup_hidden")
@@ -3757,126 +3775,6 @@ struct ContentView: View {
         return .white.opacity(0.45)
     }
 
-    private func startManualPenClick() {
-        manualPenMode = true
-        manualFiducialMode = false
-        manualCapColorMode = false
-        confirmedCapPoint = nil
-        bridge.learnedCapToTipModel = nil
-        bridge.drawableSafeZone = nil
-        calibrationStatusText = "FIELD click cap marker on plotter view"
-    }
-
-    private func startCapColorPick() {
-        manualCapColorMode = true
-        manualPenMode = false
-        manualFiducialMode = false
-        confirmedCapPoint = nil
-        plotterCamera.clearCarriageMarkerObservation()
-        calibrationStatusText = "CAL click the cap color on the plotter view"
-    }
-
-    private func useDetectedCarriageMarker() {
-        guard let marker = currentCarriageMarker else {
-            startManualPenClick()
-            return
-        }
-        let cameraPoint = CGPoint(
-            x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
-        )
-        let approximateViewPoint = CGPoint(
-            x: cameraPoint.x,
-            y: 1.0 - cameraPoint.y
-        )
-        let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint)
-        confirmedCapPoint = ConfirmedCapPoint(
-            point: approximateViewPoint,
-            cameraPoint: cameraPoint,
-            paperMm: paperMm
-        )
-        bridge.learnedCapToTipModel = nil
-        bridge.drawableSafeZone = nil
-        manualPenMode = false
-        manualFiducialMode = false
-        manualCapColorMode = false
-
-        if let paperMm {
-            calibrationStatusText = String(
-                format: "FIELD %@ cap accepted field x%.1f y%.1f mm",
-                marker.colorName.lowercased(),
-                paperMm.x,
-                paperMm.y
-            )
-        } else {
-            calibrationStatusText = String(
-                format: "FIELD %@ cap cam x%.3f y%.3f; lock visual field first",
-                marker.colorName.lowercased(),
-                cameraPoint.x,
-                cameraPoint.y
-            )
-        }
-    }
-
-    private func recordConfirmedCap(viewPoint: CGPoint, cameraPoint: CGPoint) {
-        let normalizedView = CGPoint(
-            x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
-        )
-        let normalizedCamera = CGPoint(
-            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
-        )
-        let paperMm = bridge.paperPointMm(cameraPoint: normalizedCamera)
-        confirmedCapPoint = ConfirmedCapPoint(
-            point: normalizedView,
-            cameraPoint: normalizedCamera,
-            paperMm: paperMm
-        )
-        bridge.learnedCapToTipModel = nil
-        bridge.drawableSafeZone = nil
-
-        if let paperMm {
-            calibrationStatusText = String(
-                format: "CAL cap marker observed field x%.1f y%.1f mm",
-                paperMm.x,
-                paperMm.y
-            )
-        } else {
-            calibrationStatusText = String(
-                format: "CAL cap marker observed cam x%.3f y%.3f; lock visual field first",
-                normalizedCamera.x,
-                normalizedCamera.y
-            )
-        }
-
-        if workspace.setupWindowActive {
-            manualPenMode = false
-        }
-    }
-
-    private func recordCapMarkerColor(viewPoint: CGPoint, cameraPoint: CGPoint) {
-        _ = viewPoint
-        let normalizedCamera = CGPoint(
-            x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
-        )
-        confirmedCapPoint = nil
-        plotterCamera.clearCarriageMarkerObservation()
-        if let target = plotterCamera.pickCapMarkerColor(cameraPoint: normalizedCamera) {
-            calibrationStatusText = String(
-                format: "CAL cap color sampled %@ rgb %.0f %.0f %.0f; detecting",
-                target.label,
-                target.red,
-                target.green,
-                target.blue
-            )
-            manualCapColorMode = false
-        } else {
-            calibrationStatusText = "CAL cap color sample failed; click a saturated cap pixel"
-        }
-    }
-
     private func resetVisualControls() {
         plotterViewport.videoFilter = .normal
         plotterViewport.resetFOV()
@@ -3887,12 +3785,6 @@ struct ContentView: View {
         faceCamera.segmentationEnabled = false
         showImageProcessingPanel = true
         calibrationStatusText = "VIS controls reset"
-    }
-
-    private func resetCapMarkerColor() {
-        manualCapColorMode = false
-        plotterCamera.resetCapMarkerColorTarget()
-        calibrationStatusText = "VIS cap color reset"
     }
 
 }

@@ -45,8 +45,10 @@
 The app-first drawing flow is:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open Visual Field Setup.
+2. Open the **Calibrate Vision-Machine Interface** wizard.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+   This first acknowledgement is persisted as Python workflow cap-confirmation state before Drawing
+   Border registration; it is not field-localized cap evidence or motion trust.
 4. Run a machine-video agreement probe before locking or drawing the Drawing Border. The probe
    first measures cap jitter, then runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to get the first
    empirical 2x2 machine-to-video estimate. There is no identity matrix as calibration evidence; before that first
@@ -55,7 +57,7 @@ The app-first drawing flow is:
    weaker learned basis and keep refining the matrix. The loop reports update magnitude as the
    convergence signal. Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the
    learned matrix.
-5. Set Drawing Border from the current 2x2 transform. The seeded border uses the Setup panel's
+5. Set Drawing Border from the current 2x2 transform. The seeded border uses the wizard's
    physical field width and height, defaulting to 200 mm x 150 mm, as operator-assigned dimensions
    on the current video rectangle. The operator can type explicit X and Y millimeter values; changing
    either dimension sets only that dimension and does not infer the other from video aspect.

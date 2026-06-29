@@ -910,6 +910,18 @@ struct BridgeVisualCapObservationRequest: Encodable {
     let parentSpanId: String? = nil
 }
 
+struct BridgeCalibrationCapConfirmationRequest: Encodable {
+    let observedNorm: NormPoint
+    let source: String
+    let confidence: Double
+    let cameraId: String?
+    let cameraName: String?
+    let requestId: String?
+    let traceId: String? = nil
+    let spanId: String? = nil
+    let parentSpanId: String? = nil
+}
+
 struct BridgeVisualProbeCapSnapshotRequest: Encodable {
     let cameraNorm: NormPoint
     let paperNorm: NormPoint
@@ -983,6 +995,8 @@ struct BridgeCalibrationWorkflowAction: Decodable, Equatable {
 struct BridgeCalibrationWorkflowFreshness: Decodable, Equatable {
     let paperRegistrationId: String?
     let cameraId: String?
+    let capConfirmationId: String?
+    let capConfirmed: Bool
     let visualReadinessStateId: String?
     let latestVisualProbeRunId: String?
     let probeStaleSampleCount: Int
@@ -1684,6 +1698,12 @@ final class PlotterBridgeClient {
 
     func visualReadinessStatus() async throws -> BridgeVisualReadinessResponse {
         try await get(path: "calibration/workflow/status")
+    }
+
+    func confirmCalibrationCap(
+        _ request: BridgeCalibrationCapConfirmationRequest
+    ) async throws -> BridgeVisualReadinessResponse {
+        try await post(path: "calibration/workflow/cap/confirm", request: request)
     }
 
     func visualPositionBindingStatus() async throws -> BridgeVisualPositionBindingResponse {

@@ -1074,6 +1074,45 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
+    func confirmCalibrationCap(
+        cameraPoint: CGPoint,
+        source: String,
+        confidence: Double
+    ) async -> BridgeVisualReadinessState? {
+        guard isOnline else { return latestVisualReadiness }
+        do {
+            let response = try await client.confirmCalibrationCap(
+                BridgeCalibrationCapConfirmationRequest(
+                    observedNorm: NormPoint(cameraPoint),
+                    source: source,
+                    confidence: confidence,
+                    cameraId: "plotter-camera",
+                    cameraName: "Plotter Camera",
+                    requestId: "swift-confirm-green-cap"
+                )
+            )
+            latestVisualReadiness = response.readiness
+            calibrationWorkflow = response.workflow
+            adaptiveProbeStatus = response.workflow?.phase == "machine_video_agreement"
+                ? "PROBE READY"
+                : adaptiveProbeStatus
+            diagnosticsEvent(
+                "calibration_cap_confirmed",
+                [
+                    "status": response.status,
+                    "workflow_phase": response.workflow?.phase ?? "",
+                    "next_action": response.workflow?.nextPrimaryAction.id ?? "",
+                    "confidence": confidence
+                ],
+                snapshot: true
+            )
+            return response.readiness
+        } catch {
+            diagnosticsEvent("calibration_cap_confirm_failed", errorPayload(error), snapshot: true)
+            return latestVisualReadiness
+        }
+    }
+
     func refreshMachineStatus() async {
         guard !isRefreshingMachineStatus else { return }
         isRefreshingMachineStatus = true

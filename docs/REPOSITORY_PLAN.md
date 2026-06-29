@@ -81,8 +81,11 @@ tests/
 The fixed-camera workflow is:
 
 1. Start the app.
-2. Open Setup. The Setup button opens or closes a separate setup window.
+2. Open Setup. The Setup button opens or closes the single **Calibrate Vision-Machine Interface**
+   wizard surface.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+   The bridge persists this as workflow cap-confirmation state before Drawing Border registration;
+   it does not claim field-localized cap evidence or motion trust.
 4. Run Machine-Video Agreement from the current cap location before locking or drawing the Drawing
    Border.
    Calibration measures cap jitter, runs a cardinal `+X`, `+Y`, `-X`, `-Y` minibatch to create the

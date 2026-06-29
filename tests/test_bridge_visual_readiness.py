@@ -55,6 +55,45 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert observed["workflow"]["overlay_badge"]["state"] == "border_locked"
 
 
+def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        status_code, confirmed = client.post(
+            "/calibration/workflow/cap/confirm",
+            {
+                "observed_norm": {"x": 0.42, "y": 0.58},
+                "source": "operator_confirmed",
+                "confidence": 0.9,
+                "camera_id": "plotter-camera",
+                "camera_name": "Plotter Camera",
+            },
+        )
+        assert status_code == 200
+        assert confirmed["readiness"]["paper_registered"] is False
+        assert confirmed["readiness"]["cap_localized"] is False
+        assert confirmed["workflow"]["phase"] == "machine_video_agreement"
+        assert confirmed["workflow"]["next_primary_action"]["id"] == "run_machine_video_probe"
+        assert confirmed["workflow"]["freshness"]["cap_confirmed"] is True
+        assert confirmed["workflow"]["freshness"]["cap_confirmation_id"].startswith("cap-confirm-")
+        assert confirmed["workflow"]["steps"][0]["state"] == "done"
+
+        status_code, status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert status["workflow"]["phase"] == "machine_video_agreement"
+        assert status["workflow"]["freshness"]["cap_confirmation_id"] == confirmed["workflow"]["freshness"]["cap_confirmation_id"]
+
+        status_code, reset = client.post(
+            "/calibration/setup/reset",
+            {"scope": "vision_machine", "confirmed": True},
+        )
+        assert status_code == 200
+        assert any(path.endswith("latest_cap_confirmation.json") for path in reset["cleared_files"])
+        status_code, reset_status = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert reset_status["workflow"]["phase"] == "needs_cap"
+
+
 def test_setup_safe_zone_uses_current_visual_field_not_stale_tool_offset(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 

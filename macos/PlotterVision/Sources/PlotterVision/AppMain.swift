@@ -59,7 +59,7 @@ struct PlotterVisionApp: App {
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
                 }
         }
-        .defaultSize(width: 460, height: 620)
+        .defaultSize(width: 460, height: 560)
         .restorationBehavior(.disabled)
 
         Window(PlotterWindowConfiguration.plotterVideoTitle, id: OperatorWindowID.plotterVideoPanel) {
@@ -112,7 +112,7 @@ struct PlotterVisionApp: App {
 private enum PlotterWindowConfiguration {
     static let mainTitle = "Plotter Vision"
     static let machineTitle = "Machine"
-    static let setupTitle = "Setup"
+    static let setupTitle = "Calibrate Vision-Machine Interface"
     static let plotterVideoTitle = "Plotter Video"
     static let faceVideoTitle = "Face Video"
     static let logTitle = "Log"

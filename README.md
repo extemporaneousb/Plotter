@@ -35,8 +35,8 @@ Implemented vertical slices now include:
   calibration sheet, planned through the Python planner/simulator/preview path rather than SVG
   import or Swift-only overlays;
 - live-gated motion controls in the macOS app, with controller state and safety gates visible;
-- a windowed operator UI with independent plotter/face camera toggles, Setup, Plotter Video, and
-  Face Video panels, plus UI state surfaced in `/codex/snapshot`.
+- a windowed operator UI with independent plotter/face camera toggles, a unified calibration wizard,
+  Plotter Video, and Face Video panels, plus UI state surfaced in `/codex/snapshot`.
 
 The Machine panel also has an explicit Boundary Override for manual jog arrows. It bypasses the
 live projected-workspace guard when stale or untrusted `MPos`/workspace bounds would otherwise block
@@ -48,8 +48,11 @@ active-command locks, alarms, pen/drawing gates, or Visual Field Setup validatio
 The normal development target is the fixed-camera drawing loop:
 
 1. Start the app against a preview or hardware-standby bridge.
-2. Open Setup. The Setup button opens or closes a separate setup window.
+2. Open Setup. The Setup button opens or closes the single **Calibrate Vision-Machine Interface**
+   wizard surface.
 3. Confirm the visible green cap detection or click the green cap marker if detection is not usable.
+   This creates Python-visible workflow cap-confirmation state before any Drawing Border exists; it
+   is not field-localized cap evidence yet.
 4. Run the machine-video agreement probe before locking or drawing the Drawing Border. The app
    first measures cap jitter, then sends adaptive relative machine vectors on X, Y, and diagonals
    without requiring homing, axis-model trust, absolute machine-position clearance, or a preexisting
@@ -58,7 +61,7 @@ The normal development target is the fixed-camera drawing loop:
    convergence signal.
    Swapped, rotated, skewed, or sign-reversed axes are normal outcomes of the learned matrix.
 5. Set Drawing Border from the current 2x2 machine-video transform. The app uses the latest
-   machine-video basis to estimate scale and fit a provisional video rectangle. The Setup panel's
+   machine-video basis to estimate scale and fit a provisional video rectangle. The wizard's
    typed X/Y millimeter values are then assigned to that rectangle, defaulting to 200 mm x 150 mm;
    editing X and Y sets those dimensions directly without inferring either value from video aspect.
    Residuals and field-corner precision remain visible diagnostics, and every later solved estimate
@@ -127,9 +130,9 @@ same Python `DrawingProgram -> Planner -> Simulator -> VideoProjector -> Preview
 by other drawing programs. Sheet-derived observations use the same generic sample schema and
 `residual_grid_v1` model family, keyed by the planned command hash, Drawing Border registration id,
 camera id, observed mark residuals in paper millimeters, grid-cell residual vectors, validation
-status, and blockers. Operators should read `/calibration/drawing/status`, the Setup model-estimate
-detail, and `artifacts/app_state.json` as visibility into the current estimate rather than as trust
-promotion.
+status, and blockers. Operators should read `/calibration/drawing/status`,
+`/calibration/workflow/status`, and `artifacts/app_state.json` as visibility into the current
+estimate rather than as trust promotion.
 
 The plotter-camera FOV zoom in the macOS app is a persisted Swift viewport transform for operator
 inspection. It does not crop bridge geometry, promote trust, or change machine authority. Current
@@ -144,7 +147,7 @@ The operator sequence should stay explicit:
 
 | Step | Action | Evidence recorded | Does not prove |
 | --- | --- | --- | --- |
-| 1 | Confirm Green Cap | Camera-space cap point | Relative motion model or drawing authority. |
+| 1 | Confirm Green Cap | Python workflow cap-confirmation artifact with camera-space cap point | Field-localized cap evidence, relative motion model, or drawing authority. |
 | 2 | Machine-Video Agreement Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-video basis | Cap-to-tip offset, ink binding, or drawing authority. |
 | 3 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error | Pen position or drawing authority. |
 | 4 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker | Actual drawing readiness. |
@@ -402,7 +405,7 @@ make bridge-stop
 
 The Visual Field Setup model treats the drawing field as operator-defined visual coordinates with a
 known physical width and height, defaulting to 200 mm by 150 mm unless configuration provides a
-better editable value. The Setup panel exposes compact width/height controls for this value before
+better editable value. The calibration wizard exposes compact width/height controls for this value before
 field registration. The controller's `G53` machine coordinates may still be displayed as
 diagnostics, but homing state, `axis_model_trusted`, and absolute machine workspace bounds are not
 Visual Field Setup authority. The learned 2x2 relative model may swap axes, reverse signs, rotate, or

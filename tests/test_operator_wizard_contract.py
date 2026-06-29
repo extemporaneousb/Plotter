@@ -360,14 +360,28 @@ def test_machine_panel_has_explicit_manual_jog_boundary_override() -> None:
 
 def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    cap_flow = _read(SWIFT_DIR / "ContentViewCapConfirmation.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
+    app_main = _read(SWIFT_DIR / "AppMain.swift")
     frame_drawing = _read(SWIFT_DIR / "SetupFieldFrameDrawing.swift")
 
     assert "CalibrationWizardView(" in setup_panel
+    assert "private var calibrationWizardOverlay" not in content
+    assert "SetupLogDisclosure" not in setup_panel
+    assert "SetupModelEstimatesDisclosure" not in setup_panel
+    assert 'static let setupTitle = "Calibrate Vision-Machine Interface"' in app_main
     assert "Calibrate Vision-Machine Interface" in wizard
     assert "BridgeCalibrationWorkflow" in wizard
+    assert "BridgeCalibrationCapConfirmationRequest" in client
+    assert 'post(path: "calibration/workflow/cap/confirm"' in client
+    assert "confirmCalibrationCap(" in model
+    assert "await confirmWorkflowCap(" in cap_flow
+    assert "func confirmWorkflowCap(" in cap_flow
+    assert "if let action = bridge.calibrationWorkflow?.nextPrimaryAction" in content
+    assert "visualMotionValidated, let action = bridge.calibrationWorkflow?.nextPrimaryAction" not in content
     assert 'title: "Confirm Green Cap"' in wizard
     assert 'title: "Machine-Video Agreement"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
@@ -936,9 +950,9 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     assert "latestDrawingCalibration" in bridge_model
     assert "latestDrawingCalibrationSession" in bridge_model
     assert "currentDrawingCalibrationBatch" in bridge_model
-    assert "Action model kind" in _read(SWIFT_DIR / "SetupPanel.swift")
-    assert "Validation error" in _read(SWIFT_DIR / "SetupPanel.swift")
-    assert "Retry count" in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert "Action model kind" not in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert "Validation error" not in _read(SWIFT_DIR / "SetupPanel.swift")
+    assert "Retry count" not in _read(SWIFT_DIR / "SetupPanel.swift")
     assert "wizardDrawingCalibrationDetail" in content
 
     docs = readme + contract + plan
@@ -953,7 +967,7 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     assert "Python owns persistence, trust" in plan_flat
 
 
-def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
+def test_operator_log_and_model_estimates_do_not_live_under_setup_wizard() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
     setup_panel = _read(SWIFT_DIR / "SetupPanel.swift")
@@ -968,10 +982,10 @@ def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
     assert "appendOperatorLog" in workspace
     assert "@Published var setupLogExpanded" in workspace
     assert "@Published var setupModelEstimatesExpanded" in workspace
-    assert "SetupLogDisclosure(workspace: workspace)" in setup_panel
-    assert "SetupModelEstimatesDisclosure(workspace: workspace, bridge: bridge)" in setup_panel
-    assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' in setup_panel
-    assert 'Label("Model Estimates", systemImage: "function")' in setup_panel
+    assert "SetupLogDisclosure" not in setup_panel
+    assert "SetupModelEstimatesDisclosure" not in setup_panel
+    assert 'Label("Setup Log", systemImage: "list.bullet.rectangle")' not in setup_panel
+    assert 'Label("Model Estimates", systemImage: "function")' not in setup_panel
     for label in [
         "Paper homography",
         "Motion 2x2",
@@ -985,7 +999,7 @@ def test_operator_log_lives_under_setup_not_main_toolbar() -> None:
         "Blockers",
         "Model id",
     ]:
-        assert label in setup_panel
+        assert label not in setup_panel
     assert 'label: "Log"' not in content
     assert "OperatorWindowID.operatorLog" not in content
     assert "workspace.appendOperatorLog(newValue" in content
@@ -1142,7 +1156,7 @@ def test_visual_cap_gates_use_stabilized_marker_observation() -> None:
     assert "carriageMarkerHoldMisses = 12" in camera_model
     assert "publishCarriageMarkerObservation(visionResult.carriageMarker)" in camera_model
     assert "averagedCarriageMarker(from: carriageMarkerHistory)" in camera_model
-    assert "private var currentCarriageMarker" in content
+    assert "var currentCarriageMarker" in content
     assert "plotterCamera.stabilizedCarriageMarker ?? plotterCamera.carriageMarker" in content
     assert "visualCapFreshFrameAdvance = 3" in content
     assert "minimumFrameAdvance: visualCapFreshFrameAdvance" in content

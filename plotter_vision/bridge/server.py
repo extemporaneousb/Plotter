@@ -487,6 +487,31 @@ class VisualCapObservationRequest(TraceContextFields):
     request_id: str | None = None
 
 
+class CalibrationCapConfirmationRequest(TraceContextFields):
+    observed_norm: CameraPointNorm
+    source: Literal["manual_click", "camera_detection", "operator_confirmed", "synthetic"] = (
+        "operator_confirmed"
+    )
+    confidence: float = 1.0
+    camera_id: str | None = None
+    camera_name: str | None = None
+    request_id: str | None = None
+
+
+class CalibrationCapConfirmation(BaseModel):
+    schema_version: int = 1
+    artifact_type: Literal["calibration_cap_confirmation"] = "calibration_cap_confirmation"
+    confirmation_id: str = Field(default_factory=lambda: f"cap-confirm-{uuid.uuid4().hex[:12]}")
+    confirmed_at: str = Field(default_factory=_utc_now_iso)
+    camera_norm: CameraPointNorm
+    source: Literal["manual_click", "camera_detection", "operator_confirmed", "synthetic"] = (
+        "operator_confirmed"
+    )
+    confidence: float = 1.0
+    camera_id: str | None = None
+    camera_name: str | None = None
+
+
 class VisualReadinessResponse(BaseModel):
     status: str
     dry_run: bool
@@ -2559,6 +2584,7 @@ class PlotterBridge:
             ]
         else:
             pointer_paths = [
+                self._latest_cap_confirmation_path(),
                 self._latest_paper_registration_path(),
                 self._latest_visual_readiness_path(),
                 self._latest_visual_probe_run_path(),
@@ -2648,6 +2674,47 @@ class PlotterBridge:
                 readiness_file=str(self._latest_visual_readiness_path()),
                 error=str(exc),
             )
+
+    def confirm_workflow_cap(
+        self,
+        request: CalibrationCapConfirmationRequest,
+    ) -> VisualReadinessResponse:
+        confirmation = CalibrationCapConfirmation(
+            camera_norm=request.observed_norm,
+            source=request.source,
+            confidence=request.confidence,
+            camera_id=request.camera_id,
+            camera_name=request.camera_name,
+        )
+        self._save_cap_confirmation(confirmation)
+        state = self._load_latest_visual_readiness_or_none()
+        if state is None:
+            try:
+                registration = self._load_latest_paper_registration()
+                paper_registered = True
+                paper_registration_id: str | None = registration.registration_id
+            except Exception:
+                paper_registered = False
+                paper_registration_id = None
+            state = build_visual_readiness_state(
+                paper_registered=paper_registered,
+                cap_observation=None,
+                safe_zone_evaluation=None,
+                probe_observation_count=0,
+            )
+            state.paper_registration_id = paper_registration_id
+        self.event_log.emit(
+            "calibration.workflow_cap_confirmed",
+            status="confirmed",
+            request_id=request.request_id,
+            payload={
+                "confirmation_id": confirmation.confirmation_id,
+                "source": confirmation.source,
+                "confidence": confirmation.confidence,
+                "camera_id": confirmation.camera_id,
+            },
+        )
+        return self._visual_readiness_response(state)
 
     def observe_visual_probe_sample(
         self,
@@ -5907,6 +5974,20 @@ class PlotterBridge:
     def _latest_visual_readiness_path(self) -> Path:
         return self.config.calibration_dir / "latest_visual_readiness.json"
 
+    def _latest_cap_confirmation_path(self) -> Path:
+        return self.config.calibration_dir / "latest_cap_confirmation.json"
+
+    def _save_cap_confirmation(self, confirmation: CalibrationCapConfirmation) -> None:
+        path = self._latest_cap_confirmation_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(confirmation.model_dump_json(indent=2), encoding="utf-8")
+
+    def _load_latest_cap_confirmation_or_none(self) -> CalibrationCapConfirmation | None:
+        path = self._latest_cap_confirmation_path()
+        if not path.exists():
+            return None
+        return CalibrationCapConfirmation.model_validate_json(path.read_text(encoding="utf-8"))
+
     def _save_visual_readiness(self, state: VisualReadinessState) -> None:
         state.save_json(self._latest_visual_readiness_path())
 
@@ -5952,8 +6033,10 @@ class PlotterBridge:
 
     def _calibration_workflow(self, state: VisualReadinessState) -> dict[str, Any]:
         registration = self._load_latest_paper_registration_or_none()
+        cap_confirmation = self._load_latest_cap_confirmation_or_none()
         session = self._load_latest_drawing_session_or_none()
         model = self._load_latest_drawing_calibration_or_none()
+        cap_confirmed = bool(state.cap_localized or cap_confirmation is not None)
 
         session_stale_reasons: list[str] = []
         model_stale_reasons: list[str] = []
@@ -6018,7 +6101,7 @@ class PlotterBridge:
             phase = "blocked"
             blocker = (session.blockers or ["Drawing training blocked."])[0]
             next_action = self._workflow_action("recovery_action", "Recovery Action", enabled=False)
-        elif not state.cap_localized:
+        elif not cap_confirmed:
             phase = "needs_cap"
             blocker = "Green cap not confirmed."
             next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap")
@@ -6073,6 +6156,8 @@ class PlotterBridge:
 
         steps = self._workflow_steps(
             state=state,
+            cap_confirmation=cap_confirmation,
+            cap_confirmed=cap_confirmed,
             registration=registration,
             session=session if session_current else None,
             model=model if model_current else None,
@@ -6097,6 +6182,8 @@ class PlotterBridge:
             "freshness": {
                 "paper_registration_id": registration.registration_id if registration is not None else state.paper_registration_id,
                 "camera_id": registration.camera_id if registration is not None else None,
+                "cap_confirmation_id": cap_confirmation.confirmation_id if cap_confirmation is not None else None,
+                "cap_confirmed": cap_confirmed,
                 "visual_readiness_state_id": state.state_id,
                 "latest_visual_probe_run_id": state.latest_visual_probe_run_id,
                 "probe_stale_sample_count": state.probe_stale_sample_count,
@@ -6145,6 +6232,8 @@ class PlotterBridge:
         self,
         *,
         state: VisualReadinessState,
+        cap_confirmation: CalibrationCapConfirmation | None,
+        cap_confirmed: bool,
         registration: PaperFrameRegistration | None,
         session: DrawingCalibrationSession | None,
         model: DrawingCalibrationModel | None,
@@ -6158,19 +6247,27 @@ class PlotterBridge:
             self._workflow_step(
                 "green_cap",
                 "Confirm Green Cap",
-                "done" if state.cap_localized else ("blocked" if phase == "needs_cap" else "pending"),
-                "Green cap confirmed" if state.cap_localized else "Waiting for operator cap confirmation",
+                "done" if cap_confirmed else ("blocked" if phase == "needs_cap" else "pending"),
+                (
+                    "Green cap localized in Drawing Border"
+                    if state.cap_localized
+                    else (
+                        f"Green cap confirmed in camera ({cap_confirmation.confirmation_id})"
+                        if cap_confirmation is not None
+                        else "Waiting for operator cap confirmation"
+                    )
+                ),
             ),
             self._workflow_step(
                 "machine_video_agreement",
                 "Machine-Video Agreement",
-                "done" if state.latest_visual_probe_run_id else ("active" if state.cap_localized else "pending"),
+                "done" if state.latest_visual_probe_run_id else ("active" if cap_confirmed else "pending"),
                 state.latest_visual_probe_run_id or "Run probe before locking Drawing Border",
             ),
             self._workflow_step(
                 "drawing_border",
                 "Set Drawing Border",
-                "done" if registration is not None and state.paper_registered else ("active" if state.cap_localized else "pending"),
+                "done" if registration is not None and state.paper_registered else ("active" if state.latest_visual_probe_run_id else "pending"),
                 (
                     f"{registration.paper_size_mm.width:.0f}x{registration.paper_size_mm.height:.0f} mm locked"
                     if registration is not None
@@ -7670,6 +7767,11 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
         "/calibration/pen/observe": PostRoute(
             VisualCapObservationRequest,
             bridge.observe_visual_cap,
+            lambda response: getattr(response, "status", "") != "failed",
+        ),
+        "/calibration/workflow/cap/confirm": PostRoute(
+            CalibrationCapConfirmationRequest,
+            bridge.confirm_workflow_cap,
             lambda response: getattr(response, "status", "") != "failed",
         ),
         "/calibration/setup/reset": PostRoute(
