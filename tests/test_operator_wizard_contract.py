@@ -392,6 +392,9 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "BridgeCalibrationCapConfirmationRequest" in client
     assert 'post(path: "calibration/workflow/cap/confirm"' in client
     assert "confirmCalibrationCap(" in model
+    assert "visualReadinessWorkflowStatusText(" in model
+    assert "visualProbeProgressStatusText(" in model
+    assert "wizardVisibleWorkflowPrimaryAction" in content
     assert "await confirmWorkflowCap(" in cap_flow
     assert "func confirmWorkflowCap(" in cap_flow
     assert "if let action = bridge.calibrationWorkflow?.nextPrimaryAction" in content
@@ -701,6 +704,30 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     setup_relative_move = model.split("func setupRelativeMove", 1)[1].split("func observeVisualCapForProbe", 1)[0]
     assert "bypassWorkspaceProjection: true" in setup_relative_move
     assert "ensurePenUp: ensurePenUp" in setup_relative_move
+    cap_observe = model.split("func observeVisualCapForProbe", 1)[1].split("func observeVisualProbeSample", 1)[0]
+    assert "latestVisualReadiness = response.readiness" in cap_observe
+    assert "statusText = visualProbeProgressStatusText(" in cap_observe
+    assert "statusText = response.readiness?.blockers.joined" not in cap_observe
+    sample_observe = model.split("func observeVisualProbeSample", 1)[1].split(
+        "private func visualReadinessWorkflowStatusText",
+        1,
+    )[0]
+    assert 'response.status == "accepted"' in sample_observe
+    assert "latestVisualReadiness = response.readiness" in sample_observe
+    assert "statusText = visualProbeProgressStatusText(" in sample_observe
+    visible_action = content.split("private var wizardVisibleWorkflowPrimaryAction", 1)[1].split(
+        "private var wizardInstructionText",
+        1,
+    )[0]
+    assert 'case "run_machine_video_probe":' in visible_action
+    assert 'case "run_motion_calibration":' in visible_action
+    assert 'workflow.phase != "stale_downstream"' in visible_action
+    assert "return nil" in visible_action
+    validation = content.split("private func runWizardMotionValidation", 1)[1].split(
+        "private func wizardMotionValidationTarget",
+        1,
+    )[0]
+    assert "await bridge.refreshVisualReadinessStatus()" in validation
     assert "manualJogWorkspaceOverride" not in learning_jog
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content

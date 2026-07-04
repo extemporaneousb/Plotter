@@ -1484,7 +1484,13 @@ struct BridgeVisualReadinessState: Decodable, Equatable {
     let capInsideSafeZone: Bool
     let latestCapObservation: BridgeVisualCapObservation?
     let safeZoneEvaluation: BridgeSafeZoneEvaluation?
+    let probeRawSampleCount: Int?
     let probeObservationCount: Int
+    let probeRejectedSampleCount: Int?
+    let probeStaleSampleCount: Int?
+    let probeAxesRepresented: [String]?
+    let probeAdaptiveSampleCount: Int?
+    let probeCenterTargetSampleCount: Int?
     let probeRmsResidualMm: Double?
     let probeMaxResidualMm: Double?
     let motionModelValid: Bool?

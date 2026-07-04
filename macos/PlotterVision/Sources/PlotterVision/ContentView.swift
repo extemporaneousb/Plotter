@@ -3295,6 +3295,24 @@ struct ContentView: View {
         return "Validate motion before drawing training"
     }
 
+    private var wizardVisibleWorkflowPrimaryAction: BridgeCalibrationWorkflowAction? {
+        guard let workflow = bridge.calibrationWorkflow else { return nil }
+        let action = workflow.nextPrimaryAction
+        switch action.id {
+        case "run_machine_video_probe":
+            if bridge.hasPaperLock || machineVideoAgreementModel != nil || frameLearning.status == "MEASURED" || visualMotionValidated {
+                return nil
+            }
+        case "run_motion_calibration":
+            if workflow.phase != "stale_downstream" && (frameLearning.status == "MEASURED" || visualMotionValidated) {
+                return nil
+            }
+        default:
+            break
+        }
+        return action
+    }
+
     private var wizardInstructionText: String {
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil
@@ -3318,7 +3336,7 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionTitle: String {
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+        if let action = wizardVisibleWorkflowPrimaryAction {
             return action.label
         }
         if confirmedCapPoint == nil {
@@ -3336,7 +3354,7 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionEnabled: Bool {
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+        if let action = wizardVisibleWorkflowPrimaryAction {
             if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return false
             }
@@ -3365,7 +3383,7 @@ struct ContentView: View {
 
     private var wizardPrimaryActionDisabledReason: String? {
         guard !wizardPrimaryActionEnabled else { return nil }
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
+        if let action = wizardVisibleWorkflowPrimaryAction {
             if action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return bridge.calibrationWorkflow?.currentBlocker
             }
@@ -3560,6 +3578,8 @@ struct ContentView: View {
                 "target_residual_mm": residualMm
             ]
         )
+        _ = await bridge.refreshVisualReadinessStatus()
+        refreshSetupSnapshot()
     }
 
     private func wizardMotionValidationTarget(from current: PaperPointMmSnapshot) -> PaperPointMmSnapshot {

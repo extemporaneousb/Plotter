@@ -1052,9 +1052,12 @@ final class PlotterBridgeModel: ObservableObject {
             latestVisualReadiness = response.readiness
             calibrationWorkflow = response.workflow
             adaptiveProbeStatus = response.status == "ready" ? "PROBE READY" : "PROBE BLOCK"
-            if let blockers = response.readiness?.blockers, !blockers.isEmpty {
-                statusText = blockers.joined(separator: ", ")
-            }
+            statusText = visualReadinessWorkflowStatusText(
+                status: response.status,
+                readiness: response.readiness,
+                workflow: response.workflow,
+                fallback: adaptiveProbeStatus
+            )
             diagnosticsEvent(
                 "visual_readiness_refreshed",
                 [
@@ -1096,6 +1099,12 @@ final class PlotterBridgeModel: ObservableObject {
             adaptiveProbeStatus = response.workflow?.phase == "machine_video_agreement"
                 ? "PROBE READY"
                 : adaptiveProbeStatus
+            statusText = visualReadinessWorkflowStatusText(
+                status: response.status,
+                readiness: response.readiness,
+                workflow: response.workflow,
+                fallback: adaptiveProbeStatus
+            )
             diagnosticsEvent(
                 "calibration_cap_confirmed",
                 [
@@ -2291,7 +2300,12 @@ final class PlotterBridgeModel: ObservableObject {
             )
             isOnline = true
             adaptiveProbeStatus = response.status == "ready" ? "PROBE CAP SAFE" : "PROBE CAP OBS"
-            statusText = response.readiness?.blockers.joined(separator: ", ") ?? adaptiveProbeStatus
+            latestVisualReadiness = response.readiness
+            statusText = visualProbeProgressStatusText(
+                prefix: adaptiveProbeStatus,
+                readiness: response.readiness,
+                fallback: adaptiveProbeStatus
+            )
             diagnosticsEvent(
                 "visual_cap_observed",
                 [
@@ -2318,8 +2332,15 @@ final class PlotterBridgeModel: ObservableObject {
             let response = try await client.observeVisualProbeSample(request)
             isOnline = true
             adaptiveProbeStatus = response.status == "accepted" ? "PROBE EVID OK" : "PROBE EVID \(response.status.uppercased())"
+            latestVisualReadiness = response.readiness
             if let error = response.error {
                 statusText = error
+            } else if response.status == "accepted" {
+                statusText = visualProbeProgressStatusText(
+                    prefix: adaptiveProbeStatus,
+                    readiness: response.readiness,
+                    fallback: adaptiveProbeStatus
+                )
             } else if let blockers = response.readiness?.blockers, !blockers.isEmpty {
                 statusText = blockers.joined(separator: ", ")
             } else {
@@ -2354,6 +2375,81 @@ final class PlotterBridgeModel: ObservableObject {
             )
             return false
         }
+    }
+
+    private func visualReadinessWorkflowStatusText(
+        status: String,
+        readiness: BridgeVisualReadinessState?,
+        workflow: BridgeCalibrationWorkflow?,
+        fallback: String
+    ) -> String {
+        if status == "ready" || readiness?.visualReadyToPlot == true {
+            return visualProbeProgressStatusText(
+                prefix: "PROBE READY",
+                readiness: readiness,
+                fallback: "PROBE READY"
+            )
+        }
+        if let workflow {
+            let action = workflow.nextPrimaryAction
+            if let blocker = workflow.currentBlocker, !blocker.isEmpty {
+                return "SETUP next: \(action.label); \(blocker)"
+            }
+            return "SETUP next: \(action.label)"
+        }
+        if let blocker = readiness?.blockers.first {
+            return blocker
+        }
+        return fallback
+    }
+
+    private func visualProbeProgressStatusText(
+        prefix: String,
+        readiness: BridgeVisualReadinessState?,
+        fallback: String
+    ) -> String {
+        guard let readiness else { return fallback }
+        if readiness.visualReadyToPlot {
+            if let model = readiness.relativeMotionModel {
+                return String(
+                    format: "%@; motion ready rms %.1f max %.1f samples %d",
+                    prefix,
+                    model.rmsResidualMm,
+                    model.maxResidualMm,
+                    model.sampleCount
+                )
+            }
+            return "\(prefix); motion ready"
+        }
+
+        var parts = [prefix]
+        let sampleCount = readiness.probeObservationCount
+        if sampleCount > 0 {
+            parts.append("\(sampleCount) accepted \(sampleCount == 1 ? "sample" : "samples")")
+            let axes = Set((readiness.probeAxesRepresented ?? []).map { $0.uppercased() })
+            if axes.contains("X") && axes.contains("Y") {
+                parts.append("axes X/Y")
+            } else if axes.contains("X") {
+                parts.append("axis X; collecting Y")
+            } else if axes.contains("Y") {
+                parts.append("axis Y; collecting X")
+            } else {
+                parts.append("collecting X/Y")
+            }
+        } else if readiness.capLocalized {
+            parts.append("cap localized; collecting motion samples")
+        } else if readiness.paperRegistered {
+            parts.append("field locked; cap observation needed")
+        } else {
+            parts.append("field registration needed")
+        }
+
+        let rejectedCount = readiness.probeRejectedSampleCount ?? 0
+        let staleCount = readiness.probeStaleSampleCount ?? 0
+        if rejectedCount > 0 || staleCount > 0 {
+            parts.append("rejected \(rejectedCount) stale \(staleCount)")
+        }
+        return parts.joined(separator: "; ")
     }
 
     func visualRelativeMove(xMm: Double, yMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
