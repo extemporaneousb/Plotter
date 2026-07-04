@@ -1083,11 +1083,27 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
 def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
+    support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+    confirmed_overlay = support.split("struct ConfirmedCapOverlay: View", 1)[1].split(
+        "struct CapColorPickOverlay",
+        1,
+    )[0]
+    confirmed_cap_model = models.split("struct ConfirmedCapPoint", 1)[1].split(
+        "struct VisualMoveIntent",
+        1,
+    )[0]
 
     assert "ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode)" in content
     assert "confirmedCapPoint: confirmedCapPoint" not in content
     assert "draw(confirmedCapPoint" not in overlay
-    assert "CONF CAP" in _read(SWIFT_DIR / "Models.swift")
+    assert "guard isActive else { return }" in confirmed_overlay
+    assert confirmed_overlay.find("guard isActive else { return }") < confirmed_overlay.find(
+        "guard let point else { return }"
+    )
+    assert "Text(point.label)" not in confirmed_overlay
+    assert "var label" not in confirmed_cap_model
+    assert "CONF CAP FIELD ?" not in support + models
 
 
 def test_visual_move_intent_is_projected_on_video() -> None:

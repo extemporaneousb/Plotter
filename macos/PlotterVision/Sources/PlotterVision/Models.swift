@@ -163,11 +163,6 @@ struct ConfirmedCapPoint: Identifiable, Equatable {
     var point: CGPoint
     var cameraPoint: CGPoint
     var paperMm: PaperPointMmSnapshot?
-
-    var label: String {
-        guard let paperMm else { return "CONF CAP FIELD ?" }
-        return String(format: "CONF CAP %.1f,%.1f mm", paperMm.x, paperMm.y)
-    }
 }
 
 struct VisualMoveIntent: Identifiable, Equatable {

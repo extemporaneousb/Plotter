@@ -126,13 +126,12 @@ struct ConfirmedCapOverlay: View {
 
     var body: some View {
         Canvas { context, size in
-            if isActive {
-                let label = Text("CLICK CAP POSITION")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.green.opacity(0.96))
-                context.draw(label, at: CGPoint(x: size.width - 12, y: 32), anchor: .topTrailing)
-            }
+            guard isActive else { return }
 
+            let label = Text("CLICK CAP POSITION")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.green.opacity(0.96))
+            context.draw(label, at: CGPoint(x: size.width - 12, y: 32), anchor: .topTrailing)
             guard let point else { return }
 
             let center = CGPoint(
@@ -154,11 +153,6 @@ struct ConfirmedCapOverlay: View {
             cross.addLine(to: CGPoint(x: center.x, y: center.y + 35))
             context.stroke(cross, with: .color(.black.opacity(0.82)), lineWidth: 7.0)
             context.stroke(cross, with: .color(.green.opacity(0.98)), lineWidth: 3.2)
-
-            let label = Text(point.label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(.green.opacity(0.98))
-            context.draw(label, at: CGPoint(x: center.x + 16, y: center.y - 16), anchor: .leading)
         }
         .allowsHitTesting(false)
     }
