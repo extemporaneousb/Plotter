@@ -1082,10 +1082,11 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
 
 def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
+    cap_flow = _read(SWIFT_DIR / "ContentViewCapConfirmation.swift")
     overlay = _read(SWIFT_DIR / "MeasurementOverlay.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
     models = _read(SWIFT_DIR / "Models.swift")
-    confirmed_overlay = support.split("struct ConfirmedCapOverlay: View", 1)[1].split(
+    click_overlay = support.split("struct CapPositionClickOverlay: View", 1)[1].split(
         "struct CapColorPickOverlay",
         1,
     )[0]
@@ -1094,15 +1095,18 @@ def test_confirmed_cap_overlay_is_not_persistent_video_annotation() -> None:
         1,
     )[0]
 
-    assert "ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode)" in content
+    assert "CapPositionClickOverlay(isActive: manualPenMode)" in content
+    assert "ConfirmedCapOverlay" not in content + support
+    assert "point: confirmedCapPoint" not in content
     assert "confirmedCapPoint: confirmedCapPoint" not in content
     assert "draw(confirmedCapPoint" not in overlay
-    assert "guard isActive else { return }" in confirmed_overlay
-    assert confirmed_overlay.find("guard isActive else { return }") < confirmed_overlay.find(
-        "guard let point else { return }"
-    )
-    assert "Text(point.label)" not in confirmed_overlay
+    assert "guard isActive else { return }" in click_overlay
+    assert "guard let point else { return }" not in click_overlay
+    assert "Text(point.label)" not in click_overlay
+    assert "var point" not in confirmed_cap_model
     assert "var label" not in confirmed_cap_model
+    assert "approximateViewPoint" not in cap_flow
+    assert "normalizedView" not in cap_flow
     assert "CONF CAP FIELD ?" not in support + models
 
 

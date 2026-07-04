@@ -160,7 +160,6 @@ struct ManualFiducialPoint: Identifiable, Equatable {
 
 struct ConfirmedCapPoint: Identifiable, Equatable {
     let id = UUID()
-    var point: CGPoint
     var cameraPoint: CGPoint
     var paperMm: PaperPointMmSnapshot?
 }

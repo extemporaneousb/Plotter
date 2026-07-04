@@ -120,8 +120,7 @@ struct PlotterViewportTransform<Content: View>: View {
     }
 }
 
-struct ConfirmedCapOverlay: View {
-    let point: ConfirmedCapPoint?
+struct CapPositionClickOverlay: View {
     let isActive: Bool
 
     var body: some View {
@@ -132,27 +131,6 @@ struct ConfirmedCapOverlay: View {
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.green.opacity(0.96))
             context.draw(label, at: CGPoint(x: size.width - 12, y: 32), anchor: .topTrailing)
-            guard let point else { return }
-
-            let center = CGPoint(
-                x: point.point.x * size.width,
-                y: point.point.y * size.height
-            )
-            let outer = CGRect(x: center.x - 25, y: center.y - 25, width: 50, height: 50)
-            let middle = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
-            let inner = CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)
-
-            context.stroke(Path(ellipseIn: outer), with: .color(.black.opacity(0.86)), lineWidth: 7.0)
-            context.stroke(Path(ellipseIn: middle), with: .color(.green.opacity(0.98)), lineWidth: 4.0)
-            context.fill(Path(ellipseIn: inner), with: .color(.white.opacity(0.98)))
-
-            var cross = Path()
-            cross.move(to: CGPoint(x: center.x - 35, y: center.y))
-            cross.addLine(to: CGPoint(x: center.x + 35, y: center.y))
-            cross.move(to: CGPoint(x: center.x, y: center.y - 35))
-            cross.addLine(to: CGPoint(x: center.x, y: center.y + 35))
-            context.stroke(cross, with: .color(.black.opacity(0.82)), lineWidth: 7.0)
-            context.stroke(cross, with: .color(.green.opacity(0.98)), lineWidth: 3.2)
         }
         .allowsHitTesting(false)
     }

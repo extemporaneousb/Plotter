@@ -30,10 +30,8 @@ extension ContentView {
             x: clampDouble(Double(marker.center.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(marker.center.y), min: 0.0, max: 1.0)
         )
-        let approximateViewPoint = CGPoint(x: cameraPoint.x, y: 1.0 - cameraPoint.y)
         let paperMm = bridge.paperPointMm(cameraPoint: cameraPoint)
         confirmedCapPoint = ConfirmedCapPoint(
-            point: approximateViewPoint,
             cameraPoint: cameraPoint,
             paperMm: paperMm
         )
@@ -68,17 +66,13 @@ extension ContentView {
     }
 
     func recordConfirmedCap(viewPoint: CGPoint, cameraPoint: CGPoint) {
-        let normalizedView = CGPoint(
-            x: clampDouble(Double(viewPoint.x), min: 0.0, max: 1.0),
-            y: clampDouble(Double(viewPoint.y), min: 0.0, max: 1.0)
-        )
+        _ = viewPoint
         let normalizedCamera = CGPoint(
             x: clampDouble(Double(cameraPoint.x), min: 0.0, max: 1.0),
             y: clampDouble(Double(cameraPoint.y), min: 0.0, max: 1.0)
         )
         let paperMm = bridge.paperPointMm(cameraPoint: normalizedCamera)
         confirmedCapPoint = ConfirmedCapPoint(
-            point: normalizedView,
             cameraPoint: normalizedCamera,
             paperMm: paperMm
         )

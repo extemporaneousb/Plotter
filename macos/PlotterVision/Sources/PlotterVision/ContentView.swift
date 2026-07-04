@@ -326,7 +326,7 @@ struct ContentView: View {
                 }
             }
 
-            ConfirmedCapOverlay(point: confirmedCapPoint, isActive: manualPenMode)
+            CapPositionClickOverlay(isActive: manualPenMode)
             CapColorPickOverlay(isActive: manualCapColorMode)
 
             if manualCapColorMode {
@@ -783,9 +783,8 @@ struct ContentView: View {
             )
             return
         }
-        if let confirmedCapPoint {
+        if confirmedCapPoint != nil {
             self.confirmedCapPoint = ConfirmedCapPoint(
-                point: confirmedCapPoint.point,
                 cameraPoint: initialObservation.cameraPoint,
                 paperMm: initialObservation.paperMm
             )
@@ -1616,7 +1615,6 @@ struct ContentView: View {
 
         if let confirmedCapPoint {
             self.confirmedCapPoint = ConfirmedCapPoint(
-                point: confirmedCapPoint.point,
                 cameraPoint: confirmedCapPoint.cameraPoint,
                 paperMm: bridge.paperPointMm(cameraPoint: confirmedCapPoint.cameraPoint)
             )
