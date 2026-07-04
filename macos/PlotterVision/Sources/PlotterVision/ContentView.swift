@@ -454,8 +454,9 @@ struct ContentView: View {
     }
 
     private func toggleOperatorWindow(id: String, title: String, source: String, beforeOpen: (() -> Void)? = nil) {
-        let didClose = OperatorWindowSupport.closeWindow(title: title, identifier: id)
-        if didClose {
+        if workspace.isWindowVisible(id) || OperatorWindowSupport.isWindowOpen(title: title, identifier: id) {
+            _ = OperatorWindowSupport.closeWindow(title: title, identifier: id)
+            workspace.setWindowVisible(id, visible: false)
             bridge.recordOperatorEvent(
                 "window_toggled",
                 details: ["window_id": id, "visible": false, "source": source]
@@ -466,6 +467,10 @@ struct ContentView: View {
 
         beforeOpen?()
         openWindow(id: id)
+        workspace.setWindowVisible(id, visible: true)
+        DispatchQueue.main.async {
+            _ = OperatorWindowSupport.raiseWindow(title: title, identifier: id)
+        }
         bridge.recordOperatorEvent(
             "window_toggled",
             details: ["window_id": id, "visible": true, "source": source]
@@ -3009,7 +3014,7 @@ struct ContentView: View {
                     systemName: "rectangle.dashed",
                     label: "Plot Vid",
                     help: "Open or close plotter video controls",
-                    isActive: plotterViewport.videoFilter != .normal || plotterViewport.focusMode == .focused || plotterViewport.rotationDegrees != 0
+                    isActive: workspace.plotterVideoPanelVisible
                 ) {
                     toggleOperatorWindow(
                         id: OperatorWindowID.plotterVideoPanel,
@@ -3034,7 +3039,7 @@ struct ContentView: View {
                     systemName: "person.crop.rectangle",
                     label: "Face Vid",
                     help: "Open or close face video and portrait controls",
-                    isActive: portraitContourMonitorEnabled || bridge.faceContourPreviewOverlay != nil
+                    isActive: workspace.faceVideoPanelVisible
                 ) {
                     toggleOperatorWindow(
                         id: OperatorWindowID.faceVideoPanel,

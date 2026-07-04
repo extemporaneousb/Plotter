@@ -101,6 +101,19 @@ def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> No
     assert "CameraSelector(camera: faceCamera)" in content
     assert "toggleCameraVisibility(plotterCamera, source: \"top_bar\")" in content
     assert "toggleCameraVisibility(faceCamera, source: \"top_bar\")" in content
+    assert "@Published var plotterVideoPanelVisible = false" in workspace
+    assert "@Published var faceVideoPanelVisible = false" in workspace
+    assert '"plotter_video_panel": plotterVideoPanelVisible' in workspace
+    assert '"face_video_panel": faceVideoPanelVisible' in workspace
+    assert "workspace.setWindowVisible(OperatorWindowID.plotterVideoPanel, visible: true)" in app_main
+    assert "workspace.setWindowVisible(OperatorWindowID.plotterVideoPanel, visible: false)" in app_main
+    assert "workspace.setWindowVisible(OperatorWindowID.faceVideoPanel, visible: true)" in app_main
+    assert "workspace.setWindowVisible(OperatorWindowID.faceVideoPanel, visible: false)" in app_main
+    assert "isActive: workspace.plotterVideoPanelVisible" in content
+    assert "isActive: workspace.faceVideoPanelVisible" in content
+    assert "isActive: plotterViewport.videoFilter != .normal" not in content
+    assert "isActive: portraitContourMonitorEnabled || bridge.faceContourPreviewOverlay != nil" not in content
+    assert "raiseWindow(title: title, identifier: id)" in content
     assert "if workspace.plotterCameraVisible && workspace.faceCameraVisible" in content
     assert "else if workspace.plotterCameraVisible" in content
     assert "else if workspace.faceCameraVisible" in content
@@ -392,15 +405,21 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "let fieldAspectYPerX: Double?" not in wizard
     assert "@Binding var fieldWidthMm" in wizard
     assert "@Binding var fieldHeightMm" in wizard
-    assert "TextField(label, value: value, formatter: Self.fieldDimensionFormatter)" in wizard
-    assert "fieldDimensionControl(label: \"X\", value: fieldWidthBinding)" in wizard
-    assert "fieldDimensionControl(label: \"Y\", value: fieldHeightBinding)" in wizard
+    assert "@State private var fieldWidthText" in wizard
+    assert "@State private var fieldHeightText" in wizard
+    assert "@FocusState private var focusedFieldDimension" in wizard
+    assert "TextField(label, text: text)" in wizard
+    assert "fieldDimensionControl(label: \"X\", field: .width, text: $fieldWidthText)" in wizard
+    assert "fieldDimensionControl(label: \"Y\", field: .height, text: $fieldHeightText)" in wizard
+    assert "commitFieldDimension(_ field: FieldDimension)" in wizard
+    assert "focusedFieldDimension != .width" in wizard
+    assert "focusedFieldDimension != .height" in wizard
     assert "fieldHeightMm > fieldWidthMm" not in wizard
     assert "fieldHeightUpperBound" not in wizard
     assert "fieldHeightMm = fieldWidthMm" not in wizard
     assert "fieldHeightMm = clampedFieldDimension(width * fieldAspectYPerX)" not in wizard
-    assert "fieldWidthMm = clampedFieldDimension(newValue)" in wizard
-    assert "fieldHeightMm = clampedFieldDimension(newValue)" in wizard
+    assert "fieldWidthMm = clampedValue" in wizard
+    assert "fieldHeightMm = clampedValue" in wizard
     assert ".disabled(hasPaperLock)" not in wizard
     assert "Confirm Green Cap" in content
     assert "Run Machine-Video Probe" in content

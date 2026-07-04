@@ -34,10 +34,12 @@ struct PlotterVisionApp: App {
                 .padding(14)
                 .preferredColorScheme(.dark)
                 .onAppear {
+                    workspace.setWindowVisible(OperatorWindowID.machineControls, visible: true)
                     bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.machineControls])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
                 }
                 .onDisappear {
+                    workspace.setWindowVisible(OperatorWindowID.machineControls, visible: false)
                     bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.machineControls])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
                 }
@@ -49,10 +51,12 @@ struct PlotterVisionApp: App {
             PlotterVideoPanel(workspace: workspace, bridge: bridge)
                 .preferredColorScheme(.dark)
                 .onAppear {
+                    workspace.setWindowVisible(OperatorWindowID.plotterVideoPanel, visible: true)
                     bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.plotterVideoPanel])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
                 }
                 .onDisappear {
+                    workspace.setWindowVisible(OperatorWindowID.plotterVideoPanel, visible: false)
                     bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.plotterVideoPanel])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
                 }
@@ -64,10 +68,12 @@ struct PlotterVisionApp: App {
             FaceVideoPanel(workspace: workspace, bridge: bridge)
                 .preferredColorScheme(.dark)
                 .onAppear {
+                    workspace.setWindowVisible(OperatorWindowID.faceVideoPanel, visible: true)
                     bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.faceVideoPanel])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
                 }
                 .onDisappear {
+                    workspace.setWindowVisible(OperatorWindowID.faceVideoPanel, visible: false)
                     bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.faceVideoPanel])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
                 }
@@ -79,10 +85,12 @@ struct PlotterVisionApp: App {
             OperatorLogPanel(workspace: workspace)
                 .preferredColorScheme(.dark)
                 .onAppear {
+                    workspace.setWindowVisible(OperatorWindowID.operatorLog, visible: true)
                     bridge.recordOperatorEvent("window_visible", details: ["window_id": OperatorWindowID.operatorLog])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_visible")
                 }
                 .onDisappear {
+                    workspace.setWindowVisible(OperatorWindowID.operatorLog, visible: false)
                     bridge.recordOperatorEvent("window_hidden", details: ["window_id": OperatorWindowID.operatorLog])
                     bridge.updateOperatorUIState(workspace.diagnosticsState(), reason: "operator_ui_window_hidden")
                 }

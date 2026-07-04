@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 
 struct CalibrationWizardView: View {
+    private enum FieldDimension: Hashable {
+        case width
+        case height
+    }
+
     let workflow: BridgeCalibrationWorkflow?
     let instructionText: String
     let fiducialDetail: String
@@ -27,6 +32,9 @@ struct CalibrationWizardView: View {
     let resetVisionMachine: () -> Void
     let resetDrawingTraining: () -> Void
     let hide: () -> Void
+    @FocusState private var focusedFieldDimension: FieldDimension?
+    @State private var fieldWidthText = ""
+    @State private var fieldHeightText = ""
 
     var body: some View {
         VStack {
@@ -56,6 +64,20 @@ struct CalibrationWizardView: View {
             .padding(.top, 84)
             .padding(.horizontal, 18)
             Spacer(minLength: 0)
+        }
+        .onAppear {
+            syncDimensionTextFromBindings(force: true)
+        }
+        .onChange(of: fieldWidthMm) { _, _ in
+            syncDimensionTextFromBindings(force: false)
+        }
+        .onChange(of: fieldHeightMm) { _, _ in
+            syncDimensionTextFromBindings(force: false)
+        }
+        .onChange(of: focusedFieldDimension) { previousField, _ in
+            if let previousField {
+                commitFieldDimension(previousField)
+            }
         }
     }
 
@@ -106,23 +128,27 @@ struct CalibrationWizardView: View {
             Text("Field")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.62))
-            fieldDimensionControl(label: "X", value: fieldWidthBinding)
+            fieldDimensionControl(label: "X", field: .width, text: $fieldWidthText)
                 .help(hasPaperLock ? "Adjust X millimeters and re-lock the current video field" : "Drawing field X millimeters")
-            fieldDimensionControl(label: "Y", value: fieldHeightBinding)
+            fieldDimensionControl(label: "Y", field: .height, text: $fieldHeightText)
                 .help(hasPaperLock ? "Adjust Y millimeters and re-lock the current video field" : "Drawing field Y millimeters")
         }
         .controlSize(.mini)
     }
 
-    private func fieldDimensionControl(label: String, value: Binding<Double>) -> some View {
+    private func fieldDimensionControl(label: String, field: FieldDimension, text: Binding<String>) -> some View {
         HStack(spacing: 4) {
             Text(label)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.58))
-            TextField(label, value: value, formatter: Self.fieldDimensionFormatter)
+            TextField(label, text: text)
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .frame(width: 58)
                 .multilineTextAlignment(.trailing)
+                .focused($focusedFieldDimension, equals: field)
+                .onSubmit {
+                    commitFieldDimension(field)
+                }
             Text("mm")
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.50))
@@ -142,26 +168,50 @@ struct CalibrationWizardView: View {
         1.0...1000.0
     }
 
-    private var fieldWidthBinding: Binding<Double> {
-        Binding(
-            get: { fieldWidthMm },
-            set: { newValue in
-                fieldWidthMm = clampedFieldDimension(newValue)
-            }
-        )
-    }
-
-    private var fieldHeightBinding: Binding<Double> {
-        Binding(
-            get: { fieldHeightMm },
-            set: { newValue in
-                fieldHeightMm = clampedFieldDimension(newValue)
-            }
-        )
-    }
-
     private func clampedFieldDimension(_ value: Double) -> Double {
         min(fieldDimensionRange.upperBound, max(fieldDimensionRange.lowerBound, value))
+    }
+
+    private func formattedFieldDimension(_ value: Double) -> String {
+        let clamped = clampedFieldDimension(value)
+        return Self.fieldDimensionFormatter.string(from: NSNumber(value: clamped)) ?? String(format: "%.1f", clamped)
+    }
+
+    private func syncDimensionTextFromBindings(force: Bool) {
+        if force || focusedFieldDimension != .width {
+            fieldWidthText = formattedFieldDimension(fieldWidthMm)
+        }
+        if force || focusedFieldDimension != .height {
+            fieldHeightText = formattedFieldDimension(fieldHeightMm)
+        }
+    }
+
+    private func commitFieldDimension(_ field: FieldDimension) {
+        let currentValue = field == .width ? fieldWidthMm : fieldHeightMm
+        let rawText = field == .width ? fieldWidthText : fieldHeightText
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Double(trimmed), parsed.isFinite else {
+            setFieldDimensionText(field, formattedFieldDimension(currentValue))
+            return
+        }
+
+        let clampedValue = clampedFieldDimension(parsed)
+        switch field {
+        case .width:
+            fieldWidthMm = clampedValue
+        case .height:
+            fieldHeightMm = clampedValue
+        }
+        setFieldDimensionText(field, formattedFieldDimension(clampedValue))
+    }
+
+    private func setFieldDimensionText(_ field: FieldDimension, _ text: String) {
+        switch field {
+        case .width:
+            fieldWidthText = text
+        case .height:
+            fieldHeightText = text
+        }
     }
 
     private var actions: some View {

@@ -36,6 +36,10 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var operatorLog: [OperatorLogEntry] = []
     @Published var calibrationWizardSnapshot = CalibrationWizardSnapshot.idle
     @Published var pendingPanelCommand: OperatorPanelCommandRequest?
+    @Published var machineControlsVisible = false
+    @Published var plotterVideoPanelVisible = false
+    @Published var faceVideoPanelVisible = false
+    @Published var operatorLogVisible = false
 
     private init() {}
 
@@ -69,6 +73,36 @@ final class OperatorWorkspaceState: ObservableObject {
         pendingPanelCommand = OperatorPanelCommandRequest(command: command)
     }
 
+    func setWindowVisible(_ id: String, visible: Bool) {
+        switch id {
+        case OperatorWindowID.machineControls:
+            machineControlsVisible = visible
+        case OperatorWindowID.plotterVideoPanel:
+            plotterVideoPanelVisible = visible
+        case OperatorWindowID.faceVideoPanel:
+            faceVideoPanelVisible = visible
+        case OperatorWindowID.operatorLog:
+            operatorLogVisible = visible
+        default:
+            break
+        }
+    }
+
+    func isWindowVisible(_ id: String) -> Bool {
+        switch id {
+        case OperatorWindowID.machineControls:
+            machineControlsVisible
+        case OperatorWindowID.plotterVideoPanel:
+            plotterVideoPanelVisible
+        case OperatorWindowID.faceVideoPanel:
+            faceVideoPanelVisible
+        case OperatorWindowID.operatorLog:
+            operatorLogVisible
+        default:
+            false
+        }
+    }
+
     func diagnosticsState() -> [String: Any] {
         [
             "workspace": [
@@ -78,11 +112,11 @@ final class OperatorWorkspaceState: ObservableObject {
                 "empty": !plotterCameraVisible && !faceCameraVisible
             ],
             "windows": [
-                "machine_controls": OperatorWindowSupport.isWindowOpen(title: "Machine", identifier: OperatorWindowID.machineControls),
+                "machine_controls": machineControlsVisible,
                 "calibration_wizard": calibrationWizardActive,
-                "plotter_video_panel": OperatorWindowSupport.isWindowOpen(title: "Plotter Video", identifier: OperatorWindowID.plotterVideoPanel),
-                "face_video_panel": OperatorWindowSupport.isWindowOpen(title: "Face Video", identifier: OperatorWindowID.faceVideoPanel),
-                "operator_log": OperatorWindowSupport.isWindowOpen(title: "Log", identifier: OperatorWindowID.operatorLog)
+                "plotter_video_panel": plotterVideoPanelVisible,
+                "face_video_panel": faceVideoPanelVisible,
+                "operator_log": operatorLogVisible
             ],
             "cameras": [
                 "plotter": [
