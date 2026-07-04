@@ -3358,6 +3358,9 @@ struct ContentView: View {
             if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return false
             }
+            if action.requiresDrawing {
+                return bridge.canRunAbsoluteDrawing
+            }
             switch action.id {
             case "confirm_green_cap":
                 return true
@@ -3386,6 +3389,9 @@ struct ContentView: View {
         if let action = wizardVisibleWorkflowPrimaryAction {
             if action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return bridge.calibrationWorkflow?.currentBlocker
+            }
+            if action.requiresDrawing {
+                return bridge.drawPreflightMessage
             }
             if action.requiresMotion {
                 if !bridge.isLiveMotionMode { return bridge.motionGateMessage }

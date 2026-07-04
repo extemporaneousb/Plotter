@@ -624,6 +624,8 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "CAL motion calibration using adjusted drawing border" in content
     assert 'resetCalibrationSetup(scope: "vision_machine")' in content
     assert 'resetCalibrationSetup(scope: "drawing_training")' in content
+    assert "private var showsVisionMachineReset: Bool {\n        true\n    }" in wizard
+    assert "return !isDownstreamDrawingPhase(phase)" not in wizard
     assert "NSAlert" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Calibrate Vision-Machine Interface" in wizard

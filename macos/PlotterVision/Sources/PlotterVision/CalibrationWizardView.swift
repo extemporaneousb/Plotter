@@ -252,8 +252,7 @@ struct CalibrationWizardView: View {
     }
 
     private var showsVisionMachineReset: Bool {
-        guard let phase = workflow?.phase else { return true }
-        return !isDownstreamDrawingPhase(phase)
+        true
     }
 
     private var isDrawingTrainingPhase: Bool {

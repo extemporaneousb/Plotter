@@ -3064,6 +3064,9 @@ class PlotterBridge:
     ) -> DrawingCalibrationSessionActionResponse:
         command_id = request.request_id or request.trace_id or f"drawing-session-run-{uuid.uuid4().hex[:12]}"
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
+        session: DrawingCalibrationSession | None = None
+        batch: DrawingCalibrationBatch | None = None
+        batch_plan: DrawingCalibrationBatchPlan | None = None
         try:
             session = self._load_drawing_session_for_request(request.session_id)
             self._validate_session_current(session)
@@ -3116,18 +3119,39 @@ class PlotterBridge:
                 run=run,
             )
         except Exception as exc:
+            error = str(exc)
+            if session is not None:
+                if batch is None:
+                    batch = self._workflow_current_batch(session)
+                if batch is not None:
+                    batch.status = "blocked"
+                    batch.blockers = list(dict.fromkeys([*batch.blockers, error]))
+                session.status = "blocked"
+                session.blockers = list(dict.fromkeys([*session.blockers, error]))
+                self._save_drawing_session(session)
             self.event_log.emit(
                 "calibration.drawing_batch_run_failed",
                 command_id=command_id,
                 status="failed",
-                payload={"error": str(exc)},
+                payload={
+                    "session_id": session.session_id if session is not None else None,
+                    "batch_id": batch.batch_id if batch is not None else None,
+                    "error": error,
+                },
             )
+            if session is not None:
+                return self._drawing_session_action_response(
+                    session=session,
+                    batch=batch,
+                    program=batch_plan.program if batch_plan is not None else None,
+                    error=error,
+                )
             return DrawingCalibrationSessionActionResponse(
                 status="failed",
                 dry_run=self.config.dry_run,
                 session_file=str(self._latest_drawing_calibration_session_path()),
                 calibration_file=str(self._latest_drawing_calibration_path()),
-                error=str(exc),
+                error=error,
             )
 
     def observe_drawing_session_batch(
@@ -5429,9 +5453,16 @@ class PlotterBridge:
                 raise MotionSafetyError("Axis model trust sample observed displacement is too small.")
 
     def _require_axis_model_trusted(self, machine: MachineConfig) -> None:
-        if self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot():
+        if self._has_drawing_execution_authority(machine):
             return
-        raise MotionSafetyError(
+        raise MotionSafetyError(self._drawing_execution_blocker())
+
+    def _has_drawing_execution_authority(self, machine: MachineConfig | None = None) -> bool:
+        machine = machine or self._load_machine_config()
+        return bool(self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot())
+
+    def _drawing_execution_blocker(self) -> str:
+        return (
             "Real drawing requires axis_model_trusted=true or a validated future ink "
             "binding. Cap-only visual readiness is relative evidence and "
             "cannot unlock absolute drawing."
@@ -5760,6 +5791,7 @@ class PlotterBridge:
         run: DrawingCalibrationProgramResponse | None = None,
         observation_id: str | None = None,
         retry_scheduled: bool = False,
+        error: str | None = None,
     ) -> DrawingCalibrationSessionActionResponse:
         if calibration is None:
             calibration = self._load_latest_drawing_calibration_or_none()
@@ -5776,6 +5808,7 @@ class PlotterBridge:
             run=run,
             observation_id=observation_id,
             retry_scheduled=retry_scheduled,
+            error=error,
         )
 
     def _policy_safe_zone_or_none(
@@ -6153,6 +6186,10 @@ class PlotterBridge:
         else:
             phase = "drawing_training"
             next_action = self._workflow_action("validate_metrics", "Validate Metrics")
+
+        if next_action.get("requires_drawing") and not self._has_drawing_execution_authority():
+            blocker = self._drawing_execution_blocker()
+            next_action = {**next_action, "enabled": False}
 
         steps = self._workflow_steps(
             state=state,
@@ -7817,7 +7854,7 @@ def _make_handler(bridge: PlotterBridge) -> type[BaseHTTPRequestHandler]:
         "/calibration/drawing/session/run-batch": PostRoute(
             DrawingCalibrationSessionBatchRequest,
             bridge.run_drawing_session_batch,
-            lambda response: getattr(response, "status", "") in {"awaiting_observation", "collecting", "ready"},
+            lambda response: getattr(response, "status", "") in {"awaiting_observation", "collecting", "ready", "blocked"},
         ),
         "/calibration/drawing/session/observe-batch": PostRoute(
             DrawingCalibrationSessionObservationRequest,

@@ -698,6 +698,70 @@ def test_motion_model_valid_does_not_unlock_real_drawing(tmp_path: Path) -> None
     assert "absolute drawing" in drawing["error"]
 
 
+def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_path: Path) -> None:
+    config_path = _write_machine_config(tmp_path)
+    bridge = _bridge(
+        tmp_path=tmp_path,
+        config_path=config_path,
+        dry_run=False,
+        arm_motion=True,
+        arm_pen=True,
+    )
+
+    with _running_bridge(bridge) as client:
+        _register_field_and_observe_cap(client)
+        for payload in _probe_sample_payloads(run_id="probe-run-no-batch-authority"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        status_code, started = client.post(
+            "/calibration/drawing/session/start",
+            {
+                "pen_ready_confirmed": True,
+                "pen_ready_confirmation": {"source": "operator_confirmed", "operator": "test"},
+            },
+        )
+        assert status_code == 200
+        session_id = started["session"]["session_id"]
+
+        status_code, previewed = client.post(
+            "/calibration/drawing/session/preview-next-batch",
+            {"session_id": session_id},
+        )
+        assert status_code == 200
+        batch_id = previewed["batch"]["batch_id"]
+
+        status_code, workflow = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        action = workflow["workflow"]["next_primary_action"]
+        assert action["id"] == "run_batch"
+        assert action["enabled"] is False
+        assert action["requires_drawing"] is True
+        assert "future ink binding" in workflow["workflow"]["current_blocker"]
+
+        status_code, run = client.post(
+            "/calibration/drawing/session/run-batch",
+            {
+                "session_id": session_id,
+                "batch_id": batch_id,
+                "expected_plan_hash": previewed["preview"]["plan_hash"],
+                "request_id": "batch-run-no-authority",
+            },
+        )
+
+        assert status_code == 200
+        assert run["status"] == "blocked"
+        assert run["session"]["status"] == "blocked"
+        assert run["batch"]["status"] == "blocked"
+        assert "future ink binding" in run["batch"]["blockers"][0]
+
+        status_code, blocked = client.get("/calibration/workflow/status")
+        assert status_code == 200
+        assert blocked["workflow"]["phase"] == "blocked"
+        assert blocked["workflow"]["next_primary_action"]["id"] == "recovery_action"
+        assert "future ink binding" in blocked["workflow"]["current_blocker"]
+
+
 def test_visual_probe_preview_and_run_routes_are_removed(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
