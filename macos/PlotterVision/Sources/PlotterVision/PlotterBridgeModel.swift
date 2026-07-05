@@ -1063,6 +1063,8 @@ final class PlotterBridgeModel: ObservableObject {
                 [
                     "status": response.status,
                     "workflow_phase": response.workflow?.phase ?? "",
+                    "workflow_activity": response.workflow?.activity ?? "",
+                    "workflow_health": response.workflow?.health ?? "",
                     "ready_to_draw": response.workflow?.readyToDraw ?? false,
                     "motion_model_valid": response.readiness?.motionModelValid ?? false,
                     "has_relative_motion_model": response.readiness?.relativeMotionModel != nil,
@@ -1096,7 +1098,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             latestVisualReadiness = response.readiness
             calibrationWorkflow = response.workflow
-            adaptiveProbeStatus = response.workflow?.phase == "machine_video_agreement"
+            adaptiveProbeStatus = response.workflow?.phase == "needs_drawing_border"
                 ? "PROBE READY"
                 : adaptiveProbeStatus
             statusText = visualReadinessWorkflowStatusText(
@@ -1110,6 +1112,8 @@ final class PlotterBridgeModel: ObservableObject {
                 [
                     "status": response.status,
                     "workflow_phase": response.workflow?.phase ?? "",
+                    "workflow_activity": response.workflow?.activity ?? "",
+                    "workflow_health": response.workflow?.health ?? "",
                     "next_action": response.workflow?.nextPrimaryAction.id ?? "",
                     "confidence": confidence
                 ],

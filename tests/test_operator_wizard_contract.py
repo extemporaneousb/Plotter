@@ -389,6 +389,9 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" not in app_main
     assert "Calibrate Vision-Machine Interface" in wizard
     assert "BridgeCalibrationWorkflow" in wizard
+    assert "workflow.phase.uppercased()" in wizard
+    assert "workflow.activity" in wizard
+    assert "workflow.health" in wizard
     assert "BridgeCalibrationCapConfirmationRequest" in client
     assert 'post(path: "calibration/workflow/cap/confirm"' in client
     assert "confirmCalibrationCap(" in model
@@ -723,7 +726,9 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     )[0]
     assert 'case "run_machine_video_probe":' in visible_action
     assert 'case "run_motion_calibration":' in visible_action
-    assert 'workflow.phase != "stale_downstream"' in visible_action
+    assert 'workflow.phase != "stale_downstream"' not in visible_action
+    assert 'workflow.health == "stale"' in visible_action
+    assert 'workflow.health == "stale_and_blocked"' in visible_action
     assert "return nil" in visible_action
     validation = content.split("private func runWizardMotionValidation", 1)[1].split(
         "private func wizardMotionValidationTarget",

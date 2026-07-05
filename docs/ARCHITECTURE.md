@@ -56,8 +56,11 @@ the contract.
 The app-first drawing flow runs through the single **Calibrate Vision-Machine
 Interface** workflow. `GET /calibration/workflow/status` is the composed
 workflow authority: phase, `ready_to_draw`, ordered steps, current blocker, next
-primary action, safe auto-actions, freshness ids, stale downstream evidence, and
-overlay badge state.
+primary action, safe auto-actions, freshness ids, activity, health, stale
+downstream evidence, and overlay badge state. `phase` is the progress plateau;
+`activity` is the current operation or wait state; `health` carries meta-state
+such as stale or blocked. Stale downstream evidence and blocked recovery
+conditions are not workflow phases.
 
 1. Start the app against an app-owned dry-run hardware-standby bridge or a
    deliberate diagnostic bridge.
@@ -112,29 +115,66 @@ overlay badge state.
 ```mermaid
 stateDiagram-v2
     [*] --> needs_cap: no cap confirmation
-    needs_cap --> machine_video_agreement: Confirm Green Cap
-    machine_video_agreement --> drawing_border_locked: Run Machine-Video Probe / lock Drawing Border
-    drawing_border_locked --> motion_validated: Run Motion Calibration + Validate Cap Target
+    needs_cap --> needs_drawing_border: Confirm Green Cap
+    needs_drawing_border --> motion_calibration: Run Machine-Video Probe / lock Drawing Border
+    motion_calibration --> motion_validated: Run Motion Calibration + Validate Cap Target
     motion_validated --> pen_ready: Confirm Pen Ready
     pen_ready --> drawing_training: Preview Batch
     drawing_training --> drawing_training: Run Batch / Observe Ink / Fit / Validate
     drawing_training --> drawing_retry: weak or missing ink evidence
     drawing_retry --> drawing_training: Redraw Same Batch
     drawing_training --> drawing_validated: model gates pass
-    drawing_validated --> ready_to_draw: Promote Current Model
-
-    drawing_border_locked --> stale_downstream: Drawing Border changes
-    motion_validated --> stale_downstream: Drawing Border/camera/field changes
-    pen_ready --> stale_downstream: Drawing Border/camera/field changes
-    drawing_training --> stale_downstream: Drawing Border/camera/field changes
-    drawing_validated --> stale_downstream: Drawing Border/camera/field changes
-    ready_to_draw --> stale_downstream: Drawing Border/camera/field changes
-
-    stale_downstream --> drawing_border_locked: rerun motion calibration for current border
-    drawing_training --> blocked: retry/session blocker
-    drawing_retry --> blocked: retry budget exhausted
-    blocked --> stale_downstream: reset affected evidence
+    drawing_validated --> ready_to_draw: Promote Current Model + drawing execution authority
 ```
+
+Allowed workflow phases:
+
+```text
+needs_cap
+needs_drawing_border
+motion_calibration
+motion_validated
+pen_ready
+drawing_training
+drawing_retry
+drawing_validated
+ready_to_draw
+```
+
+Allowed workflow activities:
+
+```text
+idle
+confirming_cap
+awaiting_machine_video_probe
+registering_border
+running_machine_video_probe
+awaiting_motion_probe
+running_motion_probe
+awaiting_motion_observation
+awaiting_drawing_preview
+awaiting_drawing_run
+running_drawing_batch
+awaiting_drawing_observation
+fitting_model
+validating_model
+running_machine_action
+```
+
+Allowed workflow health values:
+
+```text
+nominal
+stale
+blocked
+stale_and_blocked
+```
+
+Changing the Drawing Border, camera, or field dimensions sets `health: stale`
+when downstream evidence no longer belongs to the current authority. Retry
+exhaustion, missing drawing execution authority, or a blocked drawing session
+sets `health: blocked`. The UI renders phase, activity, and health together
+instead of inventing synthetic phases for stale or blocked conditions.
 
 ## Evidence Boundaries
 

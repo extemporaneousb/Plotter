@@ -267,8 +267,7 @@ struct CalibrationWizardView: View {
             "drawing_training",
             "drawing_retry",
             "drawing_validated",
-            "ready_to_draw",
-            "blocked"
+            "ready_to_draw"
         ].contains(phase)
     }
 
@@ -284,16 +283,34 @@ struct CalibrationWizardView: View {
     }
 
     private var summary: some View {
-        HStack(spacing: 8) {
-            Label(capDetected ? "cap detected" : "cap not detected", systemImage: "circle.fill")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(capDetected ? .green.opacity(0.92) : .yellow.opacity(0.86))
-            Text(String(format: "FIELD %@  CAP %@  LIVE %@",
-                        hasPaperLock ? "LOCK" : "--",
-                        capStateLabel,
-                        isLiveMotionMode ? "YES" : "NO"))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.54))
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Label(capDetected ? "cap detected" : "cap not detected", systemImage: "circle.fill")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(capDetected ? .green.opacity(0.92) : .yellow.opacity(0.86))
+                Text(String(format: "FIELD %@  CAP %@  LIVE %@",
+                            hasPaperLock ? "LOCK" : "--",
+                            capStateLabel,
+                            isLiveMotionMode ? "YES" : "NO"))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.54))
+            }
+            if let workflow {
+                Text("PHASE \(workflow.phase.uppercased())  ACT \((workflow.activity ?? "idle").uppercased())  HEALTH \((workflow.health ?? "nominal").uppercased())")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(workflowHealthColor(workflow.health))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+        }
+    }
+
+    private func workflowHealthColor(_ health: String?) -> Color {
+        switch health {
+        case "blocked", "stale", "stale_and_blocked":
+            return .orange.opacity(0.9)
+        default:
+            return .white.opacity(0.54)
         }
     }
 }

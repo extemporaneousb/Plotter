@@ -3304,7 +3304,8 @@ struct ContentView: View {
                 return nil
             }
         case "run_motion_calibration":
-            if workflow.phase != "stale_downstream" && (frameLearning.status == "MEASURED" || visualMotionValidated) {
+            let staleHealth = workflow.health == "stale" || workflow.health == "stale_and_blocked"
+            if !staleHealth && (frameLearning.status == "MEASURED" || visualMotionValidated) {
                 return nil
             }
         default:

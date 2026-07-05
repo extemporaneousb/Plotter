@@ -12,6 +12,9 @@ import pytest
 
 from plotter_vision.bridge.server import (
     BridgeRuntimeConfig,
+    CALIBRATION_WORKFLOW_ACTIVITIES,
+    CALIBRATION_WORKFLOW_HEALTH_VALUES,
+    CALIBRATION_WORKFLOW_PHASES,
     LocalThreadingHTTPServer,
     PlotterBridge,
     _make_handler,
@@ -26,6 +29,38 @@ from plotter_vision.config import MachineConfig
 from plotter_vision.drawing import DrawingFrameMM
 
 
+def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets() -> None:
+    assert set(CALIBRATION_WORKFLOW_PHASES) == {
+        "needs_cap",
+        "needs_drawing_border",
+        "motion_calibration",
+        "motion_validated",
+        "pen_ready",
+        "drawing_training",
+        "drawing_retry",
+        "drawing_validated",
+        "ready_to_draw",
+    }
+    assert set(CALIBRATION_WORKFLOW_ACTIVITIES) == {
+        "idle",
+        "confirming_cap",
+        "awaiting_machine_video_probe",
+        "registering_border",
+        "running_machine_video_probe",
+        "awaiting_motion_probe",
+        "running_motion_probe",
+        "awaiting_motion_observation",
+        "awaiting_drawing_preview",
+        "awaiting_drawing_run",
+        "running_drawing_batch",
+        "awaiting_drawing_observation",
+        "fitting_model",
+        "validating_model",
+        "running_machine_action",
+    }
+    assert set(CALIBRATION_WORKFLOW_HEALTH_VALUES) == {"nominal", "stale", "blocked", "stale_and_blocked"}
+
+
 def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
 
@@ -36,6 +71,8 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert any("Visual field registration" in blocker for blocker in status["readiness"]["blockers"])
         assert status["workflow"]["ready_to_draw"] is False
         assert status["workflow"]["phase"] == "needs_cap"
+        assert status["workflow"]["activity"] == "confirming_cap"
+        assert status["workflow"]["health"] == "nominal"
         assert status["workflow"]["next_primary_action"]["id"] == "confirm_green_cap"
 
         registration = _register_field(client)
@@ -51,8 +88,21 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert readiness["relative_motion_model"] is None
         assert readiness["visual_ready_to_plot"] is False
         assert any("Motion calibration" in blocker for blocker in readiness["blockers"])
-        assert observed["workflow"]["phase"] == "drawing_border_locked"
-        assert observed["workflow"]["overlay_badge"]["state"] == "border_locked"
+        assert observed["workflow"]["phase"] == "motion_calibration"
+        assert observed["workflow"]["activity"] == "awaiting_motion_probe"
+        assert observed["workflow"]["health"] == "nominal"
+        assert observed["workflow"]["overlay_badge"]["state"] == "motion_calibration"
+
+        bridge._set_active_command(command_id="motion-test", action="jog")
+        try:
+            status_code, active_motion = client.get("/calibration/workflow/status")
+        finally:
+            bridge._set_active_command(command_id=None, action=None)
+        assert status_code == 200
+        assert active_motion["workflow"]["phase"] == "motion_calibration"
+        assert active_motion["workflow"]["activity"] == "running_motion_probe"
+        assert active_motion["workflow"]["health"] == "nominal"
+        assert active_motion["workflow"]["overlay_badge"]["state"] == "running_motion_probe"
 
 
 def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: Path) -> None:
@@ -72,7 +122,9 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
         assert status_code == 200
         assert confirmed["readiness"]["paper_registered"] is False
         assert confirmed["readiness"]["cap_localized"] is False
-        assert confirmed["workflow"]["phase"] == "machine_video_agreement"
+        assert confirmed["workflow"]["phase"] == "needs_drawing_border"
+        assert confirmed["workflow"]["activity"] == "awaiting_machine_video_probe"
+        assert confirmed["workflow"]["health"] == "nominal"
         assert confirmed["workflow"]["next_primary_action"]["id"] == "run_machine_video_probe"
         assert confirmed["workflow"]["freshness"]["cap_confirmed"] is True
         assert confirmed["workflow"]["freshness"]["cap_confirmation_id"].startswith("cap-confirm-")
@@ -80,7 +132,7 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
 
         status_code, status = client.get("/calibration/workflow/status")
         assert status_code == 200
-        assert status["workflow"]["phase"] == "machine_video_agreement"
+        assert status["workflow"]["phase"] == "needs_drawing_border"
         assert status["workflow"]["freshness"]["cap_confirmation_id"] == confirmed["workflow"]["freshness"]["cap_confirmation_id"]
 
         status_code, reset = client.post(
@@ -389,11 +441,14 @@ def test_workflow_surfaces_stale_drawing_border_downstream_evidence(tmp_path: Pa
 
     assert status_code == 200
     workflow = workflow_status["workflow"]
-    assert workflow["phase"] == "stale_downstream"
+    assert workflow["phase"] == "motion_calibration"
+    assert workflow["health"] == "stale"
+    assert workflow["is_stale"] is True
+    assert workflow["activity"] == "awaiting_motion_probe"
     assert workflow["ready_to_draw"] is False
     assert workflow["current_blocker"].startswith("Current Drawing Border invalidated downstream evidence")
     assert workflow["next_primary_action"]["id"] == "run_motion_calibration"
-    assert workflow["overlay_badge"]["state"] == "blocked"
+    assert workflow["overlay_badge"]["state"] == "stale"
     assert any("Drawing calibration session" in reason for reason in workflow["freshness"]["stale_reasons"])
 
 
@@ -737,6 +792,9 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         assert action["id"] == "run_batch"
         assert action["enabled"] is False
         assert action["requires_drawing"] is True
+        assert workflow["workflow"]["phase"] == "drawing_training"
+        assert workflow["workflow"]["health"] == "blocked"
+        assert workflow["workflow"]["activity"] == "awaiting_drawing_run"
         assert "future ink binding" in workflow["workflow"]["current_blocker"]
 
         status_code, run = client.post(
@@ -757,7 +815,8 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
 
         status_code, blocked = client.get("/calibration/workflow/status")
         assert status_code == 200
-        assert blocked["workflow"]["phase"] == "blocked"
+        assert blocked["workflow"]["phase"] == "drawing_training"
+        assert blocked["workflow"]["health"] == "blocked"
         assert blocked["workflow"]["next_primary_action"]["id"] == "recovery_action"
         assert "future ink binding" in blocked["workflow"]["current_blocker"]
 
