@@ -439,9 +439,18 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Window(PlotterWindowConfiguration.setupTitle, id: OperatorWindowID.setupPanel)" not in app_main
     assert "Calibrate Vision-Machine Interface" in wizard
     assert "BridgeCalibrationWorkflow" in wizard
-    assert "workflow.phase.uppercased()" in wizard
-    assert "workflow.activity" in wizard
-    assert "workflow.health" in wizard
+    assert "workflowStateStrip" in wizard
+    assert "workflowPhaseLabel(workflow.phase)" in wizard
+    assert "workflowActivityLabel(workflow.activity)" in wizard
+    assert "workflowHealthLabel(workflow.health)" in wizard
+    assert "workflowIssueText" in wizard
+    assert "operatorWorkflowStepTitle(step)" in wizard
+    assert "operatorWorkflowActionLabel(action)" in wizard
+    assert "title: step.label" not in wizard
+    assert "workflow?.nextPrimaryAction.label" not in wizard
+    assert 'case "motion_validation":' in wizard
+    assert 'case "validate_cap_target":' in wizard
+    assert 'case "Validate Cap Target":' in wizard
     assert "BridgeCalibrationCapConfirmationRequest" in client
     assert 'post(path: "calibration/workflow/cap/confirm"' in client
     assert "confirmCalibrationCap(" in model
@@ -677,6 +686,8 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     assert "CAL motion calibration using adjusted drawing border" in content
     assert 'resetCalibrationSetup(scope: "vision_machine")' in content
     assert 'resetCalibrationSetup(scope: "drawing_training")' in content
+    assert "Clears only drawing-session and drawing-model pointers" in wizard
+    assert "Clears cap confirmation, Drawing Border, motion evidence" in wizard
     assert "private var showsVisionMachineReset: Bool {" in wizard
     assert "return !isDownstreamDrawingPhase(phase)" in wizard
     downstream_phase_block = wizard.split("private func isDownstreamDrawingPhase", 1)[1].split(
