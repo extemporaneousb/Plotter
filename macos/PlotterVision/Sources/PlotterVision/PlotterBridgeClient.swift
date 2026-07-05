@@ -977,6 +977,7 @@ struct BridgeCalibrationWorkflow: Decodable, Equatable {
     let currentBlocker: String?
     let nextPrimaryAction: BridgeCalibrationWorkflowAction
     let safeAutoActions: [String]
+    let resetActions: [BridgeCalibrationWorkflowResetAction]
     let freshness: BridgeCalibrationWorkflowFreshness
     let overlayBadge: BridgeCalibrationWorkflowBadge
 }
@@ -994,6 +995,20 @@ struct BridgeCalibrationWorkflowAction: Decodable, Equatable {
     let enabled: Bool
     let requiresMotion: Bool
     let requiresDrawing: Bool
+}
+
+struct BridgeCalibrationWorkflowResetAction: Decodable, Equatable, Identifiable {
+    let id: String
+    let label: String
+    let role: String
+    let enabled: Bool
+    let scope: String
+    let help: String
+    let confirmationTitle: String
+    let confirmationMessage: String
+    let requestedStatus: String
+    let canceledStatus: String
+    let completedStatus: String
 }
 
 struct BridgeCalibrationWorkflowFreshness: Decodable, Equatable {

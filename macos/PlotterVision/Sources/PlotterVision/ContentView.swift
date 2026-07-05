@@ -3091,8 +3091,7 @@ struct ContentView: View {
             fieldWidthMm: $workspace.visualFieldWidthMm,
             fieldHeightMm: $workspace.visualFieldHeightMm,
             primaryAction: runCalibrationWizardPrimaryAction,
-            resetVisionMachine: resetVisionMachineCalibration,
-            resetDrawingTraining: resetDrawingTraining,
+            resetAction: runCalibrationWorkflowResetAction,
             hide: hideCalibrationWizard
         )
     }
@@ -3295,25 +3294,6 @@ struct ContentView: View {
         return "Validate motion before drawing training"
     }
 
-    private var wizardVisibleWorkflowPrimaryAction: BridgeCalibrationWorkflowAction? {
-        guard let workflow = bridge.calibrationWorkflow else { return nil }
-        let action = workflow.nextPrimaryAction
-        switch action.id {
-        case "run_field_registration_probe":
-            if bridge.hasPaperLock || fieldRegistrationProbeModel != nil || motionCalibration.status == "MEASURED" || visualMotionValidated {
-                return nil
-            }
-        case "run_motion_calibration":
-            let staleHealth = workflow.isStale || workflow.health == "stale" || workflow.health == "stale_and_blocked"
-            if !staleHealth && (motionCalibration.status == "MEASURED" || visualMotionValidated) {
-                return nil
-            }
-        default:
-            break
-        }
-        return action
-    }
-
     private var wizardInstructionText: String {
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil
@@ -3337,9 +3317,7 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionTitle: String {
-        if let action = wizardVisibleWorkflowPrimaryAction {
-            return action.label
-        }
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction { return action.label }
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil ? "Click Green Cap" : "Confirm Green Cap"
         }
@@ -3355,29 +3333,17 @@ struct ContentView: View {
     }
 
     private var wizardPrimaryActionEnabled: Bool {
-        if let action = wizardVisibleWorkflowPrimaryAction {
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
             if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return false
             }
             if action.requiresDrawing {
                 return bridge.canRunAbsoluteDrawing
             }
-            switch action.id {
-            case "confirm_green_cap":
-                return true
-            case "run_field_registration_probe":
+            if action.requiresMotion {
                 return canRunWizardMotionProbe
-            case "run_motion_calibration":
-                if bridge.calibrationWorkflow?.isStale == true {
-                    return canRunWizardMotionProbe
-                }
-                return motionCalibration.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
-            case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
-                 "observe_ink", "fit_model", "validate_metrics", "promote_model":
-                return visualMotionValidated || bridge.latestVisualReadiness?.visualReadyToPlot == true
-            default:
-                return true
             }
+            return true
         }
         if confirmedCapPoint == nil {
             return true
@@ -3392,7 +3358,7 @@ struct ContentView: View {
 
     private var wizardPrimaryActionDisabledReason: String? {
         guard !wizardPrimaryActionEnabled else { return nil }
-        if let action = wizardVisibleWorkflowPrimaryAction {
+        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
             if action.id == "ready_to_draw" || action.id == "recovery_action" {
                 return bridge.calibrationWorkflow?.currentBlocker
             }
@@ -3441,11 +3407,10 @@ struct ContentView: View {
                 runWizardMotionProbeAction(statusText: "FIELD field registration probe requested")
                 return
             case "run_motion_calibration":
-                if bridge.calibrationWorkflow?.isStale == true || motionCalibration.status != "MEASURED" {
-                    runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
-                } else {
-                    validateWizardMotion()
-                }
+                runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
+                return
+            case "validate_motion":
+                validateWizardMotion()
                 return
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
@@ -3681,32 +3646,27 @@ struct ContentView: View {
         publishOperatorUIState(reason: "operator_ui_setup_hidden")
     }
 
-    private func resetVisionMachineCalibration() {
-        let message = "This clears current Drawing Border, motion, pen confirmation, drawing session, and drawing model pointers. History is preserved."
-        guard confirmCalibrationReset(title: "Reset Vision-Machine Setup?", message: message) else {
-            calibrationStatusText = "FIELD reset canceled"
+    private func runCalibrationWorkflowResetAction(_ action: BridgeCalibrationWorkflowResetAction) {
+        guard action.enabled else {
+            calibrationStatusText = action.help
             return
         }
-        clearVisionMachineWizardState(resetFiducials: true)
-        calibrationStatusText = "FIELD full reset requested"
-        Task {
-            _ = await bridge.resetCalibrationSetup(scope: "vision_machine")
+        guard confirmCalibrationReset(title: action.confirmationTitle, message: action.confirmationMessage) else {
+            calibrationStatusText = action.canceledStatus
+            return
+        }
+        if action.scope == "vision_machine" {
             clearVisionMachineWizardState(resetFiducials: true)
-            calibrationStatusText = "FIELD reset; confirm green cap"
         }
-    }
-
-    private func resetDrawingTraining() {
-        let message = "This clears only the current drawing training session and promoted drawing model pointers. Vision-machine setup is preserved."
-        guard confirmCalibrationReset(title: "Reset Drawing Training?", message: message) else {
-            calibrationStatusText = "DRAW training reset canceled"
-            return
-        }
-        calibrationStatusText = "DRAW training reset requested"
+        calibrationStatusText = action.requestedStatus
         Task {
-            _ = await bridge.resetCalibrationSetup(scope: "drawing_training")
-            await refreshWorkflowSnapshot()
-            calibrationStatusText = "DRAW training reset"
+            _ = await bridge.resetCalibrationSetup(scope: action.scope)
+            if action.scope == "vision_machine" {
+                clearVisionMachineWizardState(resetFiducials: true)
+            } else {
+                await refreshWorkflowSnapshot()
+            }
+            calibrationStatusText = action.completedStatus
         }
     }
 

@@ -29,8 +29,7 @@ struct CalibrationWizardView: View {
     @Binding var fieldWidthMm: Double
     @Binding var fieldHeightMm: Double
     let primaryAction: () -> Void
-    let resetVisionMachine: () -> Void
-    let resetDrawingTraining: () -> Void
+    let resetAction: (BridgeCalibrationWorkflowResetAction) -> Void
     let hide: () -> Void
     @FocusState private var focusedFieldDimension: FieldDimension?
     @State private var fieldWidthText = ""
@@ -109,7 +108,7 @@ struct CalibrationWizardView: View {
                 ForEach(Array(workflow.steps.enumerated()), id: \.element.id) { offset, step in
                     CalibrationWizardStepRow(
                         index: offset + 1,
-                        title: operatorWorkflowStepTitle(step),
+                        title: step.label,
                         detail: step.detail,
                         status: CalibrationWizardStepStatus(workflowState: step.state)
                     )
@@ -219,68 +218,45 @@ struct CalibrationWizardView: View {
         HStack(spacing: 8) {
             Button(action: primaryAction) {
                 Label(
-                    operatorPrimaryActionTitle,
+                    workflow?.nextPrimaryAction.label ?? primaryActionTitle,
                     systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
                 )
             }
             .buttonStyle(.borderedProminent)
             .tint(primaryActionEnabled ? .cyan : .gray)
             .disabled(!primaryActionEnabled)
-            .help(operatorPrimaryActionHelp)
+            .help(primaryActionDisabledReason ?? workflow?.currentBlocker ?? primaryActionTitle)
 
-            if showsDrawingTrainingReset {
-                Button("Reset Training", action: resetDrawingTraining)
+            if let workflow {
+                ForEach(workflow.resetActions) { action in
+                    Button(role: resetButtonRole(action.role)) {
+                        resetAction(action)
+                    } label: {
+                        Label(action.label, systemImage: resetButtonSystemImage(action.role))
+                    }
                     .buttonStyle(.bordered)
-                    .disabled(!hasDrawingTrainingArtifacts)
-                    .help("Clears only drawing-session and drawing-model pointers; vision-machine setup stays current.")
-            }
-
-            if showsVisionMachineReset {
-                Button(role: .destructive, action: resetVisionMachine) {
-                    Label("Full Reset", systemImage: "exclamationmark.triangle")
+                    .disabled(!action.enabled)
+                    .help(action.help)
                 }
-                .buttonStyle(.bordered)
-                .help("Clears cap confirmation, Drawing Border, motion evidence, training session, and drawing model pointers.")
             }
         }
         .controlSize(.small)
     }
 
-    private var hasDrawingTrainingArtifacts: Bool {
-        workflow?.freshness.drawingSessionId != nil || workflow?.freshness.drawingModelId != nil
+    private func resetButtonRole(_ role: String) -> ButtonRole? {
+        role == "destructive" ? .destructive : nil
     }
 
-    private var showsDrawingTrainingReset: Bool {
-        hasDrawingTrainingArtifacts || isDrawingTrainingPhase
-    }
-
-    private var showsVisionMachineReset: Bool {
-        guard let phase = workflow?.phase else { return true }
-        return !isDownstreamDrawingPhase(phase)
-    }
-
-    private var isDrawingTrainingPhase: Bool {
-        guard let phase = workflow?.phase else { return false }
-        return isDownstreamDrawingPhase(phase)
-    }
-
-    private func isDownstreamDrawingPhase(_ phase: String) -> Bool {
-        [
-            "motion_validated",
-            "pen_ready",
-            "drawing_training",
-            "drawing_retry",
-            "drawing_validated",
-            "ready_to_draw"
-        ].contains(phase)
+    private func resetButtonSystemImage(_ role: String) -> String {
+        role == "destructive" ? "exclamationmark.triangle" : "arrow.counterclockwise"
     }
 
     @ViewBuilder
     private var blockedReason: some View {
-        if let workflowIssueText {
-            Text("\(workflowIssueTitle): \(workflowIssueText)")
+        if let workflow, let blocker = workflow.currentBlocker, !blocker.isEmpty {
+            Text("\(workflow.overlayBadge.label): \(blocker)")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(workflowIssueColor)
+                .foregroundStyle(workflowColor(workflow.overlayBadge.color))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         } else if let primaryActionDisabledReason {
@@ -315,25 +291,25 @@ struct CalibrationWizardView: View {
                 HStack(spacing: 10) {
                     workflowStateItem(
                         title: "PHASE",
-                        value: workflowPhaseLabel(workflow.phase),
+                        value: displayWorkflowToken(workflow.phase),
                         systemImage: "list.bullet.rectangle"
                     )
                     workflowStateItem(
                         title: "ACTIVITY",
-                        value: workflowActivityLabel(workflow.activity),
+                        value: displayWorkflowToken(workflow.activity),
                         systemImage: "arrow.triangle.2.circlepath"
                     )
                     workflowStateItem(
                         title: "HEALTH",
-                        value: workflowHealthLabel(workflow.health),
-                        systemImage: workflowHealthSystemImage(workflow.health),
-                        color: workflowHealthColor(workflow.health)
+                        value: displayWorkflowToken(workflow.health),
+                        systemImage: "circle.fill",
+                        color: workflowColor(workflow.overlayBadge.color)
                     )
                 }
                 if workflow.overlayBadge.state != workflow.health {
                     Label(workflow.overlayBadge.label, systemImage: "scope")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(workflowBadgeColor(workflow.overlayBadge.color))
+                        .foregroundStyle(workflowColor(workflow.overlayBadge.color))
                         .lineLimit(1)
                 }
             }
@@ -371,188 +347,17 @@ struct CalibrationWizardView: View {
         if workflow.readyToDraw {
             return "Ready to Draw"
         }
-        if let issue = workflowIssueText {
-            return issue
-        }
-        return "\(workflowActivityLabel(workflow.activity)): \(operatorWorkflowActionLabel(workflow.nextPrimaryAction))"
-    }
-
-    private var operatorPrimaryActionTitle: String {
-        if let action = workflow?.nextPrimaryAction {
-            return operatorWorkflowActionLabel(action)
-        }
-        return primaryActionTitle
-    }
-
-    private var operatorPrimaryActionHelp: String {
-        primaryActionDisabledReason
-            ?? workflow?.currentBlocker
-            ?? operatorPrimaryActionTitle
-    }
-
-    private var workflowIssueText: String? {
-        guard let workflow else { return nil }
         if let blocker = workflow.currentBlocker, !blocker.isEmpty {
             return blocker
         }
-        if workflow.health == "stale" || workflow.health == "stale_and_blocked" {
-            return workflow.freshness.staleReasons.first
-        }
-        return nil
+        return "\(displayWorkflowToken(workflow.activity)): \(workflow.nextPrimaryAction.label)"
     }
 
-    private var workflowIssueTitle: String {
-        guard let workflow else { return "Blocked" }
-        switch workflow.health {
-        case "stale_and_blocked":
-            return "Stale + Blocked"
-        case "stale":
-            return "Stale"
-        default:
-            return "Blocked"
-        }
+    private func displayWorkflowToken(_ value: String) -> String {
+        value.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
-    private var workflowIssueColor: Color {
-        guard let workflow else { return .orange.opacity(0.86) }
-        return workflowHealthColor(workflow.health)
-    }
-
-    private func operatorWorkflowActionLabel(_ action: BridgeCalibrationWorkflowAction) -> String {
-        switch action.id {
-        case "validate_cap_target":
-            return "Validate Motion"
-        default:
-            return operatorWorkflowLabel(action.label)
-        }
-    }
-
-    private func operatorWorkflowStepTitle(_ step: BridgeCalibrationWorkflowStep) -> String {
-        switch step.id {
-        case "motion_validation":
-            return "Validate Motion"
-        default:
-            return operatorWorkflowLabel(step.label)
-        }
-    }
-
-    private func operatorWorkflowLabel(_ label: String) -> String {
-        switch label {
-        case "Validate Cap Target":
-            return "Validate Motion"
-        default:
-            return label
-        }
-    }
-
-    private func workflowPhaseLabel(_ phase: String) -> String {
-        switch phase {
-        case "needs_cap":
-            return "Needs Cap"
-        case "needs_drawing_border":
-            return "Drawing Border"
-        case "motion_calibration":
-            return "Motion Calibration"
-        case "motion_validated":
-            return "Motion Validated"
-        case "pen_ready":
-            return "Pen Ready"
-        case "drawing_training":
-            return "Drawing Training"
-        case "drawing_retry":
-            return "Drawing Retry"
-        case "drawing_validated":
-            return "Drawing Validated"
-        case "ready_to_draw":
-            return "Ready to Draw"
-        default:
-            return phase.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
-    private func workflowActivityLabel(_ activity: String) -> String {
-        switch activity {
-        case "idle":
-            return "Idle"
-        case "confirming_cap":
-            return "Confirming Cap"
-        case "awaiting_field_registration_probe":
-            return "Awaiting Field Probe"
-        case "registering_border":
-            return "Registering Border"
-        case "running_field_registration_probe":
-            return "Running Field Probe"
-        case "awaiting_motion_probe":
-            return "Awaiting Motion Probe"
-        case "running_motion_probe":
-            return "Running Motion Probe"
-        case "awaiting_motion_observation":
-            return "Awaiting Motion Observation"
-        case "awaiting_pen_ready":
-            return "Awaiting Pen Ready"
-        case "awaiting_drawing_preview":
-            return "Awaiting Preview"
-        case "awaiting_drawing_run":
-            return "Awaiting Drawing Run"
-        case "running_drawing_batch":
-            return "Running Drawing Batch"
-        case "awaiting_drawing_observation":
-            return "Awaiting Ink Observation"
-        case "fitting_model":
-            return "Fitting Model"
-        case "validating_model":
-            return "Validating Model"
-        case "awaiting_model_promotion":
-            return "Awaiting Promotion"
-        case "awaiting_drawing_authority":
-            return "Awaiting Drawing Authority"
-        case "running_machine_action":
-            return "Running Machine Action"
-        default:
-            return activity.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
-    private func workflowHealthLabel(_ health: String) -> String {
-        switch health {
-        case "nominal":
-            return "Nominal"
-        case "stale":
-            return "Stale"
-        case "blocked":
-            return "Blocked"
-        case "stale_and_blocked":
-            return "Stale + Blocked"
-        default:
-            return health.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
-    private func workflowHealthSystemImage(_ health: String) -> String {
-        switch health {
-        case "nominal":
-            return "checkmark.circle.fill"
-        case "stale":
-            return "clock.fill"
-        case "blocked", "stale_and_blocked":
-            return "exclamationmark.triangle.fill"
-        default:
-            return "circle.fill"
-        }
-    }
-
-    private func workflowHealthColor(_ health: String) -> Color {
-        switch health {
-        case "blocked", "stale_and_blocked":
-            return .red.opacity(0.90)
-        case "stale":
-            return .orange.opacity(0.9)
-        default:
-            return .white.opacity(0.54)
-        }
-    }
-
-    private func workflowBadgeColor(_ color: String) -> Color {
+    private func workflowColor(_ color: String) -> Color {
         switch color {
         case "green":
             return .green.opacity(0.88)

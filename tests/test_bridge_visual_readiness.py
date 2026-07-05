@@ -585,6 +585,13 @@ def test_workflow_surfaces_stale_drawing_border_downstream_evidence(tmp_path: Pa
     assert workflow["current_blocker"].startswith("Current Drawing Border invalidated downstream evidence")
     assert workflow["next_primary_action"]["id"] == "run_motion_calibration"
     assert workflow["overlay_badge"]["state"] == "stale"
+    assert {action["id"] for action in workflow["reset_actions"]} == {
+        "reset_drawing_training",
+        "full_reset",
+    }
+    reset_training = next(action for action in workflow["reset_actions"] if action["id"] == "reset_drawing_training")
+    assert reset_training["scope"] == "drawing_training"
+    assert reset_training["enabled"] is True
     assert any("Drawing calibration session" in reason for reason in workflow["freshness"]["stale_reasons"])
     _assert_no_removed_workflow_terms(workflow)
 

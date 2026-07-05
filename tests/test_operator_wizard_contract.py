@@ -440,23 +440,27 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Calibrate Vision-Machine Interface" in wizard
     assert "BridgeCalibrationWorkflow" in wizard
     assert "workflowStateStrip" in wizard
-    assert "workflowPhaseLabel(workflow.phase)" in wizard
-    assert "workflowActivityLabel(workflow.activity)" in wizard
-    assert "workflowHealthLabel(workflow.health)" in wizard
-    assert "workflowIssueText" in wizard
-    assert "operatorWorkflowStepTitle(step)" in wizard
-    assert "operatorWorkflowActionLabel(action)" in wizard
-    assert "title: step.label" not in wizard
-    assert "workflow?.nextPrimaryAction.label" not in wizard
-    assert 'case "motion_validation":' in wizard
-    assert 'case "validate_cap_target":' in wizard
-    assert 'case "Validate Cap Target":' in wizard
+    assert "displayWorkflowToken(workflow.phase)" in wizard
+    assert "displayWorkflowToken(workflow.activity)" in wizard
+    assert "displayWorkflowToken(workflow.health)" in wizard
+    assert "workflow.resetActions" in wizard
+    assert "title: step.label" in wizard
+    assert "workflow?.nextPrimaryAction.label" in wizard
+    assert "workflowPhaseLabel" not in wizard
+    assert "workflowActivityLabel" not in wizard
+    assert "workflowHealthLabel" not in wizard
+    assert "workflowIssueText" not in wizard
+    assert "operatorWorkflowStepTitle" not in wizard
+    assert "operatorWorkflowActionLabel" not in wizard
+    assert 'case "motion_validation":' not in wizard
+    assert 'case "validate_cap_target":' not in wizard
+    assert 'case "Validate Cap Target":' not in wizard
     assert "BridgeCalibrationCapConfirmationRequest" in client
     assert 'post(path: "calibration/workflow/cap/confirm"' in client
     assert "confirmCalibrationCap(" in model
     assert "visualReadinessWorkflowStatusText(" in model
     assert "visualProbeProgressStatusText(" in model
-    assert "wizardVisibleWorkflowPrimaryAction" in content
+    assert "wizardVisibleWorkflowPrimaryAction" not in content
     assert "await confirmWorkflowCap(" in cap_flow
     assert "func confirmWorkflowCap(" in cap_flow
     assert "if let action = bridge.calibrationWorkflow?.nextPrimaryAction" in content
@@ -614,6 +618,8 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
+    client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    server = _read(BRIDGE_SERVER)
 
     assert "Confirm Setup" not in wizard
     assert "confirmSetup" not in wizard
@@ -684,17 +690,14 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     assert "BORDER adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) drawing border locked" in content
     assert "Run Motion Calibration" in content
     assert "CAL motion calibration using adjusted drawing border" in content
-    assert 'resetCalibrationSetup(scope: "vision_machine")' in content
-    assert 'resetCalibrationSetup(scope: "drawing_training")' in content
-    assert "Clears only drawing-session and drawing-model pointers" in wizard
-    assert "Clears cap confirmation, Drawing Border, motion evidence" in wizard
-    assert "private var showsVisionMachineReset: Bool {" in wizard
-    assert "return !isDownstreamDrawingPhase(phase)" in wizard
-    downstream_phase_block = wizard.split("private func isDownstreamDrawingPhase", 1)[1].split(
-        "@ViewBuilder",
-        1,
-    )[0]
-    assert '"blocked"' not in downstream_phase_block
+    assert "runCalibrationWorkflowResetAction" in content
+    assert "BridgeCalibrationWorkflowResetAction" in client
+    assert "workflow.resetActions" in wizard
+    assert "action.scope" in content
+    assert "Clears only drawing-session and drawing-model pointers" in server
+    assert "Clears cap confirmation, Drawing Border, motion evidence" in server
+    assert "private var showsVisionMachineReset: Bool {" not in wizard
+    assert "isDownstreamDrawingPhase" not in wizard
     assert "NSAlert" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Calibrate Vision-Machine Interface" in wizard
@@ -786,28 +789,22 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert 'response.status == "accepted"' in sample_observe
     assert "latestVisualReadiness = response.readiness" in sample_observe
     assert "statusText = visualProbeProgressStatusText(" in sample_observe
-    visible_action = content.split("private var wizardVisibleWorkflowPrimaryAction", 1)[1].split(
-        "private var wizardInstructionText",
-        1,
-    )[0]
-    assert 'case "run_field_registration_probe":' in visible_action
-    assert 'case "run_motion_calibration":' in visible_action
-    assert "workflow.isStale" in visible_action
-    assert 'workflow.health == "stale"' in visible_action
-    assert 'workflow.health == "stale_and_blocked"' in visible_action
-    assert "return nil" in visible_action
+    assert "private var wizardVisibleWorkflowPrimaryAction" not in content
+    assert "workflow.isStale" not in content
+    assert 'workflow.health == "stale"' not in content
+    assert 'workflow.health == "stale_and_blocked"' not in content
     enabled_action = content.split("private var wizardPrimaryActionEnabled", 1)[1].split(
         "private var wizardPrimaryActionDisabledReason",
         1,
     )[0]
-    assert 'case "run_motion_calibration":' in enabled_action
-    assert "bridge.calibrationWorkflow?.isStale == true" in enabled_action
+    assert 'case "run_motion_calibration":' not in enabled_action
+    assert "bridge.calibrationWorkflow?.isStale == true" not in enabled_action
     primary_action = content.split("private func runCalibrationWizardPrimaryAction", 1)[1].split(
         "private func runWizardMotionProbeAction",
         1,
     )[0]
     assert 'case "run_motion_calibration":' in primary_action
-    assert 'bridge.calibrationWorkflow?.isStale == true || motionCalibration.status != "MEASURED"' in primary_action
+    assert 'bridge.calibrationWorkflow?.isStale == true || motionCalibration.status != "MEASURED"' not in primary_action
     assert 'runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")' in primary_action
     validation = content.split("private func runWizardMotionValidation", 1)[1].split(
         "private func wizardMotionValidationTarget",

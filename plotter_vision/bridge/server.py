@@ -6265,6 +6265,11 @@ class PlotterBridge:
             "current_blocker": blocker,
             "next_primary_action": next_action,
             "safe_auto_actions": safe_auto_actions,
+            "reset_actions": self._workflow_reset_actions(
+                phase=phase,
+                session=session,
+                model=model,
+            ),
             "freshness": {
                 "paper_registration_id": registration.registration_id if registration is not None else state.paper_registration_id,
                 "camera_id": registration.camera_id if registration is not None else None,
@@ -6418,9 +6423,9 @@ class PlotterBridge:
             ),
             self._workflow_step(
                 "motion_validation",
-                "Validate Cap Target",
+                "Validate Motion",
                 "done" if state.visual_ready_to_plot else ("active" if state.motion_model_valid else "pending"),
-                "Cap target validated" if state.visual_ready_to_plot else "Move cap to a visual-field target",
+                "Motion validated" if state.visual_ready_to_plot else "Move cap to a visual-field target",
             ),
             self._workflow_step(
                 "pen_ready",
@@ -6495,6 +6500,57 @@ class PlotterBridge:
             "state": state,
             "detail": detail,
         }
+
+    def _workflow_reset_actions(
+        self,
+        *,
+        phase: str,
+        session: DrawingCalibrationSession | None,
+        model: DrawingCalibrationModel | None,
+    ) -> list[dict[str, Any]]:
+        has_drawing_artifacts = session is not None or model is not None
+        downstream_drawing = phase in {
+            "motion_validated",
+            "pen_ready",
+            "drawing_training",
+            "drawing_retry",
+            "drawing_validated",
+            "ready_to_draw",
+        }
+        actions: list[dict[str, Any]] = []
+        if has_drawing_artifacts or downstream_drawing:
+            actions.append(
+                {
+                    "id": "reset_drawing_training",
+                    "label": "Reset Training",
+                    "role": "standard",
+                    "enabled": has_drawing_artifacts,
+                    "scope": "drawing_training",
+                    "help": "Clears only drawing-session and drawing-model pointers; vision-machine setup stays current.",
+                    "confirmation_title": "Reset Drawing Training?",
+                    "confirmation_message": "This clears only the current drawing training session and promoted drawing model pointers. Vision-machine setup is preserved.",
+                    "requested_status": "DRAW training reset requested",
+                    "canceled_status": "DRAW training reset canceled",
+                    "completed_status": "DRAW training reset",
+                }
+            )
+        if not downstream_drawing:
+            actions.append(
+                {
+                    "id": "full_reset",
+                    "label": "Full Reset",
+                    "role": "destructive",
+                    "enabled": True,
+                    "scope": "vision_machine",
+                    "help": "Clears cap confirmation, Drawing Border, motion evidence, training session, and drawing model pointers.",
+                    "confirmation_title": "Reset Vision-Machine Setup?",
+                    "confirmation_message": "This clears current Drawing Border, motion, pen confirmation, drawing session, and drawing model pointers. History is preserved.",
+                    "requested_status": "FIELD full reset requested",
+                    "canceled_status": "FIELD reset canceled",
+                    "completed_status": "FIELD reset; confirm green cap",
+                }
+            )
+        return actions
 
     def _workflow_safe_auto_actions(
         self,
