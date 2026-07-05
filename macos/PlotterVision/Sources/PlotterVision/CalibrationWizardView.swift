@@ -8,18 +8,6 @@ struct CalibrationWizardView: View {
     }
 
     let workflow: BridgeCalibrationWorkflow?
-    let instructionText: String
-    let fiducialDetail: String
-    let fiducialStatus: CalibrationWizardStepStatus
-    let greenCapDetail: String
-    let greenCapStatus: CalibrationWizardStepStatus
-    let visualCalibrationDetail: String
-    let visualCalibrationStatus: CalibrationWizardStepStatus
-    let bindingDetail: String
-    let bindingStatus: CalibrationWizardStepStatus
-    let drawingCalibrationDetail: String
-    let drawingCalibrationStatus: CalibrationWizardStepStatus
-    let primaryActionTitle: String
     let primaryActionEnabled: Bool
     let primaryActionDisabledReason: String?
     let hasPaperLock: Bool
@@ -114,11 +102,12 @@ struct CalibrationWizardView: View {
                     )
                 }
             } else {
-                CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
-                CalibrationWizardStepRow(index: 2, title: "Field Registration Probe", detail: visualCalibrationDetail, status: visualCalibrationStatus)
-                CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
-                CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
-                CalibrationWizardStepRow(index: 5, title: "Drawing Training", detail: drawingCalibrationDetail, status: drawingCalibrationStatus)
+                CalibrationWizardStepRow(
+                    index: 1,
+                    title: "Backend Workflow",
+                    detail: "Waiting for /calibration/workflow/status",
+                    status: .active
+                )
             }
         }
     }
@@ -218,14 +207,14 @@ struct CalibrationWizardView: View {
         HStack(spacing: 8) {
             Button(action: primaryAction) {
                 Label(
-                    workflow?.nextPrimaryAction.label ?? primaryActionTitle,
-                    systemImage: primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill"
+                    workflow?.nextPrimaryAction.label ?? "Refresh Workflow",
+                    systemImage: workflow == nil ? "arrow.clockwise" : (primaryActionEnabled ? "arrow.right.circle.fill" : "lock.fill")
                 )
             }
             .buttonStyle(.borderedProminent)
-            .tint(primaryActionEnabled ? .cyan : .gray)
-            .disabled(!primaryActionEnabled)
-            .help(primaryActionDisabledReason ?? workflow?.currentBlocker ?? primaryActionTitle)
+            .tint(workflow == nil ? .yellow : (primaryActionEnabled ? .cyan : .gray))
+            .disabled(workflow != nil && !primaryActionEnabled)
+            .help(workflow == nil ? "Refresh backend workflow status" : (primaryActionDisabledReason ?? workflow?.currentBlocker ?? workflow?.nextPrimaryAction.label ?? "Backend workflow action"))
 
             if let workflow {
                 ForEach(workflow.resetActions) { action in
@@ -343,7 +332,7 @@ struct CalibrationWizardView: View {
     }
 
     private var operatorInstructionText: String {
-        guard let workflow else { return instructionText }
+        guard let workflow else { return "Waiting for backend workflow status." }
         if workflow.readyToDraw {
             return "Ready to Draw"
         }

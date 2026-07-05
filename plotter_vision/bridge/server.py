@@ -744,6 +744,9 @@ class CalibrationSetupResetResponse(BaseModel):
     preserve_history: bool = True
     cleared_files: list[str] = Field(default_factory=list)
     missing_files: list[str] = Field(default_factory=list)
+    readiness: dict[str, Any] | None = None
+    workflow: dict[str, Any] | None = None
+    readiness_file: str = ""
     event_log: str
     error: str | None = None
 
@@ -2620,6 +2623,7 @@ class PlotterBridge:
                     "missing_files": missing,
                 },
             )
+            state = self._current_visual_readiness_state_for_workflow()
             return CalibrationSetupResetResponse(
                 status="reset",
                 dry_run=self.config.dry_run,
@@ -2628,6 +2632,9 @@ class PlotterBridge:
                 preserve_history=request.preserve_history,
                 cleared_files=cleared,
                 missing_files=missing,
+                readiness=state.model_dump(mode="json"),
+                workflow=self._calibration_workflow(state),
+                readiness_file=str(self._latest_visual_readiness_path()),
                 event_log=str(self.config.event_log_path),
             )
         except Exception as exc:
@@ -2645,6 +2652,7 @@ class PlotterBridge:
                 preserve_history=request.preserve_history,
                 cleared_files=cleared,
                 missing_files=missing,
+                readiness_file=str(self._latest_visual_readiness_path()),
                 event_log=str(self.config.event_log_path),
                 error=str(exc),
             )
@@ -6040,6 +6048,28 @@ class PlotterBridge:
             return self._load_latest_visual_readiness()
         except Exception:
             return None
+
+    def _current_visual_readiness_state_for_workflow(self) -> VisualReadinessState:
+        state = self._load_latest_visual_readiness_or_none()
+        if state is not None:
+            return self._visual_state_with_latest_probe_evidence(state)
+
+        paper_registered = False
+        paper_registration_id: str | None = None
+        try:
+            registration = self._load_latest_paper_registration()
+            paper_registered = True
+            paper_registration_id = registration.registration_id
+        except Exception:
+            pass
+        state = build_visual_readiness_state(
+            paper_registered=paper_registered,
+            cap_observation=None,
+            safe_zone_evaluation=None,
+            probe_observation_count=0,
+        )
+        state.paper_registration_id = paper_registration_id
+        return state
 
     def _visual_ready_to_plot(self) -> bool:
         try:

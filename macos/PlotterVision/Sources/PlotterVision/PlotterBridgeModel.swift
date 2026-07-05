@@ -242,6 +242,17 @@ final class PlotterBridgeModel: ObservableObject {
         return runId
     }
 
+    func clearVisualCalibrationScratch() {
+        visualProbeEvidenceRunId = ""
+        clearBindingMarkPreviewOverlay()
+        adaptiveProbeStatus = "PROBE --"
+        visualCenterDotStatus = "VIS --"
+        visualBindingStatus = "BIND --"
+        visualBindingDetail = "Run motion calibration, then validate relative cap motion"
+        visualBindingObservationCount = 0
+        visualBindingValid = false
+    }
+
     func resetCalibrationSetup(scope: String = "vision_machine") async -> Bool {
         guard isOnline else {
             statusText = "Bridge offline"
@@ -251,14 +262,28 @@ final class PlotterBridgeModel: ObservableObject {
             let response = try await client.resetCalibrationSetup(
                 BridgeSetupResetRequest(scope: scope, confirmed: true)
             )
-            if scope == "vision_machine" {
+            guard response.status == "reset" else {
+                statusText = response.error ?? "Visual setup reset failed"
+                diagnosticsEvent(
+                    "visual_setup_reset_failed",
+                    [
+                        "status": response.status,
+                        "scope": response.scope,
+                        "confirmed": response.confirmed,
+                        "error": response.error ?? ""
+                    ],
+                    snapshot: true
+                )
+                return false
+            }
+            latestVisualReadiness = response.readiness
+            calibrationWorkflow = response.workflow
+            if response.scope == "vision_machine" {
                 paperRegistrationSnapshot = nil
                 paperTransformStatus = "FIELD --"
                 learnedCapToTipModel = nil
                 drawableSafeZone = nil
-                latestVisualReadiness = nil
-                calibrationWorkflow = nil
-                _ = resetVisualCalibrationSession(prefix: "swift-reset")
+                clearVisualCalibrationScratch()
             }
             drawVerifyStatus = "DRAW --"
             drawVerifyDetail = "No drawing run"

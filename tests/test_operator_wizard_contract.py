@@ -470,11 +470,15 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "func confirmWorkflowCap(" in cap_flow
     assert "if let action = bridge.calibrationWorkflow?.nextPrimaryAction" in content
     assert "visualMotionValidated, let action = bridge.calibrationWorkflow?.nextPrimaryAction" not in content
-    assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Field Registration Probe"' in wizard
-    assert 'title: "Set Drawing Border"' in wizard
-    assert 'title: "Validate Motion"' in wizard
-    assert 'title: "Drawing Training"' in wizard
+    assert 'title: "Backend Workflow"' in wizard
+    for title in (
+        "Confirm Green Cap",
+        "Field Registration Probe",
+        "Set Drawing Border",
+        "Validate Motion",
+        "Drawing Training",
+    ):
+        assert f'title: "{title}"' not in wizard
     assert 'title: "Calibrate Drawing"' not in wizard
     assert "let fieldAspectYPerX: Double?" not in wizard
     assert "@Binding var fieldWidthMm" in wizard
@@ -495,9 +499,9 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "fieldWidthMm = clampedValue" in wizard
     assert "fieldHeightMm = clampedValue" in wizard
     assert ".disabled(hasPaperLock)" not in wizard
-    assert "Confirm Green Cap" in content
-    assert "Run Field Registration Probe" in content
-    assert "Run Motion Calibration" in content
+    assert 'case "confirm_green_cap":' in content
+    assert 'case "run_field_registration_probe":' in content
+    assert 'case "run_motion_calibration":' in content
     assert "runFieldRegistrationProbe" in content
     assert "runFieldMotionCalibration(using:" in content
     assert "measureFieldRegistrationProbeNoise" in content
@@ -513,15 +517,15 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "seedAndLockFieldFromFieldRegistrationProbe" in content
     assert "currentGreenCapCameraObservation" in content
     assert "FieldRegistrationProbeModel" in content + _read(SWIFT_DIR / "Models.swift")
-    assert "Validate Motion" in content
+    assert 'case "validate_motion":' in content
     assert "Calibrate Drawing" not in wizard
-    assert "wizardDrawingCalibrationStatus" in content
-    assert "wizardDrawingCalibrationDetail" in content
+    assert "wizardDrawingCalibrationStatus" not in content
+    assert "wizardDrawingCalibrationDetail" not in content
     assert "wizardDrawFrameVisible" not in content
     assert "wizardDrawFrameEnabled" not in content
     assert "drawValidatedFieldFrame" not in content
     assert "runDrawingWorkflowPrimaryAction" in content
-    assert "Confirm Pen Ready" in content
+    assert '"confirm_pen_ready"' in content
     assert "recordDrawingFrameInspection" in frame_drawing + _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     assert "expectedPathLabel" in _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert '"Expected frame"' in _read(SWIFT_DIR / "PlotterBridgeModel.swift")
@@ -593,11 +597,13 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     assert "machineHomingTrusted" not in motion_gate
     assert "Bridge-run drawing blocked" not in motion_gate
     assert "Live motion enabled" in motion_gate
-    active_setup = content.split("private var wizardFiducialStatus", 1)[1].split(
+    assert "private var wizardFiducialStatus" not in content
+    assert "wizardMotionProbeStatus" not in content
+    assert "wizardMotionValidationStatus" not in content
+    active_setup = content.split("private func runCalibrationWizardPrimaryAction", 1)[1].split(
         "private var topStatusLights",
         1,
     )[0]
-    assert "if fieldRegistrationProbeModel != nil { return .active }" in active_setup
     assert "fieldRegistrationProbeModel?.isUsable == true" not in active_setup
     stale_terms = [
         "Run Drawing Calibration",
@@ -624,6 +630,7 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     server = _read(BRIDGE_SERVER)
 
     assert "Confirm Setup" not in wizard
@@ -693,12 +700,29 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     assert "bridge.registerPaperHomography(" in content
     assert "BORDER re-locking adjusted" in content
     assert "BORDER adjusted \\(Int(fieldWidthMm))x\\(Int(fieldHeightMm)) drawing border locked" in content
-    assert "Run Motion Calibration" in content
+    assert 'case "run_motion_calibration":' in content
     assert "CAL motion calibration using adjusted drawing border" in content
     assert "runCalibrationWorkflowResetAction" in content
     assert "BridgeCalibrationWorkflowResetAction" in client
     assert "workflow.resetActions" in wizard
     assert "action.scope" in content
+    assert "let readiness: BridgeVisualReadinessState?" in client
+    assert "let workflow: BridgeCalibrationWorkflow?" in client
+    assert "let readinessFile: String" in client
+    assert "latestVisualReadiness = response.readiness" in bridge_model
+    assert "calibrationWorkflow = response.workflow" in bridge_model
+    assert "calibrationWorkflow = nil" not in bridge_model
+    assert 'resetVisualCalibrationSession(prefix: "swift-reset")' not in content + bridge_model
+    reset_action = content.split("private func runCalibrationWorkflowResetAction", 1)[1].split(
+        "private func confirmCalibrationReset",
+        1,
+    )[0]
+    assert "let reset = await bridge.resetCalibrationSetup(scope: action.scope)" in reset_action
+    assert reset_action.index("let reset = await bridge.resetCalibrationSetup(scope: action.scope)") < reset_action.index(
+        "applyBackendConfirmedVisionMachineReset(resetFiducials: true)"
+    )
+    assert "readiness=state.model_dump(mode=\"json\")" in server
+    assert "workflow=self._calibration_workflow(state)" in server
     assert "Clears only drawing-session and drawing-model pointers" in server
     assert "Clears cap confirmation, Drawing Border, motion evidence" in server
     assert "private var showsVisionMachineReset: Bool {" not in wizard
@@ -709,7 +733,8 @@ def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border(
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
     assert "Stored visual field in use" not in content
-    assert "BORDER run field registration probe before drawing border" in content
+    assert "BORDER run field registration probe before drawing border" not in content
+    assert "FIELD refreshing backend workflow" in content
     assert 'BORDER \\(desiredVisualFieldSizeLabel) locked from field registration probe' in content
     assert "DRAG BORDER / TOP-RIGHT RESIZE" in support
     assert ".disabled(hasPaperLock)" not in wizard
@@ -723,11 +748,15 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
-    assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Field Registration Probe"' in wizard
-    assert 'title: "Set Drawing Border"' in wizard
-    assert 'title: "Validate Motion"' in wizard
-    assert 'title: "Drawing Training"' in wizard
+    assert 'title: "Backend Workflow"' in wizard
+    for title in (
+        "Confirm Green Cap",
+        "Field Registration Probe",
+        "Set Drawing Border",
+        "Validate Motion",
+        "Drawing Training",
+    ):
+        assert f'title: "{title}"' not in wizard
     assert 'title: "Fiducials"' not in wizard
     assert 'title: "Drawing Calibration"' not in wizard
     assert 'title: "Tool"' not in wizard
@@ -743,10 +772,13 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     assert "manualPenTipMode" not in content
     assert "confirmedPenTipPoint" not in content
     assert "rollbackCalibrationWizardToStep" not in content
-    assert "Click Green Cap" in content
-    assert "Confirm Green Cap" in content
-    assert "Run Field Registration Probe" in content
-    assert "Validate Motion" in content
+    assert "Click Green Cap" not in content
+    assert "Confirm Green Cap" not in content
+    assert "Run Field Registration Probe" not in content
+    assert "Validate Motion" not in content
+    assert 'case "confirm_green_cap":' in content
+    assert 'case "run_field_registration_probe":' in content
+    assert 'case "validate_motion":' in content
     assert "Run Drawing Calibration" not in content
     assert "runWizardDrawingCalibration" not in content
     assert "runVisualRelativeFivePointTest" not in content
@@ -816,6 +848,13 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
         1,
     )[0]
     assert "await bridge.refreshVisualReadinessStatus()" in validation
+    motion_probe = content.split("private func runFieldMotionCalibration", 1)[1].split(
+        "private func runFieldRegistrationProbe",
+        1,
+    )[0]
+    assert "CAL motion calibration weak: \\(evaluation.detail)\"\n            await refreshWorkflowSnapshot()" in motion_probe
+    assert "CAL motion calibration weak: basis solve failed\"\n            await refreshWorkflowSnapshot()" in motion_probe
+    assert "CAL motion calibration measured; validate target next\"\n        await refreshWorkflowSnapshot()" in motion_probe
     assert "manualJogWorkspaceOverride" not in setup_calibration_jog
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
@@ -1084,7 +1123,7 @@ def test_drawing_calibration_docs_match_program_and_model_usage_surfaces() -> No
     assert "latestDrawingCalibrationSession" in bridge_model
     assert "currentDrawingCalibrationBatch" in bridge_model
     assert not (SWIFT_DIR / "SetupPanel.swift").exists()
-    assert "wizardDrawingCalibrationDetail" in content
+    assert "wizardDrawingCalibrationDetail" not in content
 
     docs = readme + contract + plan
     assert "multi_shape_coordinate_sheet" in docs

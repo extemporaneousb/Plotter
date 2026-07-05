@@ -164,45 +164,7 @@ enum OperatorPanelCommand: Equatable {
 }
 
 struct CalibrationWizardSnapshot: Equatable {
-    var instructionText: String
-    var fiducialDetail: String
-    var fiducialStatus: CalibrationWizardStepStatus
-    var greenCapDetail: String
-    var greenCapStatus: CalibrationWizardStepStatus
-    var visualCalibrationDetail: String
-    var visualCalibrationStatus: CalibrationWizardStepStatus
-    var bindingDetail: String
-    var bindingStatus: CalibrationWizardStepStatus
-    var drawingCalibrationDetail: String
-    var drawingCalibrationStatus: CalibrationWizardStepStatus
-    var primaryActionTitle: String
-    var primaryActionEnabled: Bool
-    var primaryActionDisabledReason: String?
-    var hasPaperLock: Bool
-    var capStateLabel: String
-    var isLiveMotionMode: Bool
-    var capDetected: Bool
     var fieldAspectYPerX: Double?
 
-    static let idle = CalibrationWizardSnapshot(
-        instructionText: "Open the plotter camera and start setup.",
-        fiducialDetail: "No calibration workflow",
-        fiducialStatus: .pending,
-        greenCapDetail: "No cap state",
-        greenCapStatus: .pending,
-        visualCalibrationDetail: "No motion calibration",
-        visualCalibrationStatus: .pending,
-        bindingDetail: "No motion validation",
-        bindingStatus: .pending,
-        drawingCalibrationDetail: "No drawing calibration",
-        drawingCalibrationStatus: .pending,
-        primaryActionTitle: "Start Setup",
-        primaryActionEnabled: true,
-        primaryActionDisabledReason: nil,
-        hasPaperLock: false,
-        capStateLabel: "--",
-        isLiveMotionMode: false,
-        capDetected: false,
-        fieldAspectYPerX: nil
-    )
+    static let idle = CalibrationWizardSnapshot(fieldAspectYPerX: nil)
 }

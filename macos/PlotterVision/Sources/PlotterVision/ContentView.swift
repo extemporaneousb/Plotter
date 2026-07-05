@@ -501,24 +501,6 @@ struct ContentView: View {
 
     func refreshSetupSnapshot() {
         workspace.calibrationWizardSnapshot = CalibrationWizardSnapshot(
-            instructionText: wizardInstructionText,
-            fiducialDetail: wizardFiducialDetail,
-            fiducialStatus: wizardFiducialStatus,
-            greenCapDetail: wizardGreenCapDetail,
-            greenCapStatus: wizardGreenCapStatus,
-            visualCalibrationDetail: motionCalibration.detail,
-            visualCalibrationStatus: wizardMotionProbeStatus,
-            bindingDetail: wizardMotionValidationDetail,
-            bindingStatus: wizardMotionValidationStatus,
-            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
-            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
-            primaryActionTitle: wizardPrimaryActionTitle,
-            primaryActionEnabled: wizardPrimaryActionEnabled,
-            primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
-            hasPaperLock: bridge.hasPaperLock,
-            capStateLabel: wizardCapStateLabel,
-            isLiveMotionMode: bridge.isLiveMotionMode,
-            capDetected: currentCarriageMarker != nil,
             fieldAspectYPerX: currentVisualFieldAspectYPerX
         )
     }
@@ -857,6 +839,7 @@ struct ContentView: View {
             visualMotionModel = nil
             visualMotionSamples = []
             calibrationStatusText = "CAL motion calibration weak: \(evaluation.detail)"
+            await refreshWorkflowSnapshot()
             return
         }
 
@@ -873,6 +856,7 @@ struct ContentView: View {
                 detail: "Motion basis solve failed"
             )
             calibrationStatusText = "CAL motion calibration weak: basis solve failed"
+            await refreshWorkflowSnapshot()
             return
         }
         visualMotionSamples = fittedSamples
@@ -888,6 +872,7 @@ struct ContentView: View {
             )
         )
         calibrationStatusText = "CAL motion calibration measured; validate target next"
+        await refreshWorkflowSnapshot()
     }
 
     @MainActor
@@ -3070,18 +3055,6 @@ struct ContentView: View {
     private var calibrationWizardOverlay: some View {
         CalibrationWizardView(
             workflow: bridge.calibrationWorkflow,
-            instructionText: wizardInstructionText,
-            fiducialDetail: wizardFiducialDetail,
-            fiducialStatus: wizardFiducialStatus,
-            greenCapDetail: wizardGreenCapDetail,
-            greenCapStatus: wizardGreenCapStatus,
-            visualCalibrationDetail: motionCalibration.detail,
-            visualCalibrationStatus: wizardMotionProbeStatus,
-            bindingDetail: wizardMotionValidationDetail,
-            bindingStatus: wizardMotionValidationStatus,
-            drawingCalibrationDetail: wizardDrawingCalibrationDetail,
-            drawingCalibrationStatus: wizardDrawingCalibrationStatus,
-            primaryActionTitle: wizardPrimaryActionTitle,
             primaryActionEnabled: wizardPrimaryActionEnabled,
             primaryActionDisabledReason: wizardPrimaryActionDisabledReason,
             hasPaperLock: bridge.hasPaperLock,
@@ -3155,52 +3128,6 @@ struct ContentView: View {
         .help(bridge.plotterConnectionHelp)
     }
 
-    private var wizardFiducialStatus: CalibrationWizardStepStatus {
-        if bridge.hasPaperLock { return .done }
-        if fieldRegistrationProbeModel != nil { return .active }
-        return .pending
-    }
-
-    private var wizardGreenCapStatus: CalibrationWizardStepStatus {
-        if confirmedCapPoint != nil { return .done }
-        return currentCarriageMarker == nil ? .blocked : .active
-    }
-
-    private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
-        if motionCalibration.status == "FIELD_REGISTERED" || motionCalibration.status == "FIELD_SEEDED" || motionCalibration.status == "MEASURED" || motionCalibration.status == "VALIDATE" || visualMotionValidated {
-            return .done
-        }
-        if confirmedCapPoint != nil {
-            return canRunWizardMotionProbe ? .active : .blocked
-        }
-        return .pending
-    }
-
-    private var wizardMotionValidationStatus: CalibrationWizardStepStatus {
-        if visualMotionValidated { return .done }
-        if motionCalibration.status == "VALIDATE" { return .active }
-        if motionCalibration.status == "MEASURED" {
-            return canValidateWizardMotion ? .active : .blocked
-        }
-        if motionCalibration.status == "WEAK" || motionCalibration.status == "BLOCK" || motionCalibration.status == "STOP" {
-            return .blocked
-        }
-        return .pending
-    }
-
-    private var wizardDrawingCalibrationStatus: CalibrationWizardStepStatus {
-        if bridge.latestDrawingCalibration?.validationStatus == "ready" {
-            return .done
-        }
-        if bridge.latestDrawingCalibrationSession != nil {
-            return .active
-        }
-        if visualMotionValidated {
-            return .active
-        }
-        return .pending
-    }
-
     private var wizardFiducialDetail: String {
         if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) locked; drag box/top-right resize in video to re-lock" }
         if fieldRegistrationProbeModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
@@ -3213,23 +3140,6 @@ struct ContentView: View {
         return "Waiting for first field registration estimate"
     }
 
-    private var wizardGreenCapDetail: String {
-        if let confirmedCapPoint, let paperMm = confirmedCapPoint.paperMm {
-            return String(format: "Confirmed field x%.1f y%.1f mm", paperMm.x, paperMm.y)
-        }
-        if let confirmedCapPoint {
-            return String(
-                format: "Confirmed camera x%.3f y%.3f",
-                confirmedCapPoint.cameraPoint.x,
-                confirmedCapPoint.cameraPoint.y
-            )
-        }
-        guard let marker = currentCarriageMarker else {
-            return "Waiting for bright cap marker"
-        }
-        return String(format: "%@ detected x%.3f y%.3f %.0f%%; confirm", marker.colorName, marker.center.x, marker.center.y, marker.strength * 100)
-    }
-
     private var wizardCapStateLabel: String {
         if currentGreenCapFieldMappedReady { return bridge.hasPaperLock ? "LIVE-MM" : "LIVE-CAM" }
         if confirmedCapFieldMappedReady { return "CONF-MM" }
@@ -3237,123 +3147,20 @@ struct ContentView: View {
         return "--"
     }
 
-    private var wizardMotionValidationDetail: String {
-        if visualMotionValidated {
-            if let model = visualMotionModel {
-                return String(
-                    format: "Motion valid rms %.1f max %.1f",
-                    model.rmsResidualMm,
-                    model.maxResidualMm
-                )
-            }
-            return "Motion model valid"
-        }
-        if motionCalibration.status == "MEASURED" {
-            guard let model = visualMotionModel, model.isUsable else {
-                return "Measured samples did not produce a usable model"
-            }
-            if !currentGreenCapFieldMappedReady { return greenCapFieldMappingDetail }
-            return String(
-                format: "Ready to validate rms %.1f max %.1f",
-                model.rmsResidualMm,
-                model.maxResidualMm
-            )
-        }
-        if motionCalibration.status == "WEAK" || motionCalibration.status == "BLOCK" || motionCalibration.status == "STOP" {
-            return motionCalibration.detail
-        }
-        if motionCalibration.status == "VALIDATE" {
-            return motionCalibration.detail
-        }
-        if let model = fieldRegistrationProbeModel, model.isUsable {
-            return String(
-                format: "Field registration X %.4f Y %.4f corner %.1fmm",
-                model.xBasisLengthNorm,
-                model.yBasisLengthNorm,
-                model.fieldCornerPrecisionMm
-            )
-        }
-        return "Run field registration probe first"
-    }
-
-    private var wizardDrawingCalibrationDetail: String {
-        if let calibration = bridge.latestDrawingCalibration {
-            let residual = calibration.rmsResidualMm.map { String(format: "rms %.1fmm", $0) } ?? "rms --"
-            let maxResidual = calibration.maxResidualMm.map { String(format: "max %.1fmm", $0) } ?? "max --"
-            if calibration.validationStatus == "ready" {
-                return "Saved \(calibration.solverKind) \(residual) \(maxResidual)"
-            }
-            if let blocker = calibration.blockers.first {
-                return "\(calibration.statusLabel) \(residual) \(maxResidual); \(blocker)"
-            }
-            return "\(calibration.statusLabel) \(residual) \(maxResidual)"
-        }
-        if visualMotionValidated {
-            return bridge.drawingCalibrationSessionDetail
-        }
-        return "Validate motion before drawing training"
-    }
-
-    private var wizardInstructionText: String {
-        if confirmedCapPoint == nil {
-            return currentCarriageMarker == nil
-                ? "Show the green cap in the plotter camera before setup movement."
-                : "Confirm the detected green cap before field registration probe."
-        }
-        if motionCalibration.status != "MEASURED" && !visualMotionValidated {
-            if !bridge.hasPaperLock {
-                return "Run field registration probe. The Drawing Border is hidden until the online +X/+Y estimate is usable."
-            }
-            return "Drag the Drawing Border or its top-right resize handle if needed, then run non-homed relative motion calibration in that border."
-        }
-        if visualMotionValidated {
-            return bridge.calibrationWorkflow?.currentBlocker
-                ?? "Motion is validated. Continue with pen-ready drawing training."
-        }
-        if !visualMotionValidated {
-            return "Motion calibration is measured. Validate the relative motion model before leaving setup."
-        }
-        return "Motion calibration is validated for green-cap movement inside the field."
-    }
-
-    private var wizardPrimaryActionTitle: String {
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction { return action.label }
-        if confirmedCapPoint == nil {
-            return currentCarriageMarker == nil ? "Click Green Cap" : "Confirm Green Cap"
-        }
-        if motionCalibration.status == "VALIDATE" { return "Validating Motion" }
-        if visualMotionValidated { return "Confirm Pen Ready" }
-        if motionCalibration.status != "MEASURED" {
-            return bridge.hasPaperLock && fieldRegistrationProbeModel != nil
-                ? "Run Motion Calibration"
-                : "Run Field Registration Probe"
-        }
-        if motionCalibration.status == "MEASURED" { return "Validate Motion" }
-        return "Blocked"
-    }
-
     private var wizardPrimaryActionEnabled: Bool {
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
-            if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
-                return false
-            }
-            if action.requiresDrawing {
-                return bridge.canRunAbsoluteDrawing
-            }
-            if action.requiresMotion {
-                return canRunWizardMotionProbe
-            }
+        guard let action = bridge.calibrationWorkflow?.nextPrimaryAction else {
             return true
         }
-        if confirmedCapPoint == nil {
-            return true
+        if !action.enabled || action.id == "ready_to_draw" || action.id == "recovery_action" {
+            return false
         }
-        if motionCalibration.status == "VALIDATE" { return false }
-        if visualMotionValidated { return true }
-        if motionCalibration.status != "MEASURED" {
+        if action.requiresDrawing {
+            return bridge.canRunAbsoluteDrawing
+        }
+        if action.requiresMotion {
             return canRunWizardMotionProbe
         }
-        return canValidateWizardMotion
+        return true
     }
 
     private var wizardPrimaryActionDisabledReason: String? {
@@ -3394,65 +3201,33 @@ struct ContentView: View {
     }
 
     private func runCalibrationWizardPrimaryAction() {
-        if let action = bridge.calibrationWorkflow?.nextPrimaryAction {
-            switch action.id {
-            case "confirm_green_cap":
-                if currentCarriageMarker != nil {
-                    useDetectedCarriageMarker()
-                } else {
-                    startManualPenClick()
-                }
-                return
-            case "run_field_registration_probe":
-                runWizardMotionProbeAction(statusText: "FIELD field registration probe requested")
-                return
-            case "run_motion_calibration":
-                runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
-                return
-            case "validate_motion":
-                validateWizardMotion()
-                return
-            case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
-                 "observe_ink", "fit_model", "validate_metrics", "promote_model":
-                runDrawingWorkflowPrimaryAction()
-                return
-            case "ready_to_draw", "recovery_action":
-                calibrationStatusText = bridge.calibrationWorkflow?.currentBlocker ?? action.label
-                return
-            default:
-                break
-            }
+        guard let action = bridge.calibrationWorkflow?.nextPrimaryAction else {
+            calibrationStatusText = "FIELD refreshing backend workflow"
+            Task { await refreshWorkflowSnapshot() }
+            return
         }
-
-        if confirmedCapPoint == nil {
+        switch action.id {
+        case "confirm_green_cap":
             if currentCarriageMarker != nil {
                 useDetectedCarriageMarker()
             } else {
                 startManualPenClick()
             }
-            return
-        }
-
-        if visualMotionValidated {
+        case "run_field_registration_probe":
+            runWizardMotionProbeAction(statusText: "FIELD field registration probe requested")
+        case "run_motion_calibration":
+            runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
+        case "validate_motion":
+            validateWizardMotion()
+        case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
+             "observe_ink", "fit_model", "validate_metrics", "promote_model":
             runDrawingWorkflowPrimaryAction()
-            return
+        case "ready_to_draw", "recovery_action":
+            calibrationStatusText = bridge.calibrationWorkflow?.currentBlocker ?? action.label
+        default:
+            calibrationStatusText = "FIELD unsupported backend workflow action: \(action.id)"
+            Task { await refreshWorkflowSnapshot() }
         }
-
-        if motionCalibration.status != "MEASURED" {
-            guard canRunWizardMotionProbe else {
-                calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
-                return
-            }
-            calibrationStatusText = bridge.hasPaperLock && fieldRegistrationProbeModel != nil
-                ? "FIELD adjusted-box motion calibration requested"
-                : "FIELD field registration probe requested"
-            Task {
-                await runMotionCalibrationFromFieldRegistration()
-            }
-            return
-        }
-
-        validateWizardMotion()
     }
 
     private func runWizardMotionProbeAction(statusText: String) {
@@ -3504,7 +3279,7 @@ struct ContentView: View {
 
     private func validateWizardMotion() {
         guard canValidateWizardMotion, let model = visualMotionModel else {
-            calibrationStatusText = "FIELD motion validation blocked: \(wizardPrimaryActionDisabledReason ?? wizardMotionValidationDetail)"
+            calibrationStatusText = "FIELD motion validation blocked: \(wizardPrimaryActionDisabledReason ?? motionCalibration.detail)"
             return
         }
         calibrationStatusText = "FIELD motion validation requested"
@@ -3620,15 +3395,8 @@ struct ContentView: View {
         manualFiducialMode = false
         manualPenMode = false
         manualCapColorMode = false
-        if confirmedCapPoint == nil {
-            calibrationStatusText = currentCarriageMarker == nil
-                ? "FIELD show green cap in camera"
-                : "FIELD confirm green cap"
-        } else if motionCalibration.status != "MEASURED" {
-            calibrationStatusText = "BORDER run field registration probe before drawing border"
-        } else {
-            calibrationStatusText = "FIELD motion measured; validate motion"
-        }
+        calibrationStatusText = "FIELD refreshing backend workflow"
+        Task { await refreshWorkflowSnapshot() }
     }
 
     private func hideCalibrationWizard() {
@@ -3655,17 +3423,20 @@ struct ContentView: View {
             calibrationStatusText = action.canceledStatus
             return
         }
-        if action.scope == "vision_machine" {
-            clearVisionMachineWizardState(resetFiducials: true)
-        }
         calibrationStatusText = action.requestedStatus
         Task {
-            _ = await bridge.resetCalibrationSetup(scope: action.scope)
+            let reset = await bridge.resetCalibrationSetup(scope: action.scope)
+            guard reset else {
+                calibrationStatusText = "FIELD reset failed: \(bridge.statusText)"
+                await refreshWorkflowSnapshot()
+                return
+            }
             if action.scope == "vision_machine" {
-                clearVisionMachineWizardState(resetFiducials: true)
+                applyBackendConfirmedVisionMachineReset(resetFiducials: true)
             } else {
                 await refreshWorkflowSnapshot()
             }
+            refreshSetupSnapshot()
             calibrationStatusText = action.completedStatus
         }
     }
@@ -3677,7 +3448,7 @@ struct ContentView: View {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func clearVisionMachineWizardState(resetFiducials: Bool) {
+    private func applyBackendConfirmedVisionMachineReset(resetFiducials: Bool) {
         workspace.calibrationWizardActive = true
         manualFiducialMode = false
         manualPenMode = false
@@ -3694,7 +3465,6 @@ struct ContentView: View {
         motionCalibration = .idle
         bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
-        _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
     }
 
     private var topStatusLights: some View {

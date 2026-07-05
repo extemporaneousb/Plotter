@@ -589,6 +589,9 @@ struct BridgeSetupResetResponse: Decodable {
     let preserveHistory: Bool
     let clearedFiles: [String]
     let missingFiles: [String]
+    let readiness: BridgeVisualReadinessState?
+    let workflow: BridgeCalibrationWorkflow?
+    let readinessFile: String
     let eventLog: String
     let error: String?
 }
