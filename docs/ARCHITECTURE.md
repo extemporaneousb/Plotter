@@ -72,13 +72,11 @@ conditions are not workflow phases.
 4. Run a field registration probe before locking or drawing the Drawing
    Border. The probe first measures cap jitter, then runs a cardinal `+X`,
    `+Y`, `-X`, `-Y` minibatch to get the first empirical 2x2 machine-to-camera
-   estimate. There is no identity matrix as calibration evidence; before that
-   first minibatch the prior is simply no model. Every subsequent solved
-   estimate becomes the current online transform, and later relative vectors
-   are chosen from that latest estimate, which may prioritize the weaker
-   learned basis and keep refining the matrix. The loop uses every later solved
-   estimate as current online evidence. The loop reports update magnitude as
-   the convergence signal. Update magnitude is the convergence signal, with
+   basis. There is no identity matrix as calibration evidence; before that
+   first minibatch the prior is simply no model. Each solved basis becomes the
+   current online transform, and later relative vectors are chosen from that
+   model, which may prioritize the weaker learned axis and keep refining the
+   matrix. The loop reports update magnitude as the convergence signal, with
    magnitude approaching zero as the desired behavior. Swapped, rotated,
    skewed, or sign-reversed axes are normal outcomes of the learned matrix.
 5. Set Drawing Border from the current 2x2 transform. The seeded border uses
@@ -89,9 +87,9 @@ conditions are not workflow phases.
    workflow must assign typed X/Y values directly. Editing X and Y sets the
    declared field dimensions without aspect-ratio inference.
    Residuals and field-corner precision remain quality diagnostics, but setup
-   must not discard the current transform behind a second accepted-estimate
-   gate. Every later solved estimate updates the provisional Drawing Border
-   until the operator locks it. The seeded video border is operator-adjustable
+   must not discard the current transform behind a second acceptance gate.
+   Every later solved basis updates the provisional Drawing Border until the
+   operator locks it. The seeded video border is operator-adjustable
    as a rectangle; the video Drawing Border remains operator-adjustable as a
    rectangle: drag the border to move it, drag the top-right handle to resize
    it while it remains rectangular, and release to re-lock border registration
@@ -194,7 +192,7 @@ instead of inventing synthetic phases for stale or blocked conditions.
 | Step | Evidence recorded | Does not prove |
 | --- | --- | --- |
 | Confirm Green Cap | Python workflow cap-confirmation artifact with camera-space cap point. | Field-localized cap evidence, relative motion model, or drawing authority. |
-| Field Registration Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-camera basis. | Cap-to-tip offset, ink binding, or drawing authority. |
+| Field Registration Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online basis state, corner precision, learned 2x2 machine-to-camera basis. | Cap-to-tip offset, ink binding, or drawing authority. |
 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error. | Pen position or drawing authority. |
 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker. | Actual drawing readiness. |
 | Confirm Pen Ready | Operator acknowledgement with current Drawing Border/camera/field ids. | Ink quality or model validity. |

@@ -12,7 +12,7 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var plotterOverlay = PlotterOverlaySettings()
     @Published var plotterViewport = PlotterViewportSettings()
     @Published var drawingFrame = DrawingFrameSettings()
-    @Published var frameLearning = FrameLearningState.idle
+    @Published var motionCalibration = MotionCalibrationState.idle
     @Published var calibrationStatusText = "CAL idle"
     @Published var calibrationWizardActive = false
     @Published var showImageProcessingPanel = true
@@ -141,7 +141,7 @@ final class OperatorWorkspaceState: ObservableObject {
                 "visual_field_height_mm": visualFieldHeightMm,
                 "visual_field_video_aspect_y_per_x": calibrationWizardSnapshot.fieldAspectYPerX ?? 0.0,
                 "field_registration_probe_samples": fieldRegistrationProbeSamples.count,
-                "field_registration_probe_estimate_present": fieldRegistrationProbeModel != nil,
+                "field_registration_probe_basis_present": fieldRegistrationProbeModel != nil,
                 "operator_log_entries": operatorLog.count
             ]
         ]

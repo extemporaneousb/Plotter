@@ -13,6 +13,28 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _removed_workflow_contract_terms() -> tuple[str, ...]:
+    return (
+        "legacy" + "_phase",
+        "legacy" + "Phase",
+        "machine" + "_video" + "_agreement",
+        "Machine" + "-" + "Video",
+        "machine" + "-" + "video",
+        "machine" + "Video" + "Agreement",
+        "Machine" + "Video" + "Agreement",
+        "drawing" + "_border" + "_locked",
+        "stale" + "_downstream",
+        "run" + "_machine" + "_video" + "_probe",
+        "AG" + "REE",
+        "EST" + "IMATE",
+    )
+
+
+def _assert_no_removed_workflow_terms(text: str) -> None:
+    for term in _removed_workflow_contract_terms():
+        assert term not in text
+
+
 def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     app_main = _read(SWIFT_DIR / "AppMain.swift")
@@ -75,7 +97,7 @@ def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> No
     assert "@Published var visualFieldHeightMm = 150.0" in workspace
     assert '"visual_field_width_mm": visualFieldWidthMm' in workspace
     assert '"visual_field_height_mm": visualFieldHeightMm' in workspace
-    assert '"field_registration_probe_estimate_present": fieldRegistrationProbeModel != nil' in workspace
+    assert '"field_registration_probe_basis_present": fieldRegistrationProbeModel != nil' in workspace
     assert "field_registration_probe_valid" not in workspace
     assert "CalibrationWizardView(" in content
     assert "workflow: bridge.calibrationWorkflow" in content
@@ -126,6 +148,34 @@ def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> No
     assert "Sample Cap Color" not in _read(SWIFT_DIR / "CalibrationWizardView.swift")
     assert "startCalibrationWizard" in content
     assert "Confirm Setup" not in content + _read(SWIFT_DIR / "CalibrationWizardView.swift")
+
+
+def test_swift_workflow_dtos_and_setup_sources_use_current_contract_names() -> None:
+    content = _read(SWIFT_DIR / "ContentView.swift")
+    wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
+    workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
+    models = _read(SWIFT_DIR / "Models.swift")
+    bridge_model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
+    bridge_client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
+    workflow_dtos = bridge_client.split("struct BridgeCalibrationWorkflow", 1)[1].split(
+        "struct BridgeVisualBindingObservationRequest",
+        1,
+    )[0]
+    setup_sources = "\n".join([content, wizard, workspace, models, bridge_model])
+
+    _assert_no_removed_workflow_terms(workflow_dtos)
+    _assert_no_removed_workflow_terms(setup_sources)
+    assert "let phase: String" in workflow_dtos
+    assert "let activity: String" in workflow_dtos
+    assert "let health: String" in workflow_dtos
+    assert "struct MotionCalibrationState" in models
+    assert "@Published var motionCalibration = MotionCalibrationState.idle" in workspace
+    assert "private func runMotionCalibrationFromFieldRegistration()" in content
+    assert "var samples: [MotionCalibrationSample]" in content
+    assert "FIELD_SEEDED" in content
+    assert '"motion_calibration_status"' in content
+    assert '"field_registration_probe_basis_present": fieldRegistrationProbeModel != nil' in workspace
+    assert ("Frame" + "Learning") not in setup_sources
 
 
 def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
@@ -460,7 +510,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "Observed frame" in _read(SWIFT_DIR / "MeasurementOverlay.swift")
     assert "setupRelativeMove(" in frame_drawing
     assert "motion already validated" not in content
-    assert "runFrameLearning()" in content
+    assert "runMotionCalibrationFromFieldRegistration()" in content
     assert "runWizardMotionValidation" in content
     assert "approachVisualTarget(target, label: \"VALIDATE\", targetIndex: 1)" in content
     validation_run = content.split("private func runWizardMotionValidation", 1)[1].split(
@@ -473,7 +523,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     )[1].split("let residualMm", 1)[0]
     assert 'status: "MEASURED"' in validation_target_failure
     assert "Motion validation failed; fix blocker and retry validation" in validation_target_failure
-    assert 'frameLearning.status = "BLOCK"' not in validation_target_failure
+    assert 'motionCalibration.status = "BLOCK"' not in validation_target_failure
     validation_path = content.split("func approachVisualTarget", 1)[1].split(
         "private func visualTargetResidualDetails",
         1,
@@ -708,9 +758,9 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "let machineDyMm: Double" in models
     assert "observedDistanceNorm / max(sample.commandDistanceMm" in content
     assert "cameraDelta(forMachineX" in models
-    assert "bridge.learningJog(" in content
-    learning_jog = model.split("func learningJog", 1)[1].split("func observeVisualCapForProbe", 1)[0]
-    assert "bypassWorkspaceProjection: true" in learning_jog
+    assert "bridge.setupCalibrationJog(" in content
+    setup_calibration_jog = model.split("func setupCalibrationJog", 1)[1].split("func observeVisualCapForProbe", 1)[0]
+    assert "bypassWorkspaceProjection: true" in setup_calibration_jog
     setup_relative_move = model.split("func setupRelativeMove", 1)[1].split("func observeVisualCapForProbe", 1)[0]
     assert "bypassWorkspaceProjection: true" in setup_relative_move
     assert "ensurePenUp: ensurePenUp" in setup_relative_move
@@ -746,14 +796,14 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
         1,
     )[0]
     assert 'case "run_motion_calibration":' in primary_action
-    assert 'bridge.calibrationWorkflow?.isStale == true || frameLearning.status != "MEASURED"' in primary_action
+    assert 'bridge.calibrationWorkflow?.isStale == true || motionCalibration.status != "MEASURED"' in primary_action
     assert 'runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")' in primary_action
     validation = content.split("private func runWizardMotionValidation", 1)[1].split(
         "private func wizardMotionValidationTarget",
         1,
     )[0]
     assert "await bridge.refreshVisualReadinessStatus()" in validation
-    assert "manualJogWorkspaceOverride" not in learning_jog
+    assert "manualJogWorkspaceOverride" not in setup_calibration_jog
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
     setup_gate = model.split("private func setupRelativeMotionBlockReason", 1)[1].split(
@@ -776,7 +826,7 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "runBootstrapAdaptiveProbe(" not in model
 
 
-def test_field_registration_probe_uses_online_estimate_before_field_overlay() -> None:
+def test_field_registration_probe_uses_online_basis_before_field_overlay() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     models = _read(SWIFT_DIR / "Models.swift")
@@ -953,13 +1003,13 @@ def test_field_registration_probe_uses_online_estimate_before_field_overlay() ->
 
     assert "docs/ARCHITECTURE.md" in readme
     assert "before locking or drawing the Drawing Border" in contract_flat
-    assert "Every subsequent solved estimate becomes the current online transform" in contract_flat
+    assert "Each solved basis becomes the current online transform" in contract_flat
     assert "current 2x2 transform" in contract
     assert "The operator can type explicit X and Y millimeter values" in contract_flat
     assert "does not infer the other from video aspect" in contract_flat
     assert "estimate Y from the rectangle's video aspect" not in readme
     assert "update magnitude as the convergence signal" in contract_flat
-    assert "Every later solved estimate updates the provisional" in contract_flat
+    assert "Every later solved basis updates the provisional" in contract_flat
     assert "seeded video border is operator-adjustable as a rectangle" in contract_flat
     assert "top-right handle to resize it while it remains rectangular" in contract_flat
     assert "Changing field dimensions re-locks" in contract_flat
@@ -968,11 +1018,11 @@ def test_field_registration_probe_uses_online_estimate_before_field_overlay() ->
     assert "There is no identity matrix as calibration evidence" in contract
     assert "reports update magnitude as the" in contract_flat
     assert "magnitude approaching zero" in contract_flat
-    assert "uses every later solved estimate" in plan_flat
+    assert "Each solved basis becomes the current online transform" in plan_flat
     assert 'cardinal `+X`, `+Y`, `-X`, `-Y` minibatch' in contract_flat
-    assert "Every subsequent solved estimate becomes the current online" in contract_flat
-    assert "later relative vectors are chosen from that latest estimate" in contract_flat
-    assert "Every later solved estimate updates the provisional Drawing Border" in contract_flat
+    assert "Each solved basis becomes the current online" in contract_flat
+    assert "later relative vectors are chosen from that model" in contract_flat
+    assert "Every later solved basis updates the provisional Drawing Border" in contract_flat
     assert "operator can type explicit X and Y millimeter values" in contract_flat
     assert "does not infer the other from video aspect" in contract_flat
     assert "seeded video border" in contract_flat
@@ -980,10 +1030,10 @@ def test_field_registration_probe_uses_online_estimate_before_field_overlay() ->
     assert "release to re-lock border registration" in contract_flat
     assert "cap and tip are colocated until explicit binding evidence" in contract_flat
     assert "before locking or drawing the Drawing Border" in plan_flat
-    assert "first empirical 2x2 machine-to-camera estimate" in plan_flat
-    assert "Update magnitude is the convergence signal" in plan_flat
-    assert "accepted-estimate gate" in plan_flat
-    assert "Every later solved estimate updates the provisional Drawing Border" in plan_flat
+    assert "first empirical 2x2 machine-to-camera basis" in plan_flat
+    assert "reports update magnitude as the convergence signal" in plan_flat
+    assert "second acceptance gate" in plan_flat
+    assert "Every later solved basis updates the provisional Drawing Border" in plan_flat
     assert "assign typed X/Y" in plan_flat
     assert "Editing X and Y sets" in plan_flat
     assert "aspect-ratio inference" in plan_flat

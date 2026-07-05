@@ -577,18 +577,18 @@ struct DrawingFrameSettings: Equatable, Codable {
     }
 }
 
-struct FrameLearningState: Equatable {
+struct MotionCalibrationState: Equatable {
     var status = "IDLE"
-    var detail = "No projection learned"
+    var detail = "No motion basis measured"
     var sampleCount = 0
     var xPixelsPerMm = 0.0
     var yPixelsPerMm = 0.0
     var lastPins = "-"
 
-    static let idle = FrameLearningState()
+    static let idle = MotionCalibrationState()
 }
 
-struct FrameLearningSample: Equatable {
+struct MotionCalibrationSample: Equatable {
     let axis: String
     let distanceMm: Double
     let observedDxMm: Double

@@ -2120,31 +2120,31 @@ final class PlotterBridgeModel: ObservableObject {
         )
     }
 
-    func learningJog(axis: String, distanceMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
+    func setupCalibrationJog(axis: String, distanceMm: Double, feedMmMin: Double) async -> MachineCommandResponse? {
         guard canRunSetupRelativeMotionCommand else {
             blockSetupRelativeMotionCommand(
-                event: "learning_jog_blocked",
+                event: "setup_calibration_jog_blocked",
                 details: ["axis": axis, "distance_mm": distanceMm]
             )
             return nil
         }
 
-        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
-            statusText = "Machine did not become ready for learning move"
+        guard await waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: 18.0) else {
+            statusText = "Machine did not become ready for calibration move"
             return nil
         }
         guard !isMachineAlarm else {
-            statusText = "Machine alarm blocks learning move"
+            statusText = "Machine alarm blocks calibration move"
             return nil
         }
 
         isRunning = true
         isMachineBusy = true
-        activeAction = "learn"
+        activeAction = "calibrate"
         shortStatus = "RUN"
-        statusText = String(format: "Learn %@ %.1fmm", axis, distanceMm)
+        statusText = String(format: "Calibrate %@ %.1fmm", axis, distanceMm)
         diagnosticsEvent(
-            "learning_jog_started",
+            "setup_calibration_jog_started",
             ["axis": axis, "distance_mm": distanceMm, "feed_mm_min": feedMmMin],
             snapshot: true
         )
@@ -2173,7 +2173,7 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = "\(response.action) \(response.status)"
             await refreshMachineStatus()
             diagnosticsEvent(
-                "learning_jog_completed",
+                "setup_calibration_jog_completed",
                 commandPayload(response).merging(["axis": axis, "distance_mm": distanceMm]) { current, _ in current },
                 snapshot: true
             )
@@ -2185,7 +2185,7 @@ final class PlotterBridgeModel: ObservableObject {
             isMachineBusy = false
             isMachineAlarm = error.localizedDescription.localizedCaseInsensitiveContains("alarm")
             diagnosticsEvent(
-                "learning_jog_failed",
+                "setup_calibration_jog_failed",
                 errorPayload(error).merging(["axis": axis, "distance_mm": distanceMm]) { current, _ in current },
                 snapshot: true
             )
@@ -2208,7 +2208,7 @@ final class PlotterBridgeModel: ObservableObject {
             return nil
         }
 
-        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+        guard await waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: 18.0) else {
             statusText = "Machine did not become ready for setup move"
             return nil
         }
@@ -2468,7 +2468,7 @@ final class PlotterBridgeModel: ObservableObject {
             return nil
         }
 
-        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+        guard await waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: 18.0) else {
             statusText = "Machine did not become ready for visual move"
             return nil
         }
@@ -2528,7 +2528,7 @@ final class PlotterBridgeModel: ObservableObject {
             return false
         }
 
-        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+        guard await waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: 18.0) else {
             statusText = "Machine did not become ready for dot mark"
             return false
         }
@@ -2585,7 +2585,7 @@ final class PlotterBridgeModel: ObservableObject {
             return false
         }
 
-        guard await waitUntilMachineReadyForLearning(timeoutSeconds: 18.0) else {
+        guard await waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: 18.0) else {
             statusText = "Machine did not become ready for visual mark"
             return false
         }
@@ -2643,7 +2643,7 @@ final class PlotterBridgeModel: ObservableObject {
         }
     }
 
-    func waitUntilMachineReadyForLearning(timeoutSeconds: Double) async -> Bool {
+    func waitUntilMachineReadyForCalibrationMotion(timeoutSeconds: Double) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if !isRunning && !isMachineBusy {
@@ -2778,7 +2778,7 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func trustAxisModelFromVisualProbe(
-        samples: [FrameLearningSample],
+        samples: [MotionCalibrationSample],
         rmsResidualMm: Double,
         maxResidualMm: Double,
         minObservedDistanceMm: Double,

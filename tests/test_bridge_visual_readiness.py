@@ -35,6 +35,29 @@ from plotter_vision.drawing import DrawingFrameMM
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _removed_workflow_contract_terms() -> tuple[str, ...]:
+    return (
+        "legacy" + "_phase",
+        "legacy" + "Phase",
+        "machine" + "_video" + "_agreement",
+        "Machine" + "-" + "Video",
+        "machine" + "-" + "video",
+        "machine" + "Video" + "Agreement",
+        "Machine" + "Video" + "Agreement",
+        "drawing" + "_border" + "_locked",
+        "stale" + "_downstream",
+        "run" + "_machine" + "_video" + "_probe",
+        "AG" + "REE",
+        "EST" + "IMATE",
+    )
+
+
+def _assert_no_removed_workflow_terms(payload: Any) -> None:
+    text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    for term in _removed_workflow_contract_terms():
+        assert term not in text
+
+
 def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets() -> None:
     assert set(CALIBRATION_WORKFLOW_PHASES) == {
         "needs_cap",
@@ -73,6 +96,15 @@ def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets()
 def test_architecture_workflow_contract_block_is_generated_from_code() -> None:
     architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert extract_generated_workflow_contract(architecture) == calibration_workflow_contract_markdown()
+
+
+def test_calibration_workflow_source_uses_current_contract_fields() -> None:
+    source = (REPO_ROOT / "plotter_vision" / "bridge" / "server.py").read_text(encoding="utf-8")
+    workflow_source = source.split("def _calibration_workflow", 1)[1].split(
+        "def _workflow_activity",
+        1,
+    )[0]
+    _assert_no_removed_workflow_terms(workflow_source)
 
 
 def test_workflow_harness_covers_observed_setup_navigation_states(tmp_path: Path) -> None:
@@ -545,6 +577,7 @@ def test_workflow_surfaces_stale_drawing_border_downstream_evidence(tmp_path: Pa
     assert status_code == 200
     workflow = workflow_status["workflow"]
     assert workflow["phase"] == "motion_calibration"
+    assert workflow["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
     assert workflow["health"] == "stale"
     assert workflow["is_stale"] is True
     assert workflow["activity"] == "awaiting_motion_probe"
@@ -553,6 +586,7 @@ def test_workflow_surfaces_stale_drawing_border_downstream_evidence(tmp_path: Pa
     assert workflow["next_primary_action"]["id"] == "run_motion_calibration"
     assert workflow["overlay_badge"]["state"] == "stale"
     assert any("Drawing calibration session" in reason for reason in workflow["freshness"]["stale_reasons"])
+    _assert_no_removed_workflow_terms(workflow)
 
 
 def test_drawing_calibration_program_pipeline_persists_residual_grid_model(tmp_path: Path) -> None:
@@ -896,9 +930,11 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         assert action["enabled"] is False
         assert action["requires_drawing"] is True
         assert workflow["workflow"]["phase"] == "drawing_training"
+        assert workflow["workflow"]["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
         assert workflow["workflow"]["health"] == "blocked"
         assert workflow["workflow"]["activity"] == "awaiting_drawing_run"
         assert "future ink binding" in workflow["workflow"]["current_blocker"]
+        _assert_no_removed_workflow_terms(workflow["workflow"])
 
         status_code, run = client.post(
             "/calibration/drawing/session/run-batch",
@@ -919,9 +955,11 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         status_code, blocked = client.get("/calibration/workflow/status")
         assert status_code == 200
         assert blocked["workflow"]["phase"] == "drawing_training"
+        assert blocked["workflow"]["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
         assert blocked["workflow"]["health"] == "blocked"
         assert blocked["workflow"]["next_primary_action"]["id"] == "recovery_action"
         assert "future ink binding" in blocked["workflow"]["current_blocker"]
+        _assert_no_removed_workflow_terms(blocked["workflow"])
 
 
 def test_visual_probe_preview_and_run_routes_are_removed(tmp_path: Path) -> None:
@@ -1024,8 +1062,10 @@ def _assert_workflow_state(
 ) -> None:
     workflow = payload["workflow"]
     assert workflow["phase"] in CALIBRATION_WORKFLOW_PHASES
+    assert workflow["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
     assert workflow["activity"] in CALIBRATION_WORKFLOW_ACTIVITIES
     assert workflow["health"] in CALIBRATION_WORKFLOW_HEALTH_VALUES
+    _assert_no_removed_workflow_terms(workflow)
     assert (workflow["phase"], workflow["activity"], workflow["health"]) == (
         phase,
         activity,

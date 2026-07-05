@@ -65,9 +65,9 @@ struct ContentView: View {
         nonmutating set { workspace.visualMoveIntent = newValue }
     }
 
-    private var frameLearning: FrameLearningState {
-        get { workspace.frameLearning }
-        nonmutating set { workspace.frameLearning = newValue }
+    private var motionCalibration: MotionCalibrationState {
+        get { workspace.motionCalibration }
+        nonmutating set { workspace.motionCalibration = newValue }
     }
 
     private var showImageProcessingPanel: Bool {
@@ -506,7 +506,7 @@ struct ContentView: View {
             fiducialStatus: wizardFiducialStatus,
             greenCapDetail: wizardGreenCapDetail,
             greenCapStatus: wizardGreenCapStatus,
-            visualCalibrationDetail: frameLearning.detail,
+            visualCalibrationDetail: motionCalibration.detail,
             visualCalibrationStatus: wizardMotionProbeStatus,
             bindingDetail: wizardMotionValidationDetail,
             bindingStatus: wizardMotionValidationStatus,
@@ -661,10 +661,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func runFrameLearning() async {
+    private func runMotionCalibrationFromFieldRegistration() async {
         guard bridge.isLiveMotionMode else {
             calibrationStatusText = "CAL field registration probe blocked: \(bridge.motionGateMessage)"
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "BLOCK",
                 detail: bridge.motionGateMessage,
                 sampleCount: 0,
@@ -677,7 +677,7 @@ struct ContentView: View {
 
         guard bridge.isOnline else {
             calibrationStatusText = "CAL field registration probe blocked: bridge offline"
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "ERROR",
                 detail: "Bridge offline",
                 sampleCount: 0,
@@ -690,7 +690,7 @@ struct ContentView: View {
 
         guard await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) != nil else {
             calibrationStatusText = "CAL field registration probe blocked: cap not detected"
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "BLOCK",
                 detail: "Green cap detection required before field registration probe",
                 sampleCount: 0,
@@ -711,7 +711,7 @@ struct ContentView: View {
 
             await bridge.refreshMachineStatus()
             calibrationStatusText = "CAL motion calibration using adjusted drawing border"
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "LEARN",
                 detail: "Sampling motion in adjusted drawing border",
                 sampleCount: 0,
@@ -722,8 +722,8 @@ struct ContentView: View {
 
             await bridge.penUpMachine()
             guard !bridge.isMachineAlarm else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Pen-up failed or machine alarm"
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "Pen-up failed or machine alarm"
                 calibrationStatusText = "CAL motion calibration stopped: pen-up failed"
                 return
             }
@@ -745,9 +745,9 @@ struct ContentView: View {
         await bridge.refreshMachineStatus()
 
         calibrationStatusText = "CAL field registration probe starting"
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: "LEARN",
-            detail: "Learning machine +X/+Y in camera space",
+            detail: "Measuring machine +X/+Y in camera space",
             sampleCount: 0,
             xPixelsPerMm: 0,
             yPixelsPerMm: 0,
@@ -756,8 +756,8 @@ struct ContentView: View {
 
         await bridge.penUpMachine()
         guard !bridge.isMachineAlarm else {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Pen-up failed or machine alarm"
+            motionCalibration.status = "STOP"
+            motionCalibration.detail = "Pen-up failed or machine alarm"
             calibrationStatusText = "CAL field registration probe stopped: pen-up failed"
             return
         }
@@ -778,7 +778,7 @@ struct ContentView: View {
     private func runFieldMotionCalibration(using registrationModel: FieldRegistrationProbeModel) async {
         guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
             calibrationStatusText = "CAL motion calibration blocked: cap is not mapped into the field"
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "BLOCK",
                 detail: "Field locked, but cap is not mapped into field millimeters",
                 sampleCount: fieldRegistrationProbeSamples.count,
@@ -802,8 +802,8 @@ struct ContentView: View {
             safeZoneInsetXMm: visualCapSafeZoneMarginMm,
             safeZoneInsetYMm: visualCapSafeZoneMarginMm
         ) else {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Bridge rejected cap observation"
+            motionCalibration.status = "STOP"
+            motionCalibration.detail = "Bridge rejected cap observation"
             calibrationStatusText = "CAL motion calibration stopped: bridge cap observation failed"
             return
         }
@@ -817,7 +817,7 @@ struct ContentView: View {
             ("Y", commandDistanceMm),
             ("Y", -commandDistanceMm)
         ]
-        var samples: [FrameLearningSample] = []
+        var samples: [MotionCalibrationSample] = []
 
         for command in probeCommands {
             guard let sample = await runVisualAxisProbeMove(
@@ -833,7 +833,7 @@ struct ContentView: View {
                 return
             }
             samples.append(sample)
-            updateLearningSummary(
+            updateMotionCalibrationSummary(
                 samples: samples,
                 status: "LEARN",
                 detail: String(
@@ -847,7 +847,7 @@ struct ContentView: View {
 
         let evaluation = evaluateVisualAxisProbe(samples: samples)
         let evaluatedSamples = applyResiduals(to: samples)
-        updateLearningSummary(
+        updateMotionCalibrationSummary(
             samples: evaluatedSamples,
             status: evaluation.passed ? "MEASURED" : "WEAK",
             detail: evaluation.detail
@@ -867,7 +867,7 @@ struct ContentView: View {
         guard let fittedModel = VisualMotionModel.solve(samples: fittedSamples) else {
             visualMotionModel = nil
             visualMotionSamples = []
-            updateLearningSummary(
+            updateMotionCalibrationSummary(
                 samples: evaluatedSamples,
                 status: "WEAK",
                 detail: "Motion basis solve failed"
@@ -877,7 +877,7 @@ struct ContentView: View {
         }
         visualMotionSamples = fittedSamples
         visualMotionModel = fittedModel
-        updateLearningSummary(
+        updateMotionCalibrationSummary(
             samples: evaluatedSamples,
             status: "MEASURED",
             detail: String(
@@ -893,8 +893,8 @@ struct ContentView: View {
     @MainActor
     private func runFieldRegistrationProbe() async -> FieldRegistrationProbeModel? {
         guard let noise = await measureFieldRegistrationProbeNoise() else {
-            frameLearning.status = "STOP"
-            frameLearning.detail = "Could not measure cap jitter before field registration probe"
+            motionCalibration.status = "STOP"
+            motionCalibration.detail = "Could not measure cap jitter before field registration probe"
             calibrationStatusText = "CAL field registration probe stopped: cap jitter measurement failed"
             return nil
         }
@@ -910,7 +910,7 @@ struct ContentView: View {
         var latestUpdateMagnitude: Double?
         var cycle = 0
 
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: "NOISE",
             detail: String(
                 format: "Cap jitter rms %.4f max %.4f; need signal %.4f",
@@ -981,7 +981,7 @@ struct ContentView: View {
                let latestUpdateMagnitude,
                latestUpdateMagnitude <= fieldRegistrationProbeConvergedUpdateNorm {
                 fieldRegistrationProbeModel = model
-                frameLearning = FrameLearningState(
+                motionCalibration = MotionCalibrationState(
                     status: "FIELD_REGISTERED",
                     detail: String(
                         format: "Field registration update %.4f rms %.4f max %.4f cond %.1f samples %d",
@@ -1020,17 +1020,17 @@ struct ContentView: View {
         }
 
         guard let model = bestModel else {
-            frameLearning.status = "WEAK"
-            frameLearning.detail = "Field registration basis solve failed"
-            frameLearning.sampleCount = samples.count
+            motionCalibration.status = "WEAK"
+            motionCalibration.detail = "Field registration basis solve failed"
+            motionCalibration.sampleCount = samples.count
             calibrationStatusText = "CAL field registration probe weak: basis solve failed"
             return nil
         }
         fieldRegistrationProbeModel = model
-        frameLearning = FrameLearningState(
-            status: "FIELD_ESTIMATED",
+        motionCalibration = MotionCalibrationState(
+            status: "FIELD_SEEDED",
             detail: String(
-                format: "Using latest estimate update %@ rms %.4f max %.4f cond %.1f samples %d",
+                format: "Using latest basis update %@ rms %.4f max %.4f cond %.1f samples %d",
                 latestUpdateMagnitude.map { String(format: "%.4f", $0) } ?? "--",
                 model.rmsResidualNorm,
                 model.maxResidualNorm,
@@ -1042,7 +1042,7 @@ struct ContentView: View {
             yPixelsPerMm: model.yBasisLengthNorm,
             lastPins: bridge.machinePins
         )
-        calibrationStatusText = "CAL field registration using latest estimate; seeding provisional \(desiredVisualFieldSizeLabel) field"
+        calibrationStatusText = "CAL field registration using latest basis; seeding provisional \(desiredVisualFieldSizeLabel) field"
         recordFieldRegistrationProbeModel(
             model,
             noise: noise,
@@ -1133,7 +1133,7 @@ struct ContentView: View {
            updateMagnitude <= fieldRegistrationProbeConvergedUpdateNorm {
             return "FIELD_REGISTERED"
         }
-        return "FIELD_ESTIMATED"
+        return "FIELD_SEEDED"
     }
 
     @MainActor
@@ -1154,13 +1154,13 @@ struct ContentView: View {
             let commandX = machineDxMm * commandScale
             let commandY = machineDyMm * commandScale
             guard let before = await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Cap marker lost before field registration move"
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "Cap marker lost before field registration move"
                 calibrationStatusText = "CAL field registration probe stopped: cap lost before move"
                 return nil
             }
 
-            frameLearning.detail = String(
+            motionCalibration.detail = String(
                 format: "Field registration %@ X%+.1f Y%+.1f attempt %d",
                 label,
                 commandX,
@@ -1179,16 +1179,16 @@ struct ContentView: View {
                 yMm: commandY,
                 feedMmMin: feedMmMin
             ) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = bridge.statusText.isEmpty ? "Learning move failed" : bridge.statusText
-                calibrationStatusText = "CAL field registration probe stopped: \(frameLearning.detail)"
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = bridge.statusText.isEmpty ? "Calibration move failed" : bridge.statusText
+                calibrationStatusText = "CAL field registration probe stopped: \(motionCalibration.detail)"
                 return nil
             }
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Pin active after \(label) move: \(pins)"
-                frameLearning.lastPins = pins
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "Pin active after \(label) move: \(pins)"
+                motionCalibration.lastPins = pins
                 calibrationStatusText = "CAL field registration probe stopped: pin active \(pins)"
                 return nil
             }
@@ -1205,8 +1205,8 @@ struct ContentView: View {
                     )
                     continue
                 }
-                frameLearning.status = "STOP"
-                frameLearning.detail = "No fresh cap observation after \(label) move"
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "No fresh cap observation after \(label) move"
                 calibrationStatusText = "CAL field registration probe stopped: no fresh cap observation"
                 return nil
             }
@@ -1289,7 +1289,7 @@ struct ContentView: View {
     ) async -> MachineCommandResponse? {
         var latestResponse: MachineCommandResponse?
         if abs(xMm) >= 0.000_001 {
-            guard let response = await bridge.learningJog(axis: "X", distanceMm: xMm, feedMmMin: feedMmMin) else {
+            guard let response = await bridge.setupCalibrationJog(axis: "X", distanceMm: xMm, feedMmMin: feedMmMin) else {
                 return nil
             }
             latestResponse = response
@@ -1298,7 +1298,7 @@ struct ContentView: View {
             }
         }
         if abs(yMm) >= 0.000_001 {
-            guard let response = await bridge.learningJog(axis: "Y", distanceMm: yMm, feedMmMin: feedMmMin) else {
+            guard let response = await bridge.setupCalibrationJog(axis: "Y", distanceMm: yMm, feedMmMin: feedMmMin) else {
                 return nil
             }
             latestResponse = response
@@ -1338,7 +1338,7 @@ struct ContentView: View {
                 minimumSignalNorm
             )
         }
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: status,
             detail: detail,
             sampleCount: samples.count,
@@ -1400,8 +1400,8 @@ struct ContentView: View {
                   fieldWidthMm: fieldWidthMm,
                   fieldHeightMm: fieldHeightMm
               ) else {
-            frameLearning.status = "BLOCK"
-            frameLearning.detail = "Could not seed the selected field from field registration probe"
+            motionCalibration.status = "BLOCK"
+            motionCalibration.detail = "Could not seed the selected field from field registration probe"
             calibrationStatusText = "FIELD seed blocked: field registration basis did not fit in camera"
             return false
         }
@@ -1414,9 +1414,9 @@ struct ContentView: View {
             paperWidthMm: fieldWidthMm,
             paperHeightMm: fieldHeightMm
         ), response.registration != nil else {
-            frameLearning.status = "BLOCK"
-            frameLearning.detail = bridge.statusText.isEmpty ? "Field registration failed" : bridge.statusText
-            calibrationStatusText = "FIELD seed failed: \(frameLearning.detail)"
+            motionCalibration.status = "BLOCK"
+            motionCalibration.detail = bridge.statusText.isEmpty ? "Field registration failed" : bridge.statusText
+            calibrationStatusText = "FIELD seed failed: \(motionCalibration.detail)"
             return false
         }
 
@@ -1478,14 +1478,14 @@ struct ContentView: View {
               let persistedModel = readiness.relativeMotionModel?.visualMotionModel else {
             return
         }
-        guard frameLearning.status == "IDLE" || frameLearning.status == "FIELD_REGISTERED" || frameLearning.status == "BLOCK" else {
+        guard motionCalibration.status == "IDLE" || motionCalibration.status == "FIELD_REGISTERED" || motionCalibration.status == "BLOCK" else {
             return
         }
         guard visualMotionModel != persistedModel else { return }
 
         visualMotionModel = persistedModel
         visualMotionSamples = []
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: "VALIDATED",
             detail: "Loaded saved drawing-border motion model",
             sampleCount: persistedModel.sampleCount,
@@ -1528,8 +1528,8 @@ struct ContentView: View {
     private func blockInvalidVisualFieldCorners(source: String) {
         fieldRelockTask?.cancel()
         bridge.clearBindingMarkPreviewOverlay()
-        frameLearning.status = "BLOCK"
-        frameLearning.detail = "Adjusted drawing border is concave"
+        motionCalibration.status = "BLOCK"
+        motionCalibration.detail = "Adjusted drawing border is concave"
         calibrationStatusText = "BORDER edit blocked: corners must form a convex rectangle"
         bridge.recordOperatorEvent(
             "drawing_border_adjusted_blocked",
@@ -1594,13 +1594,13 @@ struct ContentView: View {
 
         visualMotionModel = nil
         visualMotionSamples = []
-        if frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATED" {
-            frameLearning = FrameLearningState(
+        if motionCalibration.status == "MEASURED" || motionCalibration.status == "VALIDATED" {
+            motionCalibration = MotionCalibrationState(
                 status: "FIELD_REGISTERED",
                 detail: "Drawing border edited; run motion calibration against the adjusted border",
                 sampleCount: fieldRegistrationProbeSamples.count,
-                xPixelsPerMm: fieldRegistrationProbeModel?.xBasisLengthNorm ?? frameLearning.xPixelsPerMm,
-                yPixelsPerMm: fieldRegistrationProbeModel?.yBasisLengthNorm ?? frameLearning.yPixelsPerMm,
+                xPixelsPerMm: fieldRegistrationProbeModel?.xBasisLengthNorm ?? motionCalibration.xPixelsPerMm,
+                yPixelsPerMm: fieldRegistrationProbeModel?.yBasisLengthNorm ?? motionCalibration.yPixelsPerMm,
                 lastPins: bridge.machinePins
             )
         }
@@ -1612,9 +1612,9 @@ struct ContentView: View {
             paperWidthMm: fieldWidthMm,
             paperHeightMm: fieldHeightMm
         ), response.registration != nil else {
-            frameLearning.status = "BLOCK"
-            frameLearning.detail = bridge.statusText.isEmpty ? "Adjusted drawing border registration failed" : bridge.statusText
-            calibrationStatusText = "BORDER edit blocked: \(frameLearning.detail)"
+            motionCalibration.status = "BLOCK"
+            motionCalibration.detail = bridge.statusText.isEmpty ? "Adjusted drawing border registration failed" : bridge.statusText
+            calibrationStatusText = "BORDER edit blocked: \(motionCalibration.detail)"
             return
         }
 
@@ -1644,7 +1644,7 @@ struct ContentView: View {
         distanceMm: Double,
         projectedPaperDelta: (dx: Double, dy: Double)? = nil,
         sampleIndex: Int
-    ) async -> FrameLearningSample? {
+    ) async -> MotionCalibrationSample? {
         let commandDx = axis == "X" ? distanceMm : 0.0
         let commandDy = axis == "Y" ? distanceMm : 0.0
         let feedMmMin = min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin)
@@ -1660,10 +1660,10 @@ struct ContentView: View {
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
                           feedMmMin: min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
-                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
+                              await bridge.setupCalibrationJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
                       ) else {
-                    updateLearningSummary(
+                    updateMotionCalibrationSummary(
                         samples: [],
                         status: "STOP",
                         detail: "Cap marker lost before move"
@@ -1682,7 +1682,7 @@ struct ContentView: View {
                 continue
             }
 
-            frameLearning.detail = String(format: "Move %@ %.0f mm", axis, distanceMm)
+            motionCalibration.detail = String(format: "Move %@ %.0f mm", axis, distanceMm)
             calibrationStatusText = String(
                 format: "CAL cap-marker probe: move %@ %.0f mm",
                 axis,
@@ -1702,7 +1702,7 @@ struct ContentView: View {
                     : String(format: "cmd X%+.0f Y%+.0f", commandDx, commandDy)
             )
 
-            guard let response = await bridge.learningJog(
+            guard let response = await bridge.setupCalibrationJog(
                 axis: axis,
                 distanceMm: distanceMm,
                 feedMmMin: feedMmMin
@@ -1711,17 +1711,17 @@ struct ContentView: View {
                 let moveFailure = bridge.statusText.isEmpty
                     ? "Move failed or machine busy"
                     : bridge.statusText
-                frameLearning.status = "STOP"
-                frameLearning.detail = moveFailure
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = moveFailure
                 calibrationStatusText = "CAL cap-marker probe stopped: \(moveFailure)"
                 return nil
             }
 
             if let pins = response.machineStatus?.pins, !pins.isEmpty, pins != "-" {
                 clearVisualMoveIntent(reason: "probe_pin_active")
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Pin active after move"
-                frameLearning.lastPins = pins
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "Pin active after move"
+                motionCalibration.lastPins = pins
                 calibrationStatusText = "CAL cap-marker probe stopped: pin active \(pins)"
                 return nil
             }
@@ -1739,11 +1739,11 @@ struct ContentView: View {
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandDx),
                           feedMmMin: min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
-                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
+                              await bridge.setupCalibrationJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
                       ) else {
                     clearVisualMoveIntent(reason: "probe_cap_lost_after_move")
-                    updateLearningSummary(
+                    updateMotionCalibrationSummary(
                         samples: [],
                         status: "STOP",
                         detail: "Cap marker lost after move"
@@ -1766,7 +1766,7 @@ struct ContentView: View {
             let dx = after.paperMm.x - before.paperMm.x
             let dy = after.paperMm.y - before.paperMm.y
             let observedDistance = hypot(dx, dy)
-            let sample = FrameLearningSample(
+            let sample = MotionCalibrationSample(
                 axis: axis,
                 distanceMm: distanceMm,
                 observedDxMm: dx,
@@ -1788,8 +1788,8 @@ struct ContentView: View {
                     sampleIdSuffix: "axis-\(sampleIndex)"
                 )
             ) else {
-                frameLearning.status = "STOP"
-                frameLearning.detail = "Bridge failed to persist probe evidence"
+                motionCalibration.status = "STOP"
+                motionCalibration.detail = "Bridge failed to persist probe evidence"
                 calibrationStatusText = "CAL cap-marker probe stopped: evidence persistence failed"
                 return nil
             }
@@ -1810,7 +1810,7 @@ struct ContentView: View {
             return sample
         }
 
-        updateLearningSummary(
+        updateMotionCalibrationSummary(
             samples: [],
             status: "STOP",
             detail: "Cap marker reacquire exhausted"
@@ -1820,17 +1820,17 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func updateLearningSummary(
-        samples: [FrameLearningSample],
+    private func updateMotionCalibrationSummary(
+        samples: [MotionCalibrationSample],
         status: String,
         detail: String
     ) {
-        let previousStatus = frameLearning.status
+        let previousStatus = motionCalibration.status
         let xSamples = samples.filter { $0.axis == "X" && abs($0.distanceMm) > 0 }
         let ySamples = samples.filter { $0.axis == "Y" && abs($0.distanceMm) > 0 }
         let xScale = averageObservedMmPerCommandMm(samples: xSamples)
         let yScale = averageObservedMmPerCommandMm(samples: ySamples)
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: status,
             detail: detail,
             sampleCount: samples.count,
@@ -1840,7 +1840,7 @@ struct ContentView: View {
         )
         if status != previousStatus || status != "LEARN" {
             bridge.recordOperatorEvent(
-                "frame_learning_status",
+                "motion_calibration_status",
                 details: [
                     "status": status,
                     "detail": detail,
@@ -1853,7 +1853,7 @@ struct ContentView: View {
         }
     }
 
-    private func averageObservedMmPerCommandMm(samples: [FrameLearningSample]) -> Double {
+    private func averageObservedMmPerCommandMm(samples: [MotionCalibrationSample]) -> Double {
         guard !samples.isEmpty else { return 0 }
         let total = samples.reduce(0.0) { partial, sample in
             partial + sample.observedDistanceMm / abs(sample.distanceMm)
@@ -1862,7 +1862,7 @@ struct ContentView: View {
     }
 
     private func recordVisualMotionProbeSample(
-        _ sample: FrameLearningSample,
+        _ sample: MotionCalibrationSample,
         sampleIndex: Int,
         before: GreenCapPaperObservation,
         after: GreenCapPaperObservation
@@ -1950,7 +1950,7 @@ struct ContentView: View {
         )
     }
 
-    private func visualMotionSample(from sample: FrameLearningSample) -> VisualMotionSample {
+    private func visualMotionSample(from sample: MotionCalibrationSample) -> VisualMotionSample {
         VisualMotionSample(
             machineDxMm: sample.axis == "X" ? sample.distanceMm : 0.0,
             machineDyMm: sample.axis == "Y" ? sample.distanceMm : 0.0,
@@ -2005,7 +2005,7 @@ struct ContentView: View {
 
         visualMotionSamples = updatedSamples
         visualMotionModel = updatedModel
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: "MEASURED",
             detail: String(
                 format: "Motion updated rms %.1f max %.1f samples %d",
@@ -2269,7 +2269,7 @@ struct ContentView: View {
             && paperMm.y <= bridge.visualFieldHeightMm - visualCapSafeZoneMarginMm
     }
 
-    private func evaluateVisualAxisProbe(samples: [FrameLearningSample]) -> VisualAxisProbeEvaluation {
+    private func evaluateVisualAxisProbe(samples: [MotionCalibrationSample]) -> VisualAxisProbeEvaluation {
         guard samples.count >= 4 else {
             return VisualAxisProbeEvaluation(
                 passed: false,
@@ -2360,8 +2360,8 @@ struct ContentView: View {
     }
 
     private func applyResiduals(
-        to samples: [FrameLearningSample]
-    ) -> [FrameLearningSample] {
+        to samples: [MotionCalibrationSample]
+    ) -> [MotionCalibrationSample] {
         let xBasis = averageBasis(samples: samples.filter { $0.axis == "X" })
         let yBasis = averageBasis(samples: samples.filter { $0.axis == "Y" })
         return samples.map { sample in
@@ -2377,7 +2377,7 @@ struct ContentView: View {
     private func visualProbeProjectedPaperDelta(
         axis: String,
         distanceMm: Double,
-        samples: [FrameLearningSample]
+        samples: [MotionCalibrationSample]
     ) -> (dx: Double, dy: Double)? {
         let axisSamples = samples.filter {
             $0.axis == axis
@@ -2392,7 +2392,7 @@ struct ContentView: View {
         return (dx, dy)
     }
 
-    private func averageBasis(samples: [FrameLearningSample]) -> (dx: Double, dy: Double) {
+    private func averageBasis(samples: [MotionCalibrationSample]) -> (dx: Double, dy: Double) {
         guard !samples.isEmpty else { return (0, 0) }
         let total = samples.reduce((dx: 0.0, dy: 0.0)) { partial, sample in
             (
@@ -2406,7 +2406,7 @@ struct ContentView: View {
         )
     }
 
-    private func weakProbeSampleSummary(samples: [FrameLearningSample]) -> String {
+    private func weakProbeSampleSummary(samples: [MotionCalibrationSample]) -> String {
         let sorted = samples.sorted { $0.observedDistanceMm < $1.observedDistanceMm }
         guard !sorted.isEmpty else { return "none" }
         return sorted.prefix(3).map { sample in
@@ -2453,14 +2453,14 @@ struct ContentView: View {
     }
 
     private var visualMotionValidated: Bool {
-        frameLearning.status == "VALIDATED" && visualMotionModel?.isUsable == true
+        motionCalibration.status == "VALIDATED" && visualMotionModel?.isUsable == true
     }
 
     private var canValidateWizardMotion: Bool {
         bridge.hasPaperLock
             && confirmedCapPoint?.paperMm != nil
             && currentGreenCapFieldMappedReady
-            && frameLearning.status == "MEASURED"
+            && motionCalibration.status == "MEASURED"
             && visualMotionModel?.isUsable == true
             && !bridge.isMachineBusy
             && !bridge.isRunning
@@ -2599,7 +2599,7 @@ struct ContentView: View {
                           preferredDirection: preferredXReacquireDirection(opposingCommandX: commandX),
                           feedMmMin: min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin),
                           moveX: { commandMm, feedMmMin in
-                              await bridge.learningJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
+                              await bridge.setupCalibrationJog(axis: "X", distanceMm: commandMm, feedMmMin: feedMmMin)
                           }
                       ) else {
                     clearVisualMoveIntent(reason: "visual_target_no_new_frame")
@@ -3075,7 +3075,7 @@ struct ContentView: View {
             fiducialStatus: wizardFiducialStatus,
             greenCapDetail: wizardGreenCapDetail,
             greenCapStatus: wizardGreenCapStatus,
-            visualCalibrationDetail: frameLearning.detail,
+            visualCalibrationDetail: motionCalibration.detail,
             visualCalibrationStatus: wizardMotionProbeStatus,
             bindingDetail: wizardMotionValidationDetail,
             bindingStatus: wizardMotionValidationStatus,
@@ -3168,7 +3168,7 @@ struct ContentView: View {
     }
 
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
-        if frameLearning.status == "FIELD_REGISTERED" || frameLearning.status == "FIELD_ESTIMATED" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
+        if motionCalibration.status == "FIELD_REGISTERED" || motionCalibration.status == "FIELD_SEEDED" || motionCalibration.status == "MEASURED" || motionCalibration.status == "VALIDATE" || visualMotionValidated {
             return .done
         }
         if confirmedCapPoint != nil {
@@ -3179,11 +3179,11 @@ struct ContentView: View {
 
     private var wizardMotionValidationStatus: CalibrationWizardStepStatus {
         if visualMotionValidated { return .done }
-        if frameLearning.status == "VALIDATE" { return .active }
-        if frameLearning.status == "MEASURED" {
+        if motionCalibration.status == "VALIDATE" { return .active }
+        if motionCalibration.status == "MEASURED" {
             return canValidateWizardMotion ? .active : .blocked
         }
-        if frameLearning.status == "WEAK" || frameLearning.status == "BLOCK" || frameLearning.status == "STOP" {
+        if motionCalibration.status == "WEAK" || motionCalibration.status == "BLOCK" || motionCalibration.status == "STOP" {
             return .blocked
         }
         return .pending
@@ -3249,7 +3249,7 @@ struct ContentView: View {
             }
             return "Motion model valid"
         }
-        if frameLearning.status == "MEASURED" {
+        if motionCalibration.status == "MEASURED" {
             guard let model = visualMotionModel, model.isUsable else {
                 return "Measured samples did not produce a usable model"
             }
@@ -3260,11 +3260,11 @@ struct ContentView: View {
                 model.maxResidualMm
             )
         }
-        if frameLearning.status == "WEAK" || frameLearning.status == "BLOCK" || frameLearning.status == "STOP" {
-            return frameLearning.detail
+        if motionCalibration.status == "WEAK" || motionCalibration.status == "BLOCK" || motionCalibration.status == "STOP" {
+            return motionCalibration.detail
         }
-        if frameLearning.status == "VALIDATE" {
-            return frameLearning.detail
+        if motionCalibration.status == "VALIDATE" {
+            return motionCalibration.detail
         }
         if let model = fieldRegistrationProbeModel, model.isUsable {
             return String(
@@ -3300,12 +3300,12 @@ struct ContentView: View {
         let action = workflow.nextPrimaryAction
         switch action.id {
         case "run_field_registration_probe":
-            if bridge.hasPaperLock || fieldRegistrationProbeModel != nil || frameLearning.status == "MEASURED" || visualMotionValidated {
+            if bridge.hasPaperLock || fieldRegistrationProbeModel != nil || motionCalibration.status == "MEASURED" || visualMotionValidated {
                 return nil
             }
         case "run_motion_calibration":
             let staleHealth = workflow.isStale || workflow.health == "stale" || workflow.health == "stale_and_blocked"
-            if !staleHealth && (frameLearning.status == "MEASURED" || visualMotionValidated) {
+            if !staleHealth && (motionCalibration.status == "MEASURED" || visualMotionValidated) {
                 return nil
             }
         default:
@@ -3320,7 +3320,7 @@ struct ContentView: View {
                 ? "Show the green cap in the plotter camera before setup movement."
                 : "Confirm the detected green cap before field registration probe."
         }
-        if frameLearning.status != "MEASURED" && !visualMotionValidated {
+        if motionCalibration.status != "MEASURED" && !visualMotionValidated {
             if !bridge.hasPaperLock {
                 return "Run field registration probe. The Drawing Border is hidden until the online +X/+Y estimate is usable."
             }
@@ -3343,14 +3343,14 @@ struct ContentView: View {
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil ? "Click Green Cap" : "Confirm Green Cap"
         }
-        if frameLearning.status == "VALIDATE" { return "Validating Motion" }
+        if motionCalibration.status == "VALIDATE" { return "Validating Motion" }
         if visualMotionValidated { return "Confirm Pen Ready" }
-        if frameLearning.status != "MEASURED" {
+        if motionCalibration.status != "MEASURED" {
             return bridge.hasPaperLock && fieldRegistrationProbeModel != nil
                 ? "Run Motion Calibration"
                 : "Run Field Registration Probe"
         }
-        if frameLearning.status == "MEASURED" { return "Validate Motion" }
+        if motionCalibration.status == "MEASURED" { return "Validate Motion" }
         return "Blocked"
     }
 
@@ -3371,7 +3371,7 @@ struct ContentView: View {
                 if bridge.calibrationWorkflow?.isStale == true {
                     return canRunWizardMotionProbe
                 }
-                return frameLearning.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
+                return motionCalibration.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
                 return visualMotionValidated || bridge.latestVisualReadiness?.visualReadyToPlot == true
@@ -3382,9 +3382,9 @@ struct ContentView: View {
         if confirmedCapPoint == nil {
             return true
         }
-        if frameLearning.status == "VALIDATE" { return false }
+        if motionCalibration.status == "VALIDATE" { return false }
         if visualMotionValidated { return true }
-        if frameLearning.status != "MEASURED" {
+        if motionCalibration.status != "MEASURED" {
             return canRunWizardMotionProbe
         }
         return canValidateWizardMotion
@@ -3410,9 +3410,9 @@ struct ContentView: View {
         if confirmedCapPoint == nil {
             return "cap marker not confirmed"
         }
-        if frameLearning.status == "VALIDATE" { return "motion validation running" }
+        if motionCalibration.status == "VALIDATE" { return "motion validation running" }
         if visualMotionValidated { return bridge.calibrationWorkflow?.currentBlocker }
-        if frameLearning.status != "MEASURED" {
+        if motionCalibration.status != "MEASURED" {
             if !bridge.isLiveMotionMode { return bridge.motionGateMessage }
             if bridge.isMachineAlarm { return "machine alarm" }
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
@@ -3441,7 +3441,7 @@ struct ContentView: View {
                 runWizardMotionProbeAction(statusText: "FIELD field registration probe requested")
                 return
             case "run_motion_calibration":
-                if bridge.calibrationWorkflow?.isStale == true || frameLearning.status != "MEASURED" {
+                if bridge.calibrationWorkflow?.isStale == true || motionCalibration.status != "MEASURED" {
                     runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
                 } else {
                     validateWizardMotion()
@@ -3473,7 +3473,7 @@ struct ContentView: View {
             return
         }
 
-        if frameLearning.status != "MEASURED" {
+        if motionCalibration.status != "MEASURED" {
             guard canRunWizardMotionProbe else {
                 calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
                 return
@@ -3482,7 +3482,7 @@ struct ContentView: View {
                 ? "FIELD adjusted-box motion calibration requested"
                 : "FIELD field registration probe requested"
             Task {
-                await runFrameLearning()
+                await runMotionCalibrationFromFieldRegistration()
             }
             return
         }
@@ -3497,7 +3497,7 @@ struct ContentView: View {
         }
         calibrationStatusText = statusText
         Task {
-            await runFrameLearning()
+            await runMotionCalibrationFromFieldRegistration()
         }
     }
 
@@ -3543,8 +3543,8 @@ struct ContentView: View {
             return
         }
         calibrationStatusText = "FIELD motion validation requested"
-        frameLearning.status = "VALIDATE"
-        frameLearning.detail = "Moving cap to a field target"
+        motionCalibration.status = "VALIDATE"
+        motionCalibration.detail = "Moving cap to a field target"
         Task {
             await runWizardMotionValidation(model: model)
         }
@@ -3553,8 +3553,8 @@ struct ContentView: View {
     @MainActor
     private func runWizardMotionValidation(model: VisualMotionModel) async {
         guard let current = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
-            frameLearning.status = "BLOCK"
-            frameLearning.detail = "Cap marker not visible for validation"
+            motionCalibration.status = "BLOCK"
+            motionCalibration.detail = "Cap marker not visible for validation"
             calibrationStatusText = "FIELD motion validation blocked: cap not visible"
             return
         }
@@ -3569,7 +3569,7 @@ struct ContentView: View {
             target.y
         )
         guard let observed = await approachVisualTarget(target, label: "VALIDATE", targetIndex: 1) else {
-            frameLearning = FrameLearningState(
+            motionCalibration = MotionCalibrationState(
                 status: "MEASURED",
                 detail: "Motion validation failed; fix blocker and retry validation",
                 sampleCount: model.sampleCount,
@@ -3580,7 +3580,7 @@ struct ContentView: View {
             return
         }
         let residualMm = paperDistance(from: observed.paperMm, to: target)
-        frameLearning = FrameLearningState(
+        motionCalibration = MotionCalibrationState(
             status: "VALIDATED",
             detail: String(
                 format: "Motion valid target residual %.1fmm rms %.1f max %.1f samples %d",
@@ -3659,7 +3659,7 @@ struct ContentView: View {
             calibrationStatusText = currentCarriageMarker == nil
                 ? "FIELD show green cap in camera"
                 : "FIELD confirm green cap"
-        } else if frameLearning.status != "MEASURED" {
+        } else if motionCalibration.status != "MEASURED" {
             calibrationStatusText = "BORDER run field registration probe before drawing border"
         } else {
             calibrationStatusText = "FIELD motion measured; validate motion"
@@ -3731,7 +3731,7 @@ struct ContentView: View {
         visualMotionModel = nil
         visualMotionSamples = []
         visualCenterDotTaskActive = false
-        frameLearning = .idle
+        motionCalibration = .idle
         bridge.learnedCapToTipModel = nil
         bridge.drawableSafeZone = nil
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
@@ -3755,8 +3755,8 @@ struct ContentView: View {
                 title: "MODEL",
                 value: fieldRegistrationProbeModel == nil
                     ? "--"
-                    : (frameLearning.status == "FIELD_REGISTERED" ? "2X2" : "EST"),
-                color: frameLearning.status == "FIELD_REGISTERED"
+                    : (motionCalibration.status == "FIELD_REGISTERED" ? "2X2" : "BASIS"),
+                color: motionCalibration.status == "FIELD_REGISTERED"
                     ? .green
                     : (fieldRegistrationProbeModel != nil ? .yellow : .white.opacity(0.45)),
                 help: wizardFiducialDetail
