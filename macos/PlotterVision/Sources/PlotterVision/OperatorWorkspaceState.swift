@@ -26,8 +26,8 @@ final class OperatorWorkspaceState: ObservableObject {
     @Published var manualCapColorMode = false
     @Published var confirmedCapPoint: ConfirmedCapPoint?
     @Published var visualMoveIntent: VisualMoveIntent?
-    @Published var machineVideoAgreementModel: MachineVideoAgreementModel?
-    @Published var machineVideoAgreementSamples: [MachineVideoAgreementSample] = []
+    @Published var fieldRegistrationProbeModel: FieldRegistrationProbeModel?
+    @Published var fieldRegistrationProbeSamples: [FieldRegistrationProbeSample] = []
     @Published var visualFieldWidthMm = 200.0
     @Published var visualFieldHeightMm = 150.0
     @Published var visualMotionModel: VisualMotionModel?
@@ -140,8 +140,8 @@ final class OperatorWorkspaceState: ObservableObject {
                 "visual_field_width_mm": visualFieldWidthMm,
                 "visual_field_height_mm": visualFieldHeightMm,
                 "visual_field_video_aspect_y_per_x": calibrationWizardSnapshot.fieldAspectYPerX ?? 0.0,
-                "machine_video_agreement_samples": machineVideoAgreementSamples.count,
-                "machine_video_agreement_estimate_present": machineVideoAgreementModel != nil,
+                "field_registration_probe_samples": fieldRegistrationProbeSamples.count,
+                "field_registration_probe_estimate_present": fieldRegistrationProbeModel != nil,
                 "operator_log_entries": operatorLog.count
             ]
         ]

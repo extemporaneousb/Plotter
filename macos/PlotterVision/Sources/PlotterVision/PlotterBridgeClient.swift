@@ -968,7 +968,6 @@ struct BridgeVisualReadinessResponse: Decodable {
 
 struct BridgeCalibrationWorkflow: Decodable, Equatable {
     let phase: String
-    let legacyPhase: String?
     let activity: String?
     let health: String?
     let isStale: Bool?

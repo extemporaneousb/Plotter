@@ -125,7 +125,7 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
         assert confirmed["workflow"]["phase"] == "needs_drawing_border"
         assert confirmed["workflow"]["activity"] == "awaiting_machine_video_probe"
         assert confirmed["workflow"]["health"] == "nominal"
-        assert confirmed["workflow"]["next_primary_action"]["id"] == "run_machine_video_probe"
+        assert confirmed["workflow"]["next_primary_action"]["id"] == "run_field_registration_probe"
         assert confirmed["workflow"]["freshness"]["cap_confirmed"] is True
         assert confirmed["workflow"]["freshness"]["cap_confirmation_id"].startswith("cap-confirm-")
         assert confirmed["workflow"]["steps"][0]["state"] == "done"

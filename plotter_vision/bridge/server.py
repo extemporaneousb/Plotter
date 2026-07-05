@@ -6186,20 +6186,17 @@ class PlotterBridge:
         )
 
         phase: CalibrationWorkflowPhase = "needs_cap"
-        legacy_phase = "uncalibrated"
         activity: CalibrationWorkflowActivity = "idle"
         health: CalibrationWorkflowHealth = "nominal"
-        stale_downstream = bool(stale_reasons and registration is not None)
+        downstream_stale = bool(stale_reasons and registration is not None)
         hard_blocked = False
         blocker: str | None = None
         next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap", enabled=True)
         if ready_to_draw:
             phase = "ready_to_draw"
-            legacy_phase = "ready_to_draw"
             next_action = self._workflow_action("ready_to_draw", "Ready to Draw", enabled=False)
         elif state.visual_ready_to_plot and pen_ready and model_promoted:
             phase = "drawing_validated"
-            legacy_phase = "drawing_validated"
             next_action = self._workflow_action(
                 "ready_to_draw",
                 "Ready to Draw",
@@ -6207,29 +6204,25 @@ class PlotterBridge:
             )
         elif session_current and session is not None and session.status == "blocked":
             phase = "drawing_training"
-            legacy_phase = "blocked"
             hard_blocked = True
             blocker = (session.blockers or ["Drawing training blocked."])[0]
             next_action = self._workflow_action("recovery_action", "Recovery Action", enabled=False)
         elif not cap_confirmed:
             phase = "needs_cap"
-            legacy_phase = "needs_cap"
             blocker = "Green cap not confirmed."
             next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap")
         elif registration is None or not state.paper_registered:
             phase = "needs_drawing_border"
-            legacy_phase = "machine_video_agreement"
             blocker = "Drawing Border is not locked."
             next_action = self._workflow_action(
-                "run_machine_video_probe",
-                "Run Machine-Video Probe",
+                "run_field_registration_probe",
+                "Run Field Registration Probe",
                 requires_motion=True,
             )
         elif not state.motion_model_valid:
             phase = "motion_calibration"
-            legacy_phase = "stale_downstream" if stale_downstream else "drawing_border_locked"
             blocker = "Current Drawing Border invalidated downstream evidence; run motion calibration for this border."
-            if not stale_downstream:
+            if not downstream_stale:
                 blocker = (state.motion_model_blockers or ["Motion calibration is not current for this Drawing Border."])[0]
             next_action = self._workflow_action(
                 "run_motion_calibration",
@@ -6238,17 +6231,14 @@ class PlotterBridge:
             )
         elif not pen_ready:
             phase = "motion_validated"
-            legacy_phase = "motion_validated"
             next_action = self._workflow_action("confirm_pen_ready", "Confirm Pen Ready")
         elif current_batch is None:
             phase = "pen_ready"
-            legacy_phase = "pen_ready"
             next_action = self._workflow_action("preview_batch", "Preview Batch")
         elif current_batch.status == "retry" or (
             current_batch.status == "planned" and current_batch.retry_count > 0
         ):
             phase = "drawing_retry"
-            legacy_phase = "drawing_retry"
             blocker = (current_batch.blockers or ["Weak/no ink observation; redraw the same batch."])[0]
             next_action = self._workflow_action(
                 "redraw_same_batch",
@@ -6257,7 +6247,6 @@ class PlotterBridge:
             )
         elif current_batch.status == "planned":
             phase = "drawing_training"
-            legacy_phase = "drawing_training"
             next_action = self._workflow_action(
                 "run_batch",
                 "Run Batch",
@@ -6265,18 +6254,15 @@ class PlotterBridge:
             )
         elif current_batch.status == "awaiting_observation":
             phase = "drawing_training"
-            legacy_phase = "drawing_training"
             next_action = self._workflow_action("observe_ink", "Observe Ink")
         elif session_current and session is not None and session.status == "ready":
             phase = "drawing_validated"
-            legacy_phase = "drawing_validated"
             next_action = self._workflow_action("promote_model", "Promote Current Model")
         else:
             phase = "drawing_training"
-            legacy_phase = "drawing_training"
             next_action = self._workflow_action("validate_metrics", "Validate Metrics")
 
-        if stale_downstream and blocker is None:
+        if downstream_stale and blocker is None:
             blocker = "Current Drawing Border invalidated downstream evidence; refresh calibration for this border."
         if next_action.get("requires_drawing") and not drawing_execution_authority:
             hard_blocked = True
@@ -6289,9 +6275,9 @@ class PlotterBridge:
             current_batch=current_batch,
             session=session if session_current else None,
         )
-        if stale_downstream and hard_blocked:
+        if downstream_stale and hard_blocked:
             health = "stale_and_blocked"
-        elif stale_downstream:
+        elif downstream_stale:
             health = "stale"
         elif hard_blocked:
             health = "blocked"
@@ -6316,10 +6302,9 @@ class PlotterBridge:
         )
         return {
             "phase": phase,
-            "legacy_phase": legacy_phase,
             "activity": activity,
             "health": health,
-            "is_stale": stale_downstream,
+            "is_stale": downstream_stale,
             "is_blocked": hard_blocked,
             "ready_to_draw": ready_to_draw,
             "steps": steps,
@@ -6449,8 +6434,8 @@ class PlotterBridge:
                 ),
             ),
             self._workflow_step(
-                "machine_video_agreement",
-                "Machine-Video Agreement",
+                "field_registration_probe",
+                "Field Registration Probe",
                 "done" if state.latest_visual_probe_run_id else ("active" if phase == "needs_drawing_border" else "pending"),
                 state.latest_visual_probe_run_id or "Run probe before locking Drawing Border",
             ),

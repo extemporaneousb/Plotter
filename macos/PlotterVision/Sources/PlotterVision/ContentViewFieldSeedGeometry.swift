@@ -3,7 +3,7 @@ import Foundation
 
 extension ContentView {
     func seededFieldCorners(
-        from model: MachineVideoAgreementModel,
+        from model: FieldRegistrationProbeModel,
         center: CGPoint,
         fieldWidthMm: Double,
         fieldHeightMm: Double
@@ -47,7 +47,7 @@ extension ContentView {
 }
 
 private func visualFieldAxisAlignedSpan(
-    from model: MachineVideoAgreementModel,
+    from model: FieldRegistrationProbeModel,
     fieldWidthMm: Double,
     fieldHeightMm: Double
 ) -> CGSize? {

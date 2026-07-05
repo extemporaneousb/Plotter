@@ -229,7 +229,7 @@ struct VisualFieldEditLayer: View {
                         context.stroke(path, with: .color(.cyan.opacity(0.92)), lineWidth: 3.0)
                         context.stroke(path, with: .color(.black.opacity(0.75)), lineWidth: 1.0)
 
-                        let interaction = isActive ? "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" : "LIVE MACHINE-VIDEO ESTIMATE"
+                        let interaction = isActive ? "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" : "LIVE FIELD REGISTRATION ESTIMATE"
                         let label = Text(String(format: "DRAWING BORDER %.0fx%.0f mm  %@", fieldWidthMm, fieldHeightMm, interaction))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.cyan.opacity(0.96))

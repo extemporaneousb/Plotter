@@ -69,9 +69,9 @@ conditions are not workflow phases.
    detection is not usable. This first acknowledgement is persisted as Python
    workflow cap-confirmation state before Drawing Border registration; it is
    not field-localized cap evidence or motion trust.
-4. Run a machine-video agreement probe before locking or drawing the Drawing
+4. Run a field registration probe before locking or drawing the Drawing
    Border. The probe first measures cap jitter, then runs a cardinal `+X`,
-   `+Y`, `-X`, `-Y` minibatch to get the first empirical 2x2 machine-to-video
+   `+Y`, `-X`, `-Y` minibatch to get the first empirical 2x2 machine-to-camera
    estimate. There is no identity matrix as calibration evidence; before that
    first minibatch the prior is simply no model. Every subsequent solved
    estimate becomes the current online transform, and later relative vectors
@@ -116,7 +116,7 @@ conditions are not workflow phases.
 stateDiagram-v2
     [*] --> needs_cap: no cap confirmation
     needs_cap --> needs_drawing_border: Confirm Green Cap
-    needs_drawing_border --> motion_calibration: Run Machine-Video Probe / lock Drawing Border
+    needs_drawing_border --> motion_calibration: Run Field Registration Probe / lock Drawing Border
     motion_calibration --> motion_validated: Run Motion Calibration + Validate Cap Target
     motion_validated --> pen_ready: Confirm Pen Ready
     pen_ready --> drawing_training: Preview Batch
@@ -181,7 +181,7 @@ instead of inventing synthetic phases for stale or blocked conditions.
 | Step | Evidence recorded | Does not prove |
 | --- | --- | --- |
 | Confirm Green Cap | Python workflow cap-confirmation artifact with camera-space cap point. | Field-localized cap evidence, relative motion model, or drawing authority. |
-| Machine-Video Agreement | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-video basis. | Cap-to-tip offset, ink binding, or drawing authority. |
+| Field Registration Probe | Cap jitter, commanded relative machine vectors, before/after camera-space cap observations, residuals, condition number, online estimate state, corner precision, learned 2x2 machine-to-camera basis. | Cap-to-tip offset, ink binding, or drawing authority. |
 | Set Drawing Border | Drawing Border corners, field registration id, border size in millimeters, reprojection error. | Pen position or drawing authority. |
 | Validate Motion | Target field coordinate, inverse machine-relative move, observed cap result, residual or blocker. | Actual drawing readiness. |
 | Confirm Pen Ready | Operator acknowledgement with current Drawing Border/camera/field ids. | Ink quality or model validity. |

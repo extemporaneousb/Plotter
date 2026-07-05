@@ -115,7 +115,7 @@ struct CalibrationWizardView: View {
                 }
             } else {
                 CalibrationWizardStepRow(index: 1, title: "Confirm Green Cap", detail: greenCapDetail, status: greenCapStatus)
-                CalibrationWizardStepRow(index: 2, title: "Machine-Video Agreement", detail: visualCalibrationDetail, status: visualCalibrationStatus)
+                CalibrationWizardStepRow(index: 2, title: "Field Registration Probe", detail: visualCalibrationDetail, status: visualCalibrationStatus)
                 CalibrationWizardStepRow(index: 3, title: "Set Drawing Border", detail: fiducialDetail, status: fiducialStatus)
                 CalibrationWizardStepRow(index: 4, title: "Validate Motion", detail: bindingDetail, status: bindingStatus)
                 CalibrationWizardStepRow(index: 5, title: "Drawing Training", detail: drawingCalibrationDetail, status: drawingCalibrationStatus)

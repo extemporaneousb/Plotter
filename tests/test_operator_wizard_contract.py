@@ -75,8 +75,8 @@ def test_operator_ui_uses_in_main_setup_wizard_and_windowed_video_panels() -> No
     assert "@Published var visualFieldHeightMm = 150.0" in workspace
     assert '"visual_field_width_mm": visualFieldWidthMm' in workspace
     assert '"visual_field_height_mm": visualFieldHeightMm' in workspace
-    assert '"machine_video_agreement_estimate_present": machineVideoAgreementModel != nil' in workspace
-    assert "machine_video_agreement_valid" not in workspace
+    assert '"field_registration_probe_estimate_present": fieldRegistrationProbeModel != nil' in workspace
+    assert "field_registration_probe_valid" not in workspace
     assert "CalibrationWizardView(" in content
     assert "workflow: bridge.calibrationWorkflow" in content
     assert "primaryAction: runCalibrationWizardPrimaryAction" in content
@@ -403,7 +403,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "if let action = bridge.calibrationWorkflow?.nextPrimaryAction" in content
     assert "visualMotionValidated, let action = bridge.calibrationWorkflow?.nextPrimaryAction" not in content
     assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Machine-Video Agreement"' in wizard
+    assert 'title: "Field Registration Probe"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
     assert 'title: "Drawing Training"' in wizard
@@ -428,23 +428,23 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "fieldHeightMm = clampedValue" in wizard
     assert ".disabled(hasPaperLock)" not in wizard
     assert "Confirm Green Cap" in content
-    assert "Run Machine-Video Probe" in content
+    assert "Run Field Registration Probe" in content
     assert "Run Motion Calibration" in content
-    assert "runMachineVideoAgreementProbe" in content
+    assert "runFieldRegistrationProbe" in content
     assert "runFieldMotionCalibration(using:" in content
-    assert "measureMachineVideoAgreementNoise" in content
-    assert "machineVideoAgreementProbeVectors" in content
+    assert "measureFieldRegistrationProbeNoise" in content
+    assert "fieldRegistrationProbeVectors" in content
     assert "runSetupVectorJog" in content
-    assert "runMachineVideoAgreementVectorJog" not in content
-    assert "private let machineVideoAgreementInitialMoveMm = 10.0" in content
-    assert "private let machineVideoAgreementMaxMoveMm = 50.0" in content
-    assert "machineVideoAgreementMaxSamples" in content
+    assert "runFieldRegistrationProbeVectorJog" not in content
+    assert "private let fieldRegistrationProbeInitialMoveMm = 10.0" in content
+    assert "private let fieldRegistrationProbeMaxMoveMm = 50.0" in content
+    assert "fieldRegistrationProbeMaxSamples" in content
     assert "func relativeUpdateMagnitude(from previous:" in _read(SWIFT_DIR / "Models.swift")
     assert "model_update_norm" in content
     assert "fieldCornerPrecisionMm" in content + _read(SWIFT_DIR / "Models.swift")
-    assert "seedAndLockFieldFromMachineVideoAgreement" in content
+    assert "seedAndLockFieldFromFieldRegistrationProbe" in content
     assert "currentGreenCapCameraObservation" in content
-    assert "MachineVideoAgreementModel" in content + _read(SWIFT_DIR / "Models.swift")
+    assert "FieldRegistrationProbeModel" in content + _read(SWIFT_DIR / "Models.swift")
     assert "Validate Motion" in content
     assert "Calibrate Drawing" not in wizard
     assert "wizardDrawingCalibrationStatus" in content
@@ -492,7 +492,7 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "boundedMachineTravelDistance" not in content
     assert "visualMachineCalibrationBoundedDistance" not in content
     assert "visualMachineCalibrationAxesHaveTravel" not in content
-    assert "Machine-video samples %d/4" not in content
+    assert "Field registration samples %d/4" not in content
     assert "reducedProbeDistances" not in content
 
 
@@ -529,8 +529,8 @@ def test_old_binding_runner_is_not_active_setup() -> None:
         "private var topStatusLights",
         1,
     )[0]
-    assert "if machineVideoAgreementModel != nil { return .active }" in active_setup
-    assert "machineVideoAgreementModel?.isUsable == true" not in active_setup
+    assert "if fieldRegistrationProbeModel != nil { return .active }" in active_setup
+    assert "fieldRegistrationProbeModel?.isUsable == true" not in active_setup
     stale_terms = [
         "Run Drawing Calibration",
         "runWizardDrawingCalibration",
@@ -595,7 +595,7 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
         ".gesture(topRightResizeGesture(in: viewSize))"
     ) < handle_section.index(".position(point)")
     assert "DRAG BORDER / TOP-RIGHT RESIZE; RELEASE RE-LOCKS" in support
-    assert "LIVE MACHINE-VIDEO ESTIMATE" in support
+    assert "LIVE FIELD REGISTRATION ESTIMATE" in support
     assert "if isVisible, orderedCorners.count == 4" in support
     assert "updatedCorners(" not in support
     assert "ForEach(Array(viewCorners.enumerated()), id: \\.offset)" not in support
@@ -635,8 +635,8 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "Paper Homography" not in wizard
     assert "Paper homography" not in content
     assert "Stored visual field in use" not in content
-    assert "BORDER run machine-video agreement before drawing border" in content
-    assert 'BORDER \\(desiredVisualFieldSizeLabel) locked from machine-video agreement' in content
+    assert "BORDER run field registration probe before drawing border" in content
+    assert 'BORDER \\(desiredVisualFieldSizeLabel) locked from field registration probe' in content
     assert "DRAG BORDER / TOP-RIGHT RESIZE" in support
     assert ".disabled(hasPaperLock)" not in wizard
 
@@ -650,7 +650,7 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     support = _read(SWIFT_DIR / "CameraOverlaySupportViews.swift")
 
     assert 'title: "Confirm Green Cap"' in wizard
-    assert 'title: "Machine-Video Agreement"' in wizard
+    assert 'title: "Field Registration Probe"' in wizard
     assert 'title: "Set Drawing Border"' in wizard
     assert 'title: "Validate Motion"' in wizard
     assert 'title: "Drawing Training"' in wizard
@@ -671,7 +671,7 @@ def test_visual_field_setup_uses_four_stage_motion_workflow_without_tip_click() 
     assert "rollbackCalibrationWizardToStep" not in content
     assert "Click Green Cap" in content
     assert "Confirm Green Cap" in content
-    assert "Run Machine-Video Probe" in content
+    assert "Run Field Registration Probe" in content
     assert "Validate Motion" in content
     assert "Run Drawing Calibration" not in content
     assert "runWizardDrawingCalibration" not in content
@@ -696,7 +696,7 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
     models = _read(SWIFT_DIR / "Models.swift")
 
-    assert "machineVideoAgreementProbeVectors" in content
+    assert "fieldRegistrationProbeVectors" in content
     assert '("D++", diagonal, diagonal)' in content
     assert '("D+-", diagonal, -diagonal)' in content
     assert "let machineDxMm: Double" in models
@@ -724,9 +724,8 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
         "private var wizardInstructionText",
         1,
     )[0]
-    assert 'case "run_machine_video_probe":' in visible_action
+    assert 'case "run_field_registration_probe":' in visible_action
     assert 'case "run_motion_calibration":' in visible_action
-    assert 'workflow.phase != "stale_downstream"' not in visible_action
     assert 'workflow.health == "stale"' in visible_action
     assert 'workflow.health == "stale_and_blocked"' in visible_action
     assert "return nil" in visible_action
@@ -758,7 +757,7 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     assert "runBootstrapAdaptiveProbe(" not in model
 
 
-def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> None:
+def test_field_registration_probe_uses_online_estimate_before_field_overlay() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     field_seed_geometry = _read(SWIFT_DIR / "ContentViewFieldSeedGeometry.swift")
     models = _read(SWIFT_DIR / "Models.swift")
@@ -774,37 +773,37 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
         1,
     )[0]
     assert "workspace.calibrationWizardActive" in overlay_gate
-    assert "machineVideoAgreementModel == nil" in overlay_gate
+    assert "fieldRegistrationProbeModel == nil" in overlay_gate
     assert "isOnlineEstimateUsable" not in overlay_gate
     assert "return nil" in overlay_gate
     assert "paperTransform: visualFieldOverlayTransform" in content
 
-    agreement_probe = content.split("private func runMachineVideoAgreementProbe", 1)[1].split(
-        "@MainActor\n    private func measureMachineVideoAgreementNoise",
+    registration_probe = content.split("private func runFieldRegistrationProbe", 1)[1].split(
+        "@MainActor\n    private func measureFieldRegistrationProbeNoise",
         1,
     )[0]
-    assert "while samples.count < machineVideoAgreementMaxSamples" in agreement_probe
-    assert "machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)" in agreement_probe
-    assert "relativeUpdateMagnitude(from: bestModel)" in agreement_probe
-    assert "machineVideoAgreementConvergedUpdateNorm" in agreement_probe
-    assert "model.isPrecisionConverged" not in agreement_probe
-    assert "model.isOnlineEstimateUsable" not in agreement_probe
-    assert "machineVideoAgreementModel = model" in agreement_probe
-    assert "updateLiveMachineVideoFieldFrame(from: model, center: sample.afterCameraPoint)" in agreement_probe
+    assert "while samples.count < fieldRegistrationProbeMaxSamples" in registration_probe
+    assert "fieldRegistrationProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)" in registration_probe
+    assert "relativeUpdateMagnitude(from: bestModel)" in registration_probe
+    assert "fieldRegistrationProbeConvergedUpdateNorm" in registration_probe
+    assert "model.isPrecisionConverged" not in registration_probe
+    assert "model.isOnlineEstimateUsable" not in registration_probe
+    assert "fieldRegistrationProbeModel = model" in registration_probe
+    assert "updateLiveFieldRegistrationFrame(from: model, center: sample.afterCameraPoint)" in registration_probe
     assert "afterCameraPoint: after.cameraPoint" in content
-    solve_block = agreement_probe.split("if let model = MachineVideoAgreementModel.solve", 1)[1].split(
-        "updateMachineVideoAgreementSummary",
+    solve_block = registration_probe.split("if let model = FieldRegistrationProbeModel.solve", 1)[1].split(
+        "updateFieldRegistrationProbeSummary",
         1,
     )[0]
     assert "bestModel = model" in solve_block
-    assert "machineVideoAgreementModel = model" in solve_block
+    assert "fieldRegistrationProbeModel = model" in solve_block
     assert "isOnlineEstimateUsable" not in solve_block
-    assert "samples.count >= machineVideoAgreementMinSamples" in agreement_probe
-    assert "latestUpdateMagnitude <= machineVideoAgreementConvergedUpdateNorm" in agreement_probe
-    assert "magnitudeMm = min(machineVideoAgreementMaxMoveMm" in agreement_probe
-    assert "if bestModel != nil" in agreement_probe
-    assert "machineVideoAgreementMaxSamples = 64" in content
-    assert "machineVideoAgreementMinSamples = 8" in content
+    assert "samples.count >= fieldRegistrationProbeMinSamples" in registration_probe
+    assert "latestUpdateMagnitude <= fieldRegistrationProbeConvergedUpdateNorm" in registration_probe
+    assert "magnitudeMm = min(fieldRegistrationProbeMaxMoveMm" in registration_probe
+    assert "if bestModel != nil" in registration_probe
+    assert "fieldRegistrationProbeMaxSamples = 64" in content
+    assert "fieldRegistrationProbeMinSamples = 8" in content
     assert "bootstrapMoves" in content
     assert '("X+", magnitude, 0.0)' in content
     assert '("Y+", 0.0, magnitude)' in content
@@ -819,8 +818,8 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "model_update_converged" in content
     assert "online_estimate_usable" not in content
     assert "Online estimate accepted" not in content
-    probe_vectors = content.split("private func machineVideoAgreementProbeVectors", 1)[1].split(
-        "private func machineVideoAgreementStatus",
+    probe_vectors = content.split("private func fieldRegistrationProbeVectors", 1)[1].split(
+        "private func fieldRegistrationProbeStatus",
         1,
     )[0]
     assert "guard let model else" in probe_vectors
@@ -846,7 +845,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "fitFieldCenter" in field_seed
     assert "halfWidth *= 0.92" not in content + field_seed_geometry
     assert "halfHeight = halfWidth * 0.75" not in content + field_seed_geometry
-    live_update = content.split("private func updateLiveMachineVideoFieldFrame", 1)[1].split(
+    live_update = content.split("private func updateLiveFieldRegistrationFrame", 1)[1].split(
         "private func relockEditableVisualField",
         1,
     )[0]
@@ -962,7 +961,7 @@ def test_machine_video_agreement_uses_online_estimate_before_field_overlay() -> 
     assert "release to re-lock border registration" in contract_flat
     assert "cap and tip are colocated until explicit binding evidence" in contract_flat
     assert "before locking or drawing the Drawing Border" in plan_flat
-    assert "first empirical 2x2 machine-to-video estimate" in plan_flat
+    assert "first empirical 2x2 machine-to-camera estimate" in plan_flat
     assert "Update magnitude is the convergence signal" in plan_flat
     assert "accepted-estimate gate" in plan_flat
     assert "Every later solved estimate updates the provisional Drawing Border" in plan_flat
@@ -1125,7 +1124,7 @@ def test_plotter_view_focus_is_persisted_ui_state_and_click_safe() -> None:
     assert "Zoom Out" not in plotter_panel
     assert "Reset FOV" not in plotter_panel
     assert "togglePlotterFocusMode()" in viewport_intent
-    assert "focusPlotterVideoOnPaper(source: \"machine_video_agreement_field_seeded\")" in content
+    assert "focusPlotterVideoOnPaper(source: \"field_registration_probe_field_seeded\")" in content
     assert "focusPlotterVideoOnPaper(source: \"wizard_confirm_setup\")" not in content
 
     assert "func captureOutput(" in camera_model

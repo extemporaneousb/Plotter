@@ -57,7 +57,7 @@ tests/
 - The native macOS operator app is the primary operator surface.
 - The app-owned bridge lifecycle is implemented for normal launch.
 - The unified **Calibrate Vision-Machine Interface** workflow is implemented.
-- Machine-Video Agreement, Drawing Border registration, motion validation,
+- Field Registration Probe, Drawing Border registration, motion validation,
   drawing sessions, preview/run/observe/retry/fit/validate/finish routes, and
   residual-grid model artifacts are implemented.
 - Capability-test programs and portrait/image-derived drawing remain backend or

@@ -598,7 +598,7 @@ struct FrameLearningSample: Equatable {
     let strength: Double
 }
 
-struct MachineVideoAgreementSample: Equatable {
+struct FieldRegistrationProbeSample: Equatable {
     let label: String
     let machineDxMm: Double
     let machineDyMm: Double
@@ -614,14 +614,14 @@ struct MachineVideoAgreementSample: Equatable {
     }
 }
 
-struct MachineVideoAgreementNoise: Equatable {
+struct FieldRegistrationProbeNoise: Equatable {
     let sampleCount: Int
     let centerXNorm: Double
     let centerYNorm: Double
     let rmsNorm: Double
     let maxDeviationNorm: Double
 
-    static let fallback = MachineVideoAgreementNoise(
+    static let fallback = FieldRegistrationProbeNoise(
         sampleCount: 0,
         centerXNorm: 0,
         centerYNorm: 0,
@@ -771,7 +771,7 @@ struct VisualMotionModel: Equatable {
     }
 }
 
-struct MachineVideoAgreementModel: Equatable {
+struct FieldRegistrationProbeModel: Equatable {
     let xBasisDxNorm: Double
     let xBasisDyNorm: Double
     let yBasisDxNorm: Double
@@ -783,13 +783,13 @@ struct MachineVideoAgreementModel: Equatable {
     let fieldCornerPrecisionMm: Double
 
     static func solve(
-        samples: [MachineVideoAgreementSample],
+        samples: [FieldRegistrationProbeSample],
         observationNoiseNorm: Double = 0.0
-    ) -> MachineVideoAgreementModel? {
+    ) -> FieldRegistrationProbeModel? {
         guard samples.count >= 4 else { return nil }
 
         var weights = Array(repeating: 1.0, count: samples.count)
-        var fitted: MachineVideoAgreementModel?
+        var fitted: FieldRegistrationProbeModel?
         for _ in 0..<3 {
             guard let model = solveWeighted(
                 samples: samples,
@@ -821,10 +821,10 @@ struct MachineVideoAgreementModel: Equatable {
     }
 
     private static func solveWeighted(
-        samples: [MachineVideoAgreementSample],
+        samples: [FieldRegistrationProbeSample],
         weights: [Double],
         observationNoiseNorm: Double
-    ) -> MachineVideoAgreementModel? {
+    ) -> FieldRegistrationProbeModel? {
         var sxx = 0.0
         var sxy = 0.0
         var syy = 0.0
@@ -878,7 +878,7 @@ struct MachineVideoAgreementModel: Equatable {
         let minBasisNormPerMm = max(min(hypot(xBasisDxNorm, xBasisDyNorm), hypot(yBasisDxNorm, yBasisDyNorm)), 0.000_001)
         let fieldCornerPrecisionMm = cornerUncertaintyNorm / minBasisNormPerMm
 
-        let model = MachineVideoAgreementModel(
+        let model = FieldRegistrationProbeModel(
             xBasisDxNorm: xBasisDxNorm,
             xBasisDyNorm: xBasisDyNorm,
             yBasisDxNorm: yBasisDxNorm,
@@ -946,7 +946,7 @@ struct MachineVideoAgreementModel: Equatable {
             && conditionNumber <= 80.0
     }
 
-    func relativeUpdateMagnitude(from previous: MachineVideoAgreementModel?) -> Double? {
+    func relativeUpdateMagnitude(from previous: FieldRegistrationProbeModel?) -> Double? {
         guard let previous else { return nil }
         let delta = sqrt(
             pow(xBasisDxNorm - previous.xBasisDxNorm, 2.0)

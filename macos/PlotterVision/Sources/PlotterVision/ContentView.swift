@@ -2,14 +2,14 @@ import AppKit
 import SwiftUI
 
 private let visualProbeMinimumObservedMm = 1.5
-private let machineVideoAgreementMinimumObservedNorm = 0.0015
-private let machineVideoAgreementInitialMoveMm = 10.0
-private let machineVideoAgreementMaxMoveMm = 50.0
-private let machineVideoAgreementMinSamples = 8
-private let machineVideoAgreementMaxSamples = 64
-private let machineVideoAgreementConvergedUpdateNorm = 0.015
-private let machineVideoAgreementNoiseSampleCount = 18
-private let machineVideoAgreementSignalToNoise = 8.0
+private let fieldRegistrationProbeMinimumObservedNorm = 0.0015
+private let fieldRegistrationProbeInitialMoveMm = 10.0
+private let fieldRegistrationProbeMaxMoveMm = 50.0
+private let fieldRegistrationProbeMinSamples = 8
+private let fieldRegistrationProbeMaxSamples = 64
+private let fieldRegistrationProbeConvergedUpdateNorm = 0.015
+private let fieldRegistrationProbeNoiseSampleCount = 18
+private let fieldRegistrationProbeSignalToNoise = 8.0
 private let visualMotionInitialProbeMoveMm = 8.0
 private let visualCapSafeZoneMarginMm = 8.0
 let visualFieldFrameInsetMm = visualCapSafeZoneMarginMm
@@ -120,14 +120,14 @@ struct ContentView: View {
         nonmutating set { workspace.confirmedCapPoint = newValue }
     }
 
-    private var machineVideoAgreementModel: MachineVideoAgreementModel? {
-        get { workspace.machineVideoAgreementModel }
-        nonmutating set { workspace.machineVideoAgreementModel = newValue }
+    private var fieldRegistrationProbeModel: FieldRegistrationProbeModel? {
+        get { workspace.fieldRegistrationProbeModel }
+        nonmutating set { workspace.fieldRegistrationProbeModel = newValue }
     }
 
-    private var machineVideoAgreementSamples: [MachineVideoAgreementSample] {
-        get { workspace.machineVideoAgreementSamples }
-        nonmutating set { workspace.machineVideoAgreementSamples = newValue }
+    private var fieldRegistrationProbeSamples: [FieldRegistrationProbeSample] {
+        get { workspace.fieldRegistrationProbeSamples }
+        nonmutating set { workspace.fieldRegistrationProbeSamples = newValue }
     }
 
     private var visualMotionModel: VisualMotionModel? {
@@ -279,7 +279,7 @@ struct ContentView: View {
     private var visualFieldOverlayTransform: PaperRegistrationSnapshot? {
         guard let registration = bridge.paperRegistrationSnapshot else { return nil }
         if workspace.calibrationWizardActive,
-           machineVideoAgreementModel == nil,
+           fieldRegistrationProbeModel == nil,
            !visualMotionValidated {
             return nil
         }
@@ -663,7 +663,7 @@ struct ContentView: View {
     @MainActor
     private func runFrameLearning() async {
         guard bridge.isLiveMotionMode else {
-            calibrationStatusText = "CAL machine-video probe blocked: \(bridge.motionGateMessage)"
+            calibrationStatusText = "CAL field registration probe blocked: \(bridge.motionGateMessage)"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
                 detail: bridge.motionGateMessage,
@@ -676,7 +676,7 @@ struct ContentView: View {
         }
 
         guard bridge.isOnline else {
-            calibrationStatusText = "CAL machine-video probe blocked: bridge offline"
+            calibrationStatusText = "CAL field registration probe blocked: bridge offline"
             frameLearning = FrameLearningState(
                 status: "ERROR",
                 detail: "Bridge offline",
@@ -689,10 +689,10 @@ struct ContentView: View {
         }
 
         guard await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) != nil else {
-            calibrationStatusText = "CAL machine-video probe blocked: cap not detected"
+            calibrationStatusText = "CAL field registration probe blocked: cap not detected"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
-                detail: "Green cap detection required before machine-video agreement",
+                detail: "Green cap detection required before field registration probe",
                 sampleCount: 0,
                 xPixelsPerMm: 0,
                 yPixelsPerMm: 0,
@@ -701,7 +701,7 @@ struct ContentView: View {
             return
         }
 
-        if bridge.hasPaperLock, let agreement = machineVideoAgreementModel {
+        if bridge.hasPaperLock, let registrationModel = fieldRegistrationProbeModel {
             visualMotionModel = nil
             visualMotionSamples = []
             _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
@@ -715,8 +715,8 @@ struct ContentView: View {
                 status: "LEARN",
                 detail: "Sampling motion in adjusted drawing border",
                 sampleCount: 0,
-                xPixelsPerMm: agreement.xBasisLengthNorm,
-                yPixelsPerMm: agreement.yBasisLengthNorm,
+                xPixelsPerMm: registrationModel.xBasisLengthNorm,
+                yPixelsPerMm: registrationModel.yBasisLengthNorm,
                 lastPins: bridge.machinePins
             )
 
@@ -728,12 +728,12 @@ struct ContentView: View {
                 return
             }
 
-            await runFieldMotionCalibration(using: agreement)
+            await runFieldMotionCalibration(using: registrationModel)
             return
         }
 
-        machineVideoAgreementModel = nil
-        machineVideoAgreementSamples = []
+        fieldRegistrationProbeModel = nil
+        fieldRegistrationProbeSamples = []
         visualMotionModel = nil
         visualMotionSamples = []
         _ = bridge.resetVisualCalibrationSession(prefix: "swift-probe")
@@ -744,7 +744,7 @@ struct ContentView: View {
 
         await bridge.refreshMachineStatus()
 
-        calibrationStatusText = "CAL machine-video agreement starting"
+        calibrationStatusText = "CAL field registration probe starting"
         frameLearning = FrameLearningState(
             status: "LEARN",
             detail: "Learning machine +X/+Y in camera space",
@@ -758,32 +758,32 @@ struct ContentView: View {
         guard !bridge.isMachineAlarm else {
             frameLearning.status = "STOP"
             frameLearning.detail = "Pen-up failed or machine alarm"
-            calibrationStatusText = "CAL machine-video probe stopped: pen-up failed"
+            calibrationStatusText = "CAL field registration probe stopped: pen-up failed"
             return
         }
 
-        guard let agreement = await runMachineVideoAgreementProbe() else {
+        guard let registrationModel = await runFieldRegistrationProbe() else {
             return
         }
-        machineVideoAgreementModel = agreement
+        fieldRegistrationProbeModel = registrationModel
 
-        guard await seedAndLockFieldFromMachineVideoAgreement(agreement) else {
+        guard await seedAndLockFieldFromFieldRegistrationProbe(registrationModel) else {
             return
         }
 
-        await runFieldMotionCalibration(using: agreement)
+        await runFieldMotionCalibration(using: registrationModel)
     }
 
     @MainActor
-    private func runFieldMotionCalibration(using agreement: MachineVideoAgreementModel) async {
+    private func runFieldMotionCalibration(using registrationModel: FieldRegistrationProbeModel) async {
         guard let initialObservation = await waitForGreenCapPaperObservation(timeoutSeconds: 3.0) else {
             calibrationStatusText = "CAL motion calibration blocked: cap is not mapped into the field"
             frameLearning = FrameLearningState(
                 status: "BLOCK",
                 detail: "Field locked, but cap is not mapped into field millimeters",
-                sampleCount: machineVideoAgreementSamples.count,
-                xPixelsPerMm: agreement.xBasisLengthNorm,
-                yPixelsPerMm: agreement.yBasisLengthNorm,
+                sampleCount: fieldRegistrationProbeSamples.count,
+                xPixelsPerMm: registrationModel.xBasisLengthNorm,
+                yPixelsPerMm: registrationModel.yBasisLengthNorm,
                 lastPins: bridge.machinePins
             )
             return
@@ -891,22 +891,22 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func runMachineVideoAgreementProbe() async -> MachineVideoAgreementModel? {
-        guard let noise = await measureMachineVideoAgreementNoise() else {
+    private func runFieldRegistrationProbe() async -> FieldRegistrationProbeModel? {
+        guard let noise = await measureFieldRegistrationProbeNoise() else {
             frameLearning.status = "STOP"
-            frameLearning.detail = "Could not measure cap jitter before agreement"
-            calibrationStatusText = "CAL machine-video probe stopped: cap jitter measurement failed"
+            frameLearning.detail = "Could not measure cap jitter before field registration probe"
+            calibrationStatusText = "CAL field registration probe stopped: cap jitter measurement failed"
             return nil
         }
 
         let minimumSignalNorm = max(
-            machineVideoAgreementMinimumObservedNorm,
-            noise.rmsNorm * machineVideoAgreementSignalToNoise,
+            fieldRegistrationProbeMinimumObservedNorm,
+            noise.rmsNorm * fieldRegistrationProbeSignalToNoise,
             noise.maxDeviationNorm * 3.0
         )
-        var samples: [MachineVideoAgreementSample] = []
-        var magnitudeMm = machineVideoAgreementInitialMoveMm
-        var bestModel: MachineVideoAgreementModel?
+        var samples: [FieldRegistrationProbeSample] = []
+        var magnitudeMm = fieldRegistrationProbeInitialMoveMm
+        var bestModel: FieldRegistrationProbeModel?
         var latestUpdateMagnitude: Double?
         var cycle = 0
 
@@ -924,11 +924,11 @@ struct ContentView: View {
             lastPins: bridge.machinePins
         )
         calibrationStatusText = String(
-            format: "CAL machine-video jitter rms %.4f; adaptive agreement starting",
+            format: "CAL field registration jitter rms %.4f; adaptive field registration starting",
             noise.rmsNorm
         )
         bridge.recordOperatorEvent(
-            "machine_video_agreement_noise_measured",
+            "field_registration_probe_noise_measured",
             details: [
                 "sample_count": noise.sampleCount,
                 "rms_norm": noise.rmsNorm,
@@ -937,12 +937,12 @@ struct ContentView: View {
             ]
         )
 
-        while samples.count < machineVideoAgreementMaxSamples {
+        while samples.count < fieldRegistrationProbeMaxSamples {
             cycle += 1
-            let vectors = machineVideoAgreementProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)
+            let vectors = fieldRegistrationProbeVectors(magnitudeMm: magnitudeMm, model: bestModel)
             for vector in vectors {
-                guard samples.count < machineVideoAgreementMaxSamples else { break }
-                guard let sample = await runMachineVideoAgreementMove(
+                guard samples.count < fieldRegistrationProbeMaxSamples else { break }
+                guard let sample = await runFieldRegistrationProbeMove(
                     label: vector.label,
                     machineDxMm: vector.xMm,
                     machineDyMm: vector.yMm,
@@ -952,20 +952,20 @@ struct ContentView: View {
                     return nil
                 }
                 samples.append(sample)
-                machineVideoAgreementSamples = samples
+                fieldRegistrationProbeSamples = samples
 
-                if let model = MachineVideoAgreementModel.solve(
+                if let model = FieldRegistrationProbeModel.solve(
                     samples: samples,
                     observationNoiseNorm: noise.rmsNorm
                 ) {
                     latestUpdateMagnitude = model.relativeUpdateMagnitude(from: bestModel)
                     bestModel = model
-                    machineVideoAgreementModel = model
-                    updateLiveMachineVideoFieldFrame(from: model, center: sample.afterCameraPoint)
+                    fieldRegistrationProbeModel = model
+                    updateLiveFieldRegistrationFrame(from: model, center: sample.afterCameraPoint)
                 }
-                updateMachineVideoAgreementSummary(
+                updateFieldRegistrationProbeSummary(
                     samples: samples,
-                    status: machineVideoAgreementStatus(
+                    status: fieldRegistrationProbeStatus(
                         for: bestModel,
                         updateMagnitude: latestUpdateMagnitude
                     ),
@@ -977,14 +977,14 @@ struct ContentView: View {
             }
 
             if let model = bestModel,
-               samples.count >= machineVideoAgreementMinSamples,
+               samples.count >= fieldRegistrationProbeMinSamples,
                let latestUpdateMagnitude,
-               latestUpdateMagnitude <= machineVideoAgreementConvergedUpdateNorm {
-                machineVideoAgreementModel = model
+               latestUpdateMagnitude <= fieldRegistrationProbeConvergedUpdateNorm {
+                fieldRegistrationProbeModel = model
                 frameLearning = FrameLearningState(
-                    status: "AGREE",
+                    status: "FIELD_REGISTERED",
                     detail: String(
-                        format: "Agreement update %.4f rms %.4f max %.4f cond %.1f samples %d",
+                        format: "Field registration update %.4f rms %.4f max %.4f cond %.1f samples %d",
                         latestUpdateMagnitude,
                         model.rmsResidualNorm,
                         model.maxResidualNorm,
@@ -996,8 +996,8 @@ struct ContentView: View {
                     yPixelsPerMm: model.yBasisLengthNorm,
                     lastPins: bridge.machinePins
                 )
-                calibrationStatusText = "CAL machine-video update converged; seeding \(desiredVisualFieldSizeLabel) field"
-                recordMachineVideoAgreementModel(
+                calibrationStatusText = "CAL field registration update converged; seeding \(desiredVisualFieldSizeLabel) field"
+                recordFieldRegistrationProbeModel(
                     model,
                     noise: noise,
                     minimumSignalNorm: minimumSignalNorm,
@@ -1007,12 +1007,12 @@ struct ContentView: View {
             }
 
             if bestModel != nil {
-                magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.65, magnitudeMm + 4.0))
+                magnitudeMm = min(fieldRegistrationProbeMaxMoveMm, max(magnitudeMm * 1.65, magnitudeMm + 4.0))
             } else {
-                magnitudeMm = min(machineVideoAgreementMaxMoveMm, max(magnitudeMm * 1.45, magnitudeMm + 2.0))
+                magnitudeMm = min(fieldRegistrationProbeMaxMoveMm, max(magnitudeMm * 1.45, magnitudeMm + 2.0))
             }
             calibrationStatusText = String(
-                format: "CAL machine-video agreement refining cycle %d samples %d next %.1fmm",
+                format: "CAL field registration probe refining cycle %d samples %d next %.1fmm",
                 cycle,
                 samples.count,
                 magnitudeMm
@@ -1021,14 +1021,14 @@ struct ContentView: View {
 
         guard let model = bestModel else {
             frameLearning.status = "WEAK"
-            frameLearning.detail = "Machine-video basis solve failed"
+            frameLearning.detail = "Field registration basis solve failed"
             frameLearning.sampleCount = samples.count
-            calibrationStatusText = "CAL machine-video agreement weak: basis solve failed"
+            calibrationStatusText = "CAL field registration probe weak: basis solve failed"
             return nil
         }
-        machineVideoAgreementModel = model
+        fieldRegistrationProbeModel = model
         frameLearning = FrameLearningState(
-            status: "ESTIMATE",
+            status: "FIELD_ESTIMATED",
             detail: String(
                 format: "Using latest estimate update %@ rms %.4f max %.4f cond %.1f samples %d",
                 latestUpdateMagnitude.map { String(format: "%.4f", $0) } ?? "--",
@@ -1042,8 +1042,8 @@ struct ContentView: View {
             yPixelsPerMm: model.yBasisLengthNorm,
             lastPins: bridge.machinePins
         )
-        calibrationStatusText = "CAL machine-video using latest estimate; seeding provisional \(desiredVisualFieldSizeLabel) field"
-        recordMachineVideoAgreementModel(
+        calibrationStatusText = "CAL field registration using latest estimate; seeding provisional \(desiredVisualFieldSizeLabel) field"
+        recordFieldRegistrationProbeModel(
             model,
             noise: noise,
             minimumSignalNorm: minimumSignalNorm,
@@ -1053,12 +1053,12 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func measureMachineVideoAgreementNoise() async -> MachineVideoAgreementNoise? {
+    private func measureFieldRegistrationProbeNoise() async -> FieldRegistrationProbeNoise? {
         var observations: [GreenCapCameraObservation] = []
         var lastFrame: Int?
         let deadline = Date().addingTimeInterval(4.0)
 
-        while observations.count < machineVideoAgreementNoiseSampleCount && Date() < deadline {
+        while observations.count < fieldRegistrationProbeNoiseSampleCount && Date() < deadline {
             guard let observation = await waitForGreenCapCameraObservation(
                 afterFrame: lastFrame,
                 timeoutSeconds: 0.7
@@ -1076,7 +1076,7 @@ struct ContentView: View {
             hypot(Double($0.cameraPoint.x) - centerX, Double($0.cameraPoint.y) - centerY)
         }
         let rms = sqrt(deviations.reduce(0.0) { $0 + $1 * $1 } / Double(observations.count))
-        return MachineVideoAgreementNoise(
+        return FieldRegistrationProbeNoise(
             sampleCount: observations.count,
             centerXNorm: centerX,
             centerYNorm: centerY,
@@ -1085,11 +1085,11 @@ struct ContentView: View {
         )
     }
 
-    private func machineVideoAgreementProbeVectors(
+    private func fieldRegistrationProbeVectors(
         magnitudeMm: Double,
-        model: MachineVideoAgreementModel? = nil
+        model: FieldRegistrationProbeModel? = nil
     ) -> [(label: String, xMm: Double, yMm: Double)] {
-        let magnitude = min(machineVideoAgreementMaxMoveMm, max(1.0, magnitudeMm))
+        let magnitude = min(fieldRegistrationProbeMaxMoveMm, max(1.0, magnitudeMm))
         let diagonal = magnitude / sqrt(2.0)
         let xMoves: [(label: String, xMm: Double, yMm: Double)] = [
             ("X+", magnitude, 0.0),
@@ -1120,55 +1120,55 @@ struct ContentView: View {
         return yMoves + xMoves + diagonalMoves
     }
 
-    private func machineVideoAgreementStatus(for model: MachineVideoAgreementModel?) -> String {
-        machineVideoAgreementStatus(for: model, updateMagnitude: nil)
+    private func fieldRegistrationProbeStatus(for model: FieldRegistrationProbeModel?) -> String {
+        fieldRegistrationProbeStatus(for: model, updateMagnitude: nil)
     }
 
-    private func machineVideoAgreementStatus(
-        for model: MachineVideoAgreementModel?,
+    private func fieldRegistrationProbeStatus(
+        for model: FieldRegistrationProbeModel?,
         updateMagnitude: Double?
     ) -> String {
         guard model != nil else { return "LEARN" }
         if let updateMagnitude,
-           updateMagnitude <= machineVideoAgreementConvergedUpdateNorm {
-            return "AGREE"
+           updateMagnitude <= fieldRegistrationProbeConvergedUpdateNorm {
+            return "FIELD_REGISTERED"
         }
-        return "ESTIMATE"
+        return "FIELD_ESTIMATED"
     }
 
     @MainActor
-    private func runMachineVideoAgreementMove(
+    private func runFieldRegistrationProbeMove(
         label: String,
         machineDxMm: Double,
         machineDyMm: Double,
         minimumSignalNorm: Double,
         sampleIndex: Int
-    ) async -> MachineVideoAgreementSample? {
+    ) async -> FieldRegistrationProbeSample? {
         let feedMmMin = min(visualMotionTravelFeedMmMin, bridge.manualFeedMmMin)
         let baseLength = max(hypot(machineDxMm, machineDyMm), 0.000_001)
         let expansionScales = [1.0, 1.6, 2.4, 3.2]
 
         for (attemptIndex, scale) in expansionScales.enumerated() {
-            let requestedLength = min(machineVideoAgreementMaxMoveMm, baseLength * scale)
+            let requestedLength = min(fieldRegistrationProbeMaxMoveMm, baseLength * scale)
             let commandScale = requestedLength / baseLength
             let commandX = machineDxMm * commandScale
             let commandY = machineDyMm * commandScale
             guard let before = await waitForGreenCapCameraObservation(timeoutSeconds: 3.0) else {
                 frameLearning.status = "STOP"
-                frameLearning.detail = "Cap marker lost before machine-video move"
-                calibrationStatusText = "CAL machine-video probe stopped: cap lost before move"
+                frameLearning.detail = "Cap marker lost before field registration move"
+                calibrationStatusText = "CAL field registration probe stopped: cap lost before move"
                 return nil
             }
 
             frameLearning.detail = String(
-                format: "Machine-video %@ X%+.1f Y%+.1f attempt %d",
+                format: "Field registration %@ X%+.1f Y%+.1f attempt %d",
                 label,
                 commandX,
                 commandY,
                 attemptIndex + 1
             )
             calibrationStatusText = String(
-                format: "CAL machine-video probe: %@ X%+.1f Y%+.1f",
+                format: "CAL field registration probe: %@ X%+.1f Y%+.1f",
                 label,
                 commandX,
                 commandY
@@ -1181,7 +1181,7 @@ struct ContentView: View {
             ) else {
                 frameLearning.status = "STOP"
                 frameLearning.detail = bridge.statusText.isEmpty ? "Learning move failed" : bridge.statusText
-                calibrationStatusText = "CAL machine-video probe stopped: \(frameLearning.detail)"
+                calibrationStatusText = "CAL field registration probe stopped: \(frameLearning.detail)"
                 return nil
             }
 
@@ -1189,7 +1189,7 @@ struct ContentView: View {
                 frameLearning.status = "STOP"
                 frameLearning.detail = "Pin active after \(label) move: \(pins)"
                 frameLearning.lastPins = pins
-                calibrationStatusText = "CAL machine-video probe stopped: pin active \(pins)"
+                calibrationStatusText = "CAL field registration probe stopped: pin active \(pins)"
                 return nil
             }
 
@@ -1200,14 +1200,14 @@ struct ContentView: View {
             ) else {
                 if attemptIndex + 1 < expansionScales.count {
                     calibrationStatusText = String(
-                        format: "CAL machine-video probe: no fresh cap after %@; retrying",
+                        format: "CAL field registration probe: no fresh cap after %@; retrying",
                         label
                     )
                     continue
                 }
                 frameLearning.status = "STOP"
                 frameLearning.detail = "No fresh cap observation after \(label) move"
-                calibrationStatusText = "CAL machine-video probe stopped: no fresh cap observation"
+                calibrationStatusText = "CAL field registration probe stopped: no fresh cap observation"
                 return nil
             }
 
@@ -1217,7 +1217,7 @@ struct ContentView: View {
             if observedDistance < minimumSignalNorm,
                attemptIndex + 1 < expansionScales.count {
                 bridge.recordOperatorEvent(
-                    "machine_video_agreement_weak_signal",
+                    "field_registration_probe_weak_signal",
                     details: [
                         "sample_index": sampleIndex,
                         "attempt_index": attemptIndex + 1,
@@ -1229,7 +1229,7 @@ struct ContentView: View {
                     ]
                 )
                 calibrationStatusText = String(
-                    format: "CAL machine-video %@ signal %.4f < %.4f; expanding move",
+                    format: "CAL field registration %@ signal %.4f < %.4f; expanding move",
                     label,
                     observedDistance,
                     minimumSignalNorm
@@ -1237,7 +1237,7 @@ struct ContentView: View {
                 continue
             }
 
-            let sample = MachineVideoAgreementSample(
+            let sample = FieldRegistrationProbeSample(
                 label: label,
                 machineDxMm: commandX,
                 machineDyMm: commandY,
@@ -1248,7 +1248,7 @@ struct ContentView: View {
                 strength: min(before.strength, after.strength)
             )
             bridge.recordOperatorEvent(
-                "machine_video_agreement_sample",
+                "field_registration_probe_sample",
                 details: [
                     "sample_index": sampleIndex,
                     "attempt_index": attemptIndex + 1,
@@ -1267,7 +1267,7 @@ struct ContentView: View {
                 ]
             )
             calibrationStatusText = String(
-                format: "CAL machine-video sample %d %@ X%+.1f Y%+.1f cam d%.4f %.4f",
+                format: "CAL field registration sample %d %@ X%+.1f Y%+.1f cam d%.4f %.4f",
                 sampleIndex,
                 label,
                 commandX,
@@ -1306,12 +1306,12 @@ struct ContentView: View {
         return latestResponse
     }
 
-    private func updateMachineVideoAgreementSummary(
-        samples: [MachineVideoAgreementSample],
+    private func updateFieldRegistrationProbeSummary(
+        samples: [FieldRegistrationProbeSample],
         status: String,
-        noise: MachineVideoAgreementNoise,
+        noise: FieldRegistrationProbeNoise,
         minimumSignalNorm: Double,
-        bestModel: MachineVideoAgreementModel?,
+        bestModel: FieldRegistrationProbeModel?,
         updateMagnitude: Double?
     ) {
         let xBasis = bestModel?.xBasisLengthNorm ?? averageCameraNormPerCommandMm(
@@ -1323,16 +1323,16 @@ struct ContentView: View {
         let detail: String
         if let bestModel {
             detail = String(
-                format: "Agreement samples %d update %@ corner %.1fmm rms %.4f signal %.4f",
+                format: "Field registration samples %d update %@ corner %.1fmm rms %.4f signal %.4f",
                 samples.count,
-                formatAgreementUpdate(updateMagnitude),
+                formatFieldRegistrationUpdate(updateMagnitude),
                 bestModel.fieldCornerPrecisionMm,
                 bestModel.rmsResidualNorm,
                 minimumSignalNorm
             )
         } else {
             detail = String(
-                format: "Agreement samples %d; jitter %.4f signal %.4f",
+                format: "Field registration samples %d; jitter %.4f signal %.4f",
                 samples.count,
                 noise.rmsNorm,
                 minimumSignalNorm
@@ -1348,12 +1348,12 @@ struct ContentView: View {
         )
     }
 
-    private func formatAgreementUpdate(_ update: Double?) -> String {
+    private func formatFieldRegistrationUpdate(_ update: Double?) -> String {
         guard let update, update.isFinite else { return "--" }
         return String(format: "%.4f", update)
     }
 
-    private func averageCameraNormPerCommandMm(samples: [MachineVideoAgreementSample]) -> Double {
+    private func averageCameraNormPerCommandMm(samples: [FieldRegistrationProbeSample]) -> Double {
         guard !samples.isEmpty else { return 0 }
         let total = samples.reduce(0.0) { partial, sample in
             partial + sample.observedDistanceNorm / max(sample.commandDistanceMm, 0.000_001)
@@ -1361,14 +1361,14 @@ struct ContentView: View {
         return total / Double(samples.count)
     }
 
-    private func recordMachineVideoAgreementModel(
-        _ model: MachineVideoAgreementModel,
-        noise: MachineVideoAgreementNoise,
+    private func recordFieldRegistrationProbeModel(
+        _ model: FieldRegistrationProbeModel,
+        noise: FieldRegistrationProbeNoise,
         minimumSignalNorm: Double,
         updateMagnitude: Double?
     ) {
         bridge.recordOperatorEvent(
-            "machine_video_agreement_measured",
+            "field_registration_probe_measured",
             details: [
                 "sample_count": model.sampleCount,
                 "x_basis_dx_norm": model.xBasisDxNorm,
@@ -1383,14 +1383,14 @@ struct ContentView: View {
                 "minimum_signal_norm": minimumSignalNorm,
                 "field_corner_precision_mm": model.fieldCornerPrecisionMm,
                 "model_update_norm": updateMagnitude as Any,
-                "model_update_converged": updateMagnitude.map { $0 <= machineVideoAgreementConvergedUpdateNorm } ?? false,
+                "model_update_converged": updateMagnitude.map { $0 <= fieldRegistrationProbeConvergedUpdateNorm } ?? false,
                 "precision_converged": model.isPrecisionConverged
             ]
         )
     }
 
     @MainActor
-    private func seedAndLockFieldFromMachineVideoAgreement(_ model: MachineVideoAgreementModel) async -> Bool {
+    private func seedAndLockFieldFromFieldRegistrationProbe(_ model: FieldRegistrationProbeModel) async -> Bool {
         let fieldWidthMm = desiredVisualFieldWidthMm
         let fieldHeightMm = desiredVisualFieldHeightMm
         guard let cap = await waitForGreenCapCameraObservation(timeoutSeconds: 2.0),
@@ -1401,14 +1401,14 @@ struct ContentView: View {
                   fieldHeightMm: fieldHeightMm
               ) else {
             frameLearning.status = "BLOCK"
-            frameLearning.detail = "Could not seed the selected field from machine-video agreement"
-            calibrationStatusText = "FIELD seed blocked: machine-video basis did not fit in camera"
+            frameLearning.detail = "Could not seed the selected field from field registration probe"
+            calibrationStatusText = "FIELD seed blocked: field registration basis did not fit in camera"
             return false
         }
 
         manualFiducials = corners
         manualFiducialMode = false
-        calibrationStatusText = "BORDER seeded from machine-video agreement; locking \(desiredVisualFieldSizeLabel)"
+        calibrationStatusText = "BORDER seeded from field registration probe; locking \(desiredVisualFieldSizeLabel)"
         guard let response = await bridge.registerPaperHomography(
             fiducials: corners,
             paperWidthMm: fieldWidthMm,
@@ -1420,10 +1420,10 @@ struct ContentView: View {
             return false
         }
 
-        focusPlotterVideoOnPaper(source: "machine_video_agreement_field_seeded")
-        calibrationStatusText = "BORDER \(desiredVisualFieldSizeLabel) locked from machine-video agreement"
+        focusPlotterVideoOnPaper(source: "field_registration_probe_field_seeded")
+        calibrationStatusText = "BORDER \(desiredVisualFieldSizeLabel) locked from field registration probe"
         bridge.recordOperatorEvent(
-            "field_seeded_from_machine_video_agreement",
+            "field_seeded_from_field_registration_probe",
             details: [
                 "field_width_mm": fieldWidthMm,
                 "field_height_mm": fieldHeightMm,
@@ -1435,8 +1435,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func updateLiveMachineVideoFieldFrame(
-        from model: MachineVideoAgreementModel,
+    private func updateLiveFieldRegistrationFrame(
+        from model: FieldRegistrationProbeModel,
         center: CGPoint
     ) {
         guard workspace.calibrationWizardActive, !bridge.hasPaperLock else { return }
@@ -1478,7 +1478,7 @@ struct ContentView: View {
               let persistedModel = readiness.relativeMotionModel?.visualMotionModel else {
             return
         }
-        guard frameLearning.status == "IDLE" || frameLearning.status == "AGREE" || frameLearning.status == "BLOCK" else {
+        guard frameLearning.status == "IDLE" || frameLearning.status == "FIELD_REGISTERED" || frameLearning.status == "BLOCK" else {
             return
         }
         guard visualMotionModel != persistedModel else { return }
@@ -1596,11 +1596,11 @@ struct ContentView: View {
         visualMotionSamples = []
         if frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATED" {
             frameLearning = FrameLearningState(
-                status: "AGREE",
+                status: "FIELD_REGISTERED",
                 detail: "Drawing border edited; run motion calibration against the adjusted border",
-                sampleCount: machineVideoAgreementSamples.count,
-                xPixelsPerMm: machineVideoAgreementModel?.xBasisLengthNorm ?? frameLearning.xPixelsPerMm,
-                yPixelsPerMm: machineVideoAgreementModel?.yBasisLengthNorm ?? frameLearning.yPixelsPerMm,
+                sampleCount: fieldRegistrationProbeSamples.count,
+                xPixelsPerMm: fieldRegistrationProbeModel?.xBasisLengthNorm ?? frameLearning.xPixelsPerMm,
+                yPixelsPerMm: fieldRegistrationProbeModel?.yBasisLengthNorm ?? frameLearning.yPixelsPerMm,
                 lastPins: bridge.machinePins
             )
         }
@@ -2431,7 +2431,7 @@ struct ContentView: View {
     }
 
     private var greenCapFieldMappingDetail: String {
-        guard bridge.hasPaperLock else { return "Machine-video agreement must run before field bounds exist" }
+        guard bridge.hasPaperLock else { return "Field registration probe must run before field bounds exist" }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         return String(format: "Cap mapped to field x%.1f y%.1f mm", observation.paperMm.x, observation.paperMm.y)
     }
@@ -2440,14 +2440,14 @@ struct ContentView: View {
         guard bridge.hasPaperLock else {
             return currentGreenCapCameraObservation() == nil
                 ? "Cap marker not detected"
-                : "Cap marker ready for machine-video agreement"
+                : "Cap marker ready for field registration probe"
         }
         guard let observation = currentGreenCapPaperObservation() else { return "Cap marker not detected" }
         return String(format: "Cap mapped to field x%.1f y%.1f mm", observation.paperMm.x, observation.paperMm.y)
     }
 
     private var confirmedCapFieldMappingDetail: String {
-        guard bridge.hasPaperLock else { return "Confirmed cap ready for machine-video agreement" }
+        guard bridge.hasPaperLock else { return "Confirmed cap ready for field registration probe" }
         guard let paperMm = confirmedCapPoint?.paperMm else { return "Cap marker not confirmed" }
         return String(format: "Confirmed cap mapped x%.1f y%.1f mm", paperMm.x, paperMm.y)
     }
@@ -3158,7 +3158,7 @@ struct ContentView: View {
 
     private var wizardFiducialStatus: CalibrationWizardStepStatus {
         if bridge.hasPaperLock { return .done }
-        if machineVideoAgreementModel != nil { return .active }
+        if fieldRegistrationProbeModel != nil { return .active }
         return .pending
     }
 
@@ -3168,7 +3168,7 @@ struct ContentView: View {
     }
 
     private var wizardMotionProbeStatus: CalibrationWizardStepStatus {
-        if frameLearning.status == "AGREE" || frameLearning.status == "ESTIMATE" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
+        if frameLearning.status == "FIELD_REGISTERED" || frameLearning.status == "FIELD_ESTIMATED" || frameLearning.status == "MEASURED" || frameLearning.status == "VALIDATE" || visualMotionValidated {
             return .done
         }
         if confirmedCapPoint != nil {
@@ -3204,14 +3204,14 @@ struct ContentView: View {
 
     private var wizardFiducialDetail: String {
         if bridge.hasPaperLock { return "Field \(Int(bridge.visualFieldWidthMm))x\(Int(bridge.visualFieldHeightMm)) locked; drag box/top-right resize in video to re-lock" }
-        if machineVideoAgreementModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
-        return "Hidden until first machine-video estimate exists"
+        if fieldRegistrationProbeModel != nil { return "Registering provisional \(desiredVisualFieldSizeLabel) field from current estimate" }
+        return "Hidden until first field registration estimate exists"
     }
 
     private var wizardFieldDetail: String {
         if bridge.hasPaperLock { return "Field locked; video box remains editable while setup is open" }
-        if machineVideoAgreementModel != nil { return "Waiting for field registration from current estimate" }
-        return "Waiting for first machine-video estimate"
+        if fieldRegistrationProbeModel != nil { return "Waiting for field registration from current estimate" }
+        return "Waiting for first field registration estimate"
     }
 
     private var wizardGreenCapDetail: String {
@@ -3266,15 +3266,15 @@ struct ContentView: View {
         if frameLearning.status == "VALIDATE" {
             return frameLearning.detail
         }
-        if let model = machineVideoAgreementModel, model.isUsable {
+        if let model = fieldRegistrationProbeModel, model.isUsable {
             return String(
-                format: "Online agreement X %.4f Y %.4f corner %.1fmm",
+                format: "Field registration X %.4f Y %.4f corner %.1fmm",
                 model.xBasisLengthNorm,
                 model.yBasisLengthNorm,
                 model.fieldCornerPrecisionMm
             )
         }
-        return "Run machine-video agreement first"
+        return "Run field registration probe first"
     }
 
     private var wizardDrawingCalibrationDetail: String {
@@ -3299,8 +3299,8 @@ struct ContentView: View {
         guard let workflow = bridge.calibrationWorkflow else { return nil }
         let action = workflow.nextPrimaryAction
         switch action.id {
-        case "run_machine_video_probe":
-            if bridge.hasPaperLock || machineVideoAgreementModel != nil || frameLearning.status == "MEASURED" || visualMotionValidated {
+        case "run_field_registration_probe":
+            if bridge.hasPaperLock || fieldRegistrationProbeModel != nil || frameLearning.status == "MEASURED" || visualMotionValidated {
                 return nil
             }
         case "run_motion_calibration":
@@ -3318,11 +3318,11 @@ struct ContentView: View {
         if confirmedCapPoint == nil {
             return currentCarriageMarker == nil
                 ? "Show the green cap in the plotter camera before setup movement."
-                : "Confirm the detected green cap before machine-video agreement."
+                : "Confirm the detected green cap before field registration probe."
         }
         if frameLearning.status != "MEASURED" && !visualMotionValidated {
             if !bridge.hasPaperLock {
-                return "Run machine-video agreement. The Drawing Border is hidden until the online +X/+Y estimate is usable."
+                return "Run field registration probe. The Drawing Border is hidden until the online +X/+Y estimate is usable."
             }
             return "Drag the Drawing Border or its top-right resize handle if needed, then run non-homed relative motion calibration in that border."
         }
@@ -3346,9 +3346,9 @@ struct ContentView: View {
         if frameLearning.status == "VALIDATE" { return "Validating Motion" }
         if visualMotionValidated { return "Confirm Pen Ready" }
         if frameLearning.status != "MEASURED" {
-            return bridge.hasPaperLock && machineVideoAgreementModel != nil
+            return bridge.hasPaperLock && fieldRegistrationProbeModel != nil
                 ? "Run Motion Calibration"
-                : "Run Machine-Video Probe"
+                : "Run Field Registration Probe"
         }
         if frameLearning.status == "MEASURED" { return "Validate Motion" }
         return "Blocked"
@@ -3365,7 +3365,7 @@ struct ContentView: View {
             switch action.id {
             case "confirm_green_cap":
                 return true
-            case "run_machine_video_probe", "run_motion_calibration":
+            case "run_field_registration_probe", "run_motion_calibration":
                 return frameLearning.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
@@ -3412,7 +3412,7 @@ struct ContentView: View {
             if bridge.isMachineAlarm { return "machine alarm" }
             if bridge.isMachineBusy || bridge.isRunning { return "machine busy" }
             if currentCarriageMarker == nil { return "green cap not detected" }
-            return "machine-video agreement blocked"
+            return "field registration probe blocked"
         }
         if visualMotionModel?.isUsable != true { return "motion model not usable" }
         if currentCarriageMarker == nil { return "green cap not detected" }
@@ -3432,7 +3432,7 @@ struct ContentView: View {
                     startManualPenClick()
                 }
                 return
-            case "run_machine_video_probe", "run_motion_calibration":
+            case "run_field_registration_probe", "run_motion_calibration":
                 break
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
@@ -3465,9 +3465,9 @@ struct ContentView: View {
                 calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
                 return
             }
-            calibrationStatusText = bridge.hasPaperLock && machineVideoAgreementModel != nil
+            calibrationStatusText = bridge.hasPaperLock && fieldRegistrationProbeModel != nil
                 ? "FIELD adjusted-box motion calibration requested"
-                : "FIELD machine-video agreement requested"
+                : "FIELD field registration probe requested"
             Task {
                 await runFrameLearning()
             }
@@ -3636,7 +3636,7 @@ struct ContentView: View {
                 ? "FIELD show green cap in camera"
                 : "FIELD confirm green cap"
         } else if frameLearning.status != "MEASURED" {
-            calibrationStatusText = "BORDER run machine-video agreement before drawing border"
+            calibrationStatusText = "BORDER run field registration probe before drawing border"
         } else {
             calibrationStatusText = "FIELD motion measured; validate motion"
         }
@@ -3702,8 +3702,8 @@ struct ContentView: View {
             manualFiducials = []
         }
         confirmedCapPoint = nil
-        machineVideoAgreementModel = nil
-        machineVideoAgreementSamples = []
+        fieldRegistrationProbeModel = nil
+        fieldRegistrationProbeSamples = []
         visualMotionModel = nil
         visualMotionSamples = []
         visualCenterDotTaskActive = false
@@ -3729,12 +3729,12 @@ struct ContentView: View {
             )
             StatusLamp(
                 title: "MODEL",
-                value: machineVideoAgreementModel == nil
+                value: fieldRegistrationProbeModel == nil
                     ? "--"
-                    : (frameLearning.status == "AGREE" ? "2X2" : "EST"),
-                color: frameLearning.status == "AGREE"
+                    : (frameLearning.status == "FIELD_REGISTERED" ? "2X2" : "EST"),
+                color: frameLearning.status == "FIELD_REGISTERED"
                     ? .green
-                    : (machineVideoAgreementModel != nil ? .yellow : .white.opacity(0.45)),
+                    : (fieldRegistrationProbeModel != nil ? .yellow : .white.opacity(0.45)),
                 help: wizardFiducialDetail
             )
             StatusLamp(
