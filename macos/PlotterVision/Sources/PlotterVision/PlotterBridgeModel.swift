@@ -2387,19 +2387,22 @@ final class PlotterBridgeModel: ObservableObject {
         workflow: BridgeCalibrationWorkflow?,
         fallback: String
     ) -> String {
+        if let workflow {
+            let action = workflow.nextPrimaryAction
+            if workflow.readyToDraw {
+                return "READY to draw"
+            }
+            if let blocker = workflow.currentBlocker, !blocker.isEmpty {
+                return "SETUP \(workflow.phase)/\(workflow.activity): \(action.label); \(blocker)"
+            }
+            return "SETUP \(workflow.phase)/\(workflow.activity): \(action.label)"
+        }
         if status == "ready" || readiness?.visualReadyToPlot == true {
             return visualProbeProgressStatusText(
                 prefix: "PROBE READY",
                 readiness: readiness,
                 fallback: "PROBE READY"
             )
-        }
-        if let workflow {
-            let action = workflow.nextPrimaryAction
-            if let blocker = workflow.currentBlocker, !blocker.isEmpty {
-                return "SETUP next: \(action.label); \(blocker)"
-            }
-            return "SETUP next: \(action.label)"
         }
         if let blocker = readiness?.blockers.first {
             return blocker

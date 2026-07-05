@@ -186,7 +186,7 @@ struct CalibrationWizardSnapshot: Equatable {
 
     static let idle = CalibrationWizardSnapshot(
         instructionText: "Open the plotter camera and start setup.",
-        fiducialDetail: "No setup state",
+        fiducialDetail: "No calibration workflow",
         fiducialStatus: .pending,
         greenCapDetail: "No cap state",
         greenCapStatus: .pending,

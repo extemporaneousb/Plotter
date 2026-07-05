@@ -550,7 +550,7 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     assert "func drawVisualBindingBoundsFrame" in model
 
 
-def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
+def test_wizard_uses_field_registration_probe_seed_with_editable_drawing_border() -> None:
     content = _read(SWIFT_DIR / "ContentView.swift")
     wizard = _read(SWIFT_DIR / "CalibrationWizardView.swift")
     workspace = _read(SWIFT_DIR / "OperatorWorkspaceState.swift")
@@ -627,8 +627,13 @@ def test_wizard_uses_machine_video_seed_with_editable_video_field_box() -> None:
     assert "CAL motion calibration using adjusted drawing border" in content
     assert 'resetCalibrationSetup(scope: "vision_machine")' in content
     assert 'resetCalibrationSetup(scope: "drawing_training")' in content
-    assert "private var showsVisionMachineReset: Bool {\n        true\n    }" in wizard
-    assert "return !isDownstreamDrawingPhase(phase)" not in wizard
+    assert "private var showsVisionMachineReset: Bool {" in wizard
+    assert "return !isDownstreamDrawingPhase(phase)" in wizard
+    downstream_phase_block = wizard.split("private func isDownstreamDrawingPhase", 1)[1].split(
+        "@ViewBuilder",
+        1,
+    )[0]
+    assert '"blocked"' not in downstream_phase_block
     assert "NSAlert" in content
     assert 'post(path: "calibration/setup/reset"' in _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     assert "Calibrate Vision-Machine Interface" in wizard
@@ -726,9 +731,23 @@ def test_visual_machine_setup_uses_non_homed_relative_motion() -> None:
     )[0]
     assert 'case "run_field_registration_probe":' in visible_action
     assert 'case "run_motion_calibration":' in visible_action
+    assert "workflow.isStale" in visible_action
     assert 'workflow.health == "stale"' in visible_action
     assert 'workflow.health == "stale_and_blocked"' in visible_action
     assert "return nil" in visible_action
+    enabled_action = content.split("private var wizardPrimaryActionEnabled", 1)[1].split(
+        "private var wizardPrimaryActionDisabledReason",
+        1,
+    )[0]
+    assert 'case "run_motion_calibration":' in enabled_action
+    assert "bridge.calibrationWorkflow?.isStale == true" in enabled_action
+    primary_action = content.split("private func runCalibrationWizardPrimaryAction", 1)[1].split(
+        "private func runWizardMotionProbeAction",
+        1,
+    )[0]
+    assert 'case "run_motion_calibration":' in primary_action
+    assert 'bridge.calibrationWorkflow?.isStale == true || frameLearning.status != "MEASURED"' in primary_action
+    assert 'runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")' in primary_action
     validation = content.split("private func runWizardMotionValidation", 1)[1].split(
         "private func wizardMotionValidationTarget",
         1,

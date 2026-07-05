@@ -92,6 +92,11 @@ from plotter_vision.calibration.vision_model import (
     LogicalPointMM,
     PaperPointNorm,
 )
+from plotter_vision.calibration.workflow_contract import (
+    CalibrationWorkflowActivity,
+    CalibrationWorkflowHealth,
+    CalibrationWorkflowPhase,
+)
 from plotter_vision.bridge.planner import (
     DrawingCorrectionSummary,
     ShapeExecutionPlan,
@@ -153,69 +158,6 @@ from plotter_vision.motion.simulator import (
 
 BindingMarkPointSet = Literal["five"]
 BridgeLifecycleMode = Literal["mock_preview", "hardware_standby", "live"]
-CalibrationWorkflowPhase = Literal[
-    "needs_cap",
-    "needs_drawing_border",
-    "motion_calibration",
-    "motion_validated",
-    "pen_ready",
-    "drawing_training",
-    "drawing_retry",
-    "drawing_validated",
-    "ready_to_draw",
-]
-CalibrationWorkflowActivity = Literal[
-    "idle",
-    "confirming_cap",
-    "awaiting_machine_video_probe",
-    "registering_border",
-    "running_machine_video_probe",
-    "awaiting_motion_probe",
-    "running_motion_probe",
-    "awaiting_motion_observation",
-    "awaiting_drawing_preview",
-    "awaiting_drawing_run",
-    "running_drawing_batch",
-    "awaiting_drawing_observation",
-    "fitting_model",
-    "validating_model",
-    "running_machine_action",
-]
-CalibrationWorkflowHealth = Literal["nominal", "stale", "blocked", "stale_and_blocked"]
-CALIBRATION_WORKFLOW_PHASES: tuple[CalibrationWorkflowPhase, ...] = (
-    "needs_cap",
-    "needs_drawing_border",
-    "motion_calibration",
-    "motion_validated",
-    "pen_ready",
-    "drawing_training",
-    "drawing_retry",
-    "drawing_validated",
-    "ready_to_draw",
-)
-CALIBRATION_WORKFLOW_ACTIVITIES: tuple[CalibrationWorkflowActivity, ...] = (
-    "idle",
-    "confirming_cap",
-    "awaiting_machine_video_probe",
-    "registering_border",
-    "running_machine_video_probe",
-    "awaiting_motion_probe",
-    "running_motion_probe",
-    "awaiting_motion_observation",
-    "awaiting_drawing_preview",
-    "awaiting_drawing_run",
-    "running_drawing_batch",
-    "awaiting_drawing_observation",
-    "fitting_model",
-    "validating_model",
-    "running_machine_action",
-)
-CALIBRATION_WORKFLOW_HEALTH_VALUES: tuple[CalibrationWorkflowHealth, ...] = (
-    "nominal",
-    "stale",
-    "blocked",
-    "stale_and_blocked",
-)
 BRIDGE_API_VERSION = 4
 DEFAULT_DRAWABLE_EXTRA_PADDING_MM = 40.0
 DEFAULT_BINDING_MARK_MAX_SIZE_MM = 14.0
@@ -6214,11 +6156,18 @@ class PlotterBridge:
         elif registration is None or not state.paper_registered:
             phase = "needs_drawing_border"
             blocker = "Drawing Border is not locked."
-            next_action = self._workflow_action(
-                "run_field_registration_probe",
-                "Run Field Registration Probe",
-                requires_motion=True,
-            )
+            if state.latest_visual_probe_run_id:
+                next_action = self._workflow_action(
+                    "set_drawing_border",
+                    "Set Drawing Border",
+                    enabled=False,
+                )
+            else:
+                next_action = self._workflow_action(
+                    "run_field_registration_probe",
+                    "Run Field Registration Probe",
+                    requires_motion=True,
+                )
         elif not state.motion_model_valid:
             phase = "motion_calibration"
             blocker = "Current Drawing Border invalidated downstream evidence; run motion calibration for this border."
@@ -6245,6 +6194,11 @@ class PlotterBridge:
                 "Redraw Same Batch",
                 requires_drawing=True,
             )
+        elif current_batch.status == "blocked":
+            phase = "drawing_training"
+            hard_blocked = True
+            blocker = (current_batch.blockers or ["Drawing batch blocked."])[0]
+            next_action = self._workflow_action("recovery_action", "Recovery Action", enabled=False)
         elif current_batch.status == "planned":
             phase = "drawing_training"
             next_action = self._workflow_action(
@@ -6345,7 +6299,7 @@ class PlotterBridge:
         machine = self._machine_status_snapshot()
         if machine.is_busy:
             if phase == "needs_drawing_border":
-                return "running_machine_video_probe"
+                return "running_field_registration_probe"
             if phase == "motion_calibration":
                 return "running_motion_probe"
             if phase in {"drawing_training", "drawing_retry"}:
@@ -6354,11 +6308,13 @@ class PlotterBridge:
         if phase == "needs_cap":
             return "confirming_cap"
         if phase == "needs_drawing_border":
-            return "registering_border" if state.latest_visual_probe_run_id else "awaiting_machine_video_probe"
+            return "registering_border" if state.latest_visual_probe_run_id else "awaiting_field_registration_probe"
         if phase == "motion_calibration":
             if state.probe_stale_sample_count > 0:
                 return "awaiting_motion_probe"
             return "awaiting_motion_observation" if state.probe_raw_sample_count > 0 else "awaiting_motion_probe"
+        if phase == "motion_validated":
+            return "awaiting_pen_ready"
         if current_batch is not None and current_batch.status == "awaiting_observation":
             return "awaiting_drawing_observation"
         if session is not None and session.status == "fitting":
@@ -6366,10 +6322,14 @@ class PlotterBridge:
         if session is not None and session.status == "validating":
             return "validating_model"
         action_id = str(next_action.get("id", ""))
+        if action_id == "ready_to_draw" and next_action.get("requires_drawing"):
+            return "awaiting_drawing_authority"
         if action_id == "preview_batch":
             return "awaiting_drawing_preview"
         if action_id in {"run_batch", "redraw_same_batch"}:
             return "awaiting_drawing_run"
+        if action_id == "promote_model":
+            return "awaiting_model_promotion"
         return "idle"
 
     def _workflow_action(
@@ -6416,13 +6376,12 @@ class PlotterBridge:
         health: str,
     ) -> list[dict[str, str]]:
         pen_ready = bool(session is not None and session.pen_ready_confirmed)
-        is_stale = health in {"stale", "stale_and_blocked"}
         is_blocked = health in {"blocked", "stale_and_blocked"}
         return [
             self._workflow_step(
                 "green_cap",
                 "Confirm Green Cap",
-                "done" if cap_confirmed else ("blocked" if phase == "needs_cap" else "pending"),
+                "done" if cap_confirmed else ("active" if phase == "needs_cap" else "pending"),
                 (
                     "Green cap localized in Drawing Border"
                     if state.cap_localized
@@ -6452,7 +6411,9 @@ class PlotterBridge:
             self._workflow_step(
                 "motion_calibration",
                 "Run Motion Calibration",
-                "done" if state.motion_model_valid else ("blocked" if is_stale else ("active" if registration is not None else "pending")),
+                "done"
+                if state.motion_model_valid
+                else ("active" if phase == "motion_calibration" else ("pending" if registration is None else "active")),
                 "Current motion model valid" if state.motion_model_valid else "Motion evidence required for this Drawing Border",
             ),
             self._workflow_step(
@@ -6476,13 +6437,33 @@ class PlotterBridge:
             self._workflow_step(
                 "run_batch",
                 "Run Batch",
-                "done" if current_batch is not None and current_batch.status in {"awaiting_observation", "accepted", "retry"} else ("active" if current_batch is not None else "pending"),
+                "done"
+                if current_batch is not None and current_batch.status in {"awaiting_observation", "accepted"}
+                else (
+                    "blocked"
+                    if current_batch is not None and current_batch.status == "blocked"
+                    else (
+                        "active"
+                        if current_batch is not None and current_batch.status in {"planned", "running", "retry"}
+                        else "pending"
+                    )
+                ),
                 current_batch.status if current_batch is not None else "Explicit drawing click required",
             ),
             self._workflow_step(
                 "observe_ink",
                 "Observe Ink",
-                "done" if current_batch is not None and current_batch.status == "accepted" else ("blocked" if current_batch is not None and current_batch.status == "blocked" else ("active" if current_batch is not None and current_batch.status in {"awaiting_observation", "retry"} else "pending")),
+                "done"
+                if current_batch is not None and current_batch.status == "accepted"
+                else (
+                    "blocked"
+                    if current_batch is not None and current_batch.status == "blocked"
+                    else (
+                        "active"
+                        if current_batch is not None and current_batch.status == "awaiting_observation"
+                        else "pending"
+                    )
+                ),
                 "Retry scheduled"
                 if current_batch is not None and current_batch.retry_count > 0 and current_batch.status in {"planned", "retry"}
                 else "Video ink observation",

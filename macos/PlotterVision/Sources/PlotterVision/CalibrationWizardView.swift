@@ -252,7 +252,8 @@ struct CalibrationWizardView: View {
     }
 
     private var showsVisionMachineReset: Bool {
-        true
+        guard let phase = workflow?.phase else { return true }
+        return !isDownstreamDrawingPhase(phase)
     }
 
     private var isDrawingTrainingPhase: Bool {
@@ -296,7 +297,7 @@ struct CalibrationWizardView: View {
                     .foregroundStyle(.white.opacity(0.54))
             }
             if let workflow {
-                Text("PHASE \(workflow.phase.uppercased())  ACT \((workflow.activity ?? "idle").uppercased())  HEALTH \((workflow.health ?? "nominal").uppercased())")
+                Text("PHASE \(workflow.phase.uppercased())  ACT \(workflow.activity.uppercased())  HEALTH \(workflow.health.uppercased())")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(workflowHealthColor(workflow.health))
                     .lineLimit(1)
@@ -305,7 +306,7 @@ struct CalibrationWizardView: View {
         }
     }
 
-    private func workflowHealthColor(_ health: String?) -> Color {
+    private func workflowHealthColor(_ health: String) -> Color {
         switch health {
         case "blocked", "stale", "stale_and_blocked":
             return .orange.opacity(0.9)

@@ -3304,7 +3304,7 @@ struct ContentView: View {
                 return nil
             }
         case "run_motion_calibration":
-            let staleHealth = workflow.health == "stale" || workflow.health == "stale_and_blocked"
+            let staleHealth = workflow.isStale || workflow.health == "stale" || workflow.health == "stale_and_blocked"
             if !staleHealth && (frameLearning.status == "MEASURED" || visualMotionValidated) {
                 return nil
             }
@@ -3365,7 +3365,12 @@ struct ContentView: View {
             switch action.id {
             case "confirm_green_cap":
                 return true
-            case "run_field_registration_probe", "run_motion_calibration":
+            case "run_field_registration_probe":
+                return canRunWizardMotionProbe
+            case "run_motion_calibration":
+                if bridge.calibrationWorkflow?.isStale == true {
+                    return canRunWizardMotionProbe
+                }
                 return frameLearning.status == "MEASURED" ? canValidateWizardMotion : canRunWizardMotionProbe
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
@@ -3432,8 +3437,16 @@ struct ContentView: View {
                     startManualPenClick()
                 }
                 return
-            case "run_field_registration_probe", "run_motion_calibration":
-                break
+            case "run_field_registration_probe":
+                runWizardMotionProbeAction(statusText: "FIELD field registration probe requested")
+                return
+            case "run_motion_calibration":
+                if bridge.calibrationWorkflow?.isStale == true || frameLearning.status != "MEASURED" {
+                    runWizardMotionProbeAction(statusText: "FIELD motion calibration requested")
+                } else {
+                    validateWizardMotion()
+                }
+                return
             case "confirm_pen_ready", "preview_batch", "run_batch", "redraw_same_batch",
                  "observe_ink", "fit_model", "validate_metrics", "promote_model":
                 runDrawingWorkflowPrimaryAction()
@@ -3475,6 +3488,17 @@ struct ContentView: View {
         }
 
         validateWizardMotion()
+    }
+
+    private func runWizardMotionProbeAction(statusText: String) {
+        guard canRunWizardMotionProbe else {
+            calibrationStatusText = "FIELD motion calibration blocked: \(wizardPrimaryActionDisabledReason ?? greenCapFieldMappingDetail)"
+            return
+        }
+        calibrationStatusText = statusText
+        Task {
+            await runFrameLearning()
+        }
     }
 
     private func runDrawingWorkflowPrimaryAction() {

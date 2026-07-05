@@ -12,9 +12,6 @@ import pytest
 
 from plotter_vision.bridge.server import (
     BridgeRuntimeConfig,
-    CALIBRATION_WORKFLOW_ACTIVITIES,
-    CALIBRATION_WORKFLOW_HEALTH_VALUES,
-    CALIBRATION_WORKFLOW_PHASES,
     LocalThreadingHTTPServer,
     PlotterBridge,
     _make_handler,
@@ -25,8 +22,17 @@ from plotter_vision.calibration.readiness import (
     SafeZoneMarginsMM,
     VisualReadinessState,
 )
+from plotter_vision.calibration.workflow_contract import (
+    CALIBRATION_WORKFLOW_ACTIVITIES,
+    CALIBRATION_WORKFLOW_HEALTH_VALUES,
+    CALIBRATION_WORKFLOW_PHASES,
+    calibration_workflow_contract_markdown,
+    extract_generated_workflow_contract,
+)
 from plotter_vision.config import MachineConfig
 from plotter_vision.drawing import DrawingFrameMM
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets() -> None:
@@ -44,21 +50,117 @@ def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets()
     assert set(CALIBRATION_WORKFLOW_ACTIVITIES) == {
         "idle",
         "confirming_cap",
-        "awaiting_machine_video_probe",
+        "awaiting_field_registration_probe",
         "registering_border",
-        "running_machine_video_probe",
+        "running_field_registration_probe",
         "awaiting_motion_probe",
         "running_motion_probe",
         "awaiting_motion_observation",
+        "awaiting_pen_ready",
         "awaiting_drawing_preview",
         "awaiting_drawing_run",
         "running_drawing_batch",
         "awaiting_drawing_observation",
         "fitting_model",
         "validating_model",
+        "awaiting_model_promotion",
+        "awaiting_drawing_authority",
         "running_machine_action",
     }
     assert set(CALIBRATION_WORKFLOW_HEALTH_VALUES) == {"nominal", "stale", "blocked", "stale_and_blocked"}
+
+
+def test_architecture_workflow_contract_block_is_generated_from_code() -> None:
+    architecture = (REPO_ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert extract_generated_workflow_contract(architecture) == calibration_workflow_contract_markdown()
+
+
+def test_workflow_harness_covers_observed_setup_navigation_states(tmp_path: Path) -> None:
+    bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path))
+
+    with _running_bridge(bridge) as client:
+        _, initial = client.get("/calibration/workflow/status")
+        _assert_workflow_state(
+            initial,
+            phase="needs_cap",
+            activity="confirming_cap",
+            health="nominal",
+            action="confirm_green_cap",
+            active_step="green_cap",
+        )
+
+        _, confirmed = client.post(
+            "/calibration/workflow/cap/confirm",
+            {
+                "observed_norm": {"x": 0.42, "y": 0.58},
+                "source": "operator_confirmed",
+                "confidence": 0.9,
+                "camera_id": "plotter-camera",
+                "camera_name": "Plotter Camera",
+            },
+        )
+        _assert_workflow_state(
+            confirmed,
+            phase="needs_drawing_border",
+            activity="awaiting_field_registration_probe",
+            health="nominal",
+            action="run_field_registration_probe",
+            active_step="field_registration_probe",
+        )
+
+        _write_visual_readiness_state(
+            tmp_path,
+            VisualReadinessState(latest_visual_probe_run_id="probe-run-awaiting-border"),
+        )
+        _, awaiting_border = client.get("/calibration/workflow/status")
+        _assert_workflow_state(
+            awaiting_border,
+            phase="needs_drawing_border",
+            activity="registering_border",
+            health="nominal",
+            action="set_drawing_border",
+            active_step="drawing_border",
+        )
+        assert awaiting_border["workflow"]["next_primary_action"]["enabled"] is False
+
+        _register_field_and_observe_cap(client)
+        _, needs_motion = client.get("/calibration/workflow/status")
+        _assert_workflow_state(
+            needs_motion,
+            phase="motion_calibration",
+            activity="awaiting_motion_probe",
+            health="nominal",
+            action="run_motion_calibration",
+            active_step="motion_calibration",
+        )
+
+        bridge._set_active_command(command_id="field-registration", action="jog")
+        try:
+            _, active_field_registration = client.get("/calibration/workflow/status")
+        finally:
+            bridge._set_active_command(command_id=None, action=None)
+        _assert_workflow_state(
+            active_field_registration,
+            phase="motion_calibration",
+            activity="running_motion_probe",
+            health="nominal",
+            action="run_motion_calibration",
+            active_step="motion_calibration",
+        )
+
+        for payload in _probe_sample_payloads(run_id="probe-run-navigation"):
+            status_code, _ = client.post("/calibration/probe/observe", payload)
+            assert status_code == 200
+
+        _, motion_validated = client.get("/calibration/workflow/status")
+        _assert_workflow_state(
+            motion_validated,
+            phase="motion_validated",
+            activity="awaiting_pen_ready",
+            health="nominal",
+            action="confirm_pen_ready",
+            active_step="pen_ready",
+        )
 
 
 def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: Path) -> None:
@@ -74,6 +176,7 @@ def test_field_and_cap_without_motion_model_are_not_motion_calibrated(tmp_path: 
         assert status["workflow"]["activity"] == "confirming_cap"
         assert status["workflow"]["health"] == "nominal"
         assert status["workflow"]["next_primary_action"]["id"] == "confirm_green_cap"
+        assert status["workflow"]["steps"][0]["state"] == "active"
 
         registration = _register_field(client)
         assert registration["registration"]["paper_size_mm"] == {"width": 200.0, "height": 150.0}
@@ -123,7 +226,7 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
         assert confirmed["readiness"]["paper_registered"] is False
         assert confirmed["readiness"]["cap_localized"] is False
         assert confirmed["workflow"]["phase"] == "needs_drawing_border"
-        assert confirmed["workflow"]["activity"] == "awaiting_machine_video_probe"
+        assert confirmed["workflow"]["activity"] == "awaiting_field_registration_probe"
         assert confirmed["workflow"]["health"] == "nominal"
         assert confirmed["workflow"]["next_primary_action"]["id"] == "run_field_registration_probe"
         assert confirmed["workflow"]["freshness"]["cap_confirmed"] is True
@@ -908,6 +1011,39 @@ def _register_field_and_observe_cap(client: _BridgeClient) -> dict[str, Any]:
     registration = _register_field(client)
     _observe_cap(client, x=100.0, y=75.0)
     return registration
+
+
+def _assert_workflow_state(
+    payload: dict[str, Any],
+    *,
+    phase: str,
+    activity: str,
+    health: str,
+    action: str,
+    active_step: str,
+) -> None:
+    workflow = payload["workflow"]
+    assert workflow["phase"] in CALIBRATION_WORKFLOW_PHASES
+    assert workflow["activity"] in CALIBRATION_WORKFLOW_ACTIVITIES
+    assert workflow["health"] in CALIBRATION_WORKFLOW_HEALTH_VALUES
+    assert (workflow["phase"], workflow["activity"], workflow["health"]) == (
+        phase,
+        activity,
+        health,
+    )
+    assert workflow["next_primary_action"]["id"] == action
+    assert _workflow_step(workflow, active_step)["state"] == "active"
+
+
+def _workflow_step(workflow: dict[str, Any], step_id: str) -> dict[str, str]:
+    for step in workflow["steps"]:
+        if step["id"] == step_id:
+            return step
+    raise AssertionError(f"workflow step {step_id!r} not found")
+
+
+def _write_visual_readiness_state(tmp_path: Path, state: VisualReadinessState) -> None:
+    state.save_json(tmp_path / "calibration" / "latest_visual_readiness.json")
 
 
 def _register_field(client: _BridgeClient) -> dict[str, Any]:

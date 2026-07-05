@@ -112,19 +112,27 @@ conditions are not workflow phases.
 9. Use Face Video for portrait/image-derived drawing only after bridge preview
    and execution gates.
 
+<!-- CALIBRATION_WORKFLOW_CONTRACT:BEGIN -->
+
+Generated from `plotter_vision.calibration.workflow_contract`.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> needs_cap: no cap confirmation
-    needs_cap --> needs_drawing_border: Confirm Green Cap
-    needs_drawing_border --> motion_calibration: Run Field Registration Probe / lock Drawing Border
-    motion_calibration --> motion_validated: Run Motion Calibration + Validate Cap Target
-    motion_validated --> pen_ready: Confirm Pen Ready
-    pen_ready --> drawing_training: Preview Batch
-    drawing_training --> drawing_training: Run Batch / Observe Ink / Fit / Validate
-    drawing_training --> drawing_retry: weak or missing ink evidence
-    drawing_retry --> drawing_training: Redraw Same Batch
-    drawing_training --> drawing_validated: model gates pass
-    drawing_validated --> ready_to_draw: Promote Current Model + drawing execution authority
+    [*] --> needs_cap: open workflow / activity=confirming_cap
+    needs_cap --> needs_drawing_border: confirm_green_cap / activity=awaiting_field_registration_probe
+    needs_drawing_border --> motion_calibration: run_field_registration_probe + lock_drawing_border / activity=awaiting_motion_probe
+    motion_calibration --> motion_validated: run_motion_calibration + validate_cap_target / activity=awaiting_pen_ready
+    motion_validated --> pen_ready: confirm_pen_ready / activity=awaiting_drawing_preview
+    pen_ready --> drawing_training: preview_batch / activity=awaiting_drawing_run
+    drawing_training --> drawing_training: run_batch + observe_ink + fit_model + validate_metrics / activity=awaiting_drawing_preview
+    drawing_training --> drawing_retry: weak_or_missing_ink_evidence / activity=awaiting_drawing_run
+    drawing_retry --> drawing_training: redraw_same_batch / activity=awaiting_drawing_observation
+    drawing_training --> drawing_validated: model_gates_pass / activity=awaiting_model_promotion
+    drawing_validated --> ready_to_draw: promote_current_model + drawing_authority / activity=idle
+    state "health overlay: nominal | stale | blocked | stale_and_blocked" as workflow_health
+    motion_calibration --> workflow_health: stale evidence
+    drawing_training --> workflow_health: blocked recovery
+    drawing_validated --> workflow_health: drawing authority missing
 ```
 
 Allowed workflow phases:
@@ -146,18 +154,21 @@ Allowed workflow activities:
 ```text
 idle
 confirming_cap
-awaiting_machine_video_probe
+awaiting_field_registration_probe
 registering_border
-running_machine_video_probe
+running_field_registration_probe
 awaiting_motion_probe
 running_motion_probe
 awaiting_motion_observation
+awaiting_pen_ready
 awaiting_drawing_preview
 awaiting_drawing_run
 running_drawing_batch
 awaiting_drawing_observation
 fitting_model
 validating_model
+awaiting_model_promotion
+awaiting_drawing_authority
 running_machine_action
 ```
 
@@ -169,6 +180,8 @@ stale
 blocked
 stale_and_blocked
 ```
+
+<!-- CALIBRATION_WORKFLOW_CONTRACT:END -->
 
 Changing the Drawing Border, camera, or field dimensions sets `health: stale`
 when downstream evidence no longer belongs to the current authority. Retry
