@@ -5,7 +5,6 @@ from typing import Literal
 
 CalibrationWorkflowPhase = Literal[
     "needs_cap",
-    "needs_drawing_border",
     "motion_calibration",
     "motion_validated",
     "pen_ready",
@@ -38,7 +37,6 @@ CalibrationWorkflowHealth = Literal["nominal", "stale", "blocked", "stale_and_bl
 
 CALIBRATION_WORKFLOW_PHASES: tuple[CalibrationWorkflowPhase, ...] = (
     "needs_cap",
-    "needs_drawing_border",
     "motion_calibration",
     "motion_validated",
     "pen_ready",
@@ -95,12 +93,12 @@ CALIBRATION_WORKFLOW_TRANSITIONS: tuple[CalibrationWorkflowTransition, ...] = (
     ),
     CalibrationWorkflowTransition(
         "needs_cap",
-        "needs_drawing_border",
+        "motion_calibration",
         "confirm_green_cap",
         "awaiting_field_registration_probe",
     ),
     CalibrationWorkflowTransition(
-        "needs_drawing_border",
+        "motion_calibration",
         "motion_calibration",
         "run_field_registration_probe + lock_drawing_border",
         "awaiting_motion_probe",
@@ -108,7 +106,7 @@ CALIBRATION_WORKFLOW_TRANSITIONS: tuple[CalibrationWorkflowTransition, ...] = (
     CalibrationWorkflowTransition(
         "motion_calibration",
         "motion_validated",
-        "run_motion_calibration + validate_cap_target",
+        "run_motion_calibration + validate_motion",
         "awaiting_pen_ready",
     ),
     CalibrationWorkflowTransition(

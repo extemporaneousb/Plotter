@@ -6154,7 +6154,7 @@ class PlotterBridge:
             blocker = "Green cap not confirmed."
             next_action = self._workflow_action("confirm_green_cap", "Confirm Green Cap")
         elif registration is None or not state.paper_registered:
-            phase = "needs_drawing_border"
+            phase = "motion_calibration"
             blocker = "Drawing Border is not locked."
             if state.latest_visual_probe_run_id:
                 next_action = self._workflow_action(
@@ -6302,8 +6302,9 @@ class PlotterBridge:
         session: DrawingCalibrationSession | None,
     ) -> CalibrationWorkflowActivity:
         machine = self._machine_status_snapshot()
+        action_id = str(next_action.get("id", ""))
         if machine.is_busy:
-            if phase == "needs_drawing_border":
+            if action_id in {"run_field_registration_probe", "set_drawing_border"}:
                 return "running_field_registration_probe"
             if phase == "motion_calibration":
                 return "running_motion_probe"
@@ -6312,7 +6313,9 @@ class PlotterBridge:
             return "running_machine_action"
         if phase == "needs_cap":
             return "confirming_cap"
-        if phase == "needs_drawing_border":
+        if action_id == "run_field_registration_probe":
+            return "awaiting_field_registration_probe"
+        if action_id == "set_drawing_border":
             return "registering_border" if state.latest_visual_probe_run_id else "awaiting_field_registration_probe"
         if phase == "motion_calibration":
             if state.probe_stale_sample_count > 0:
@@ -6326,7 +6329,6 @@ class PlotterBridge:
             return "fitting_model"
         if session is not None and session.status == "validating":
             return "validating_model"
-        action_id = str(next_action.get("id", ""))
         if action_id == "ready_to_draw" and next_action.get("requires_drawing"):
             return "awaiting_drawing_authority"
         if action_id == "preview_batch":
@@ -6400,7 +6402,7 @@ class PlotterBridge:
             self._workflow_step(
                 "field_registration_probe",
                 "Field Registration Probe",
-                "done" if state.latest_visual_probe_run_id else ("active" if phase == "needs_drawing_border" else "pending"),
+                "done" if state.latest_visual_probe_run_id else ("active" if cap_confirmed and registration is None else "pending"),
                 state.latest_visual_probe_run_id or "Run probe before locking Drawing Border",
             ),
             self._workflow_step(
@@ -6592,8 +6594,6 @@ class PlotterBridge:
             return {"state": activity, "label": "Running", "color": "yellow"}
         if phase == "needs_cap":
             return {"state": "needs_cap", "label": "Needs Cap", "color": "yellow"}
-        if phase == "needs_drawing_border":
-            return {"state": "needs_border", "label": "Needs Border", "color": "cyan"}
         if phase == "motion_calibration":
             return {"state": "motion_calibration", "label": "Motion Calibration", "color": "cyan"}
         if phase == "motion_validated":

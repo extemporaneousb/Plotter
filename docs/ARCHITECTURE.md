@@ -117,9 +117,9 @@ Generated from `plotter_vision.calibration.workflow_contract`.
 ```mermaid
 stateDiagram-v2
     [*] --> needs_cap: open workflow / activity=confirming_cap
-    needs_cap --> needs_drawing_border: confirm_green_cap / activity=awaiting_field_registration_probe
-    needs_drawing_border --> motion_calibration: run_field_registration_probe + lock_drawing_border / activity=awaiting_motion_probe
-    motion_calibration --> motion_validated: run_motion_calibration + validate_cap_target / activity=awaiting_pen_ready
+    needs_cap --> motion_calibration: confirm_green_cap / activity=awaiting_field_registration_probe
+    motion_calibration --> motion_calibration: run_field_registration_probe + lock_drawing_border / activity=awaiting_motion_probe
+    motion_calibration --> motion_validated: run_motion_calibration + validate_motion / activity=awaiting_pen_ready
     motion_validated --> pen_ready: confirm_pen_ready / activity=awaiting_drawing_preview
     pen_ready --> drawing_training: preview_batch / activity=awaiting_drawing_run
     drawing_training --> drawing_training: run_batch + observe_ink + fit_model + validate_metrics / activity=awaiting_drawing_preview
@@ -137,7 +137,6 @@ Allowed workflow phases:
 
 ```text
 needs_cap
-needs_drawing_border
 motion_calibration
 motion_validated
 pen_ready

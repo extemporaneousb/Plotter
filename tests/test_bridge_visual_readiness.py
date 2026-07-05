@@ -47,6 +47,9 @@ def _removed_workflow_contract_terms() -> tuple[str, ...]:
         "drawing" + "_border" + "_locked",
         "stale" + "_downstream",
         "run" + "_machine" + "_video" + "_probe",
+        "needs" + "_drawing" + "_border",
+        "validate" + "_cap" + "_target",
+        "Validate" + " Cap" + " Target",
         "AG" + "REE",
         "EST" + "IMATE",
     )
@@ -61,7 +64,6 @@ def _assert_no_removed_workflow_terms(payload: Any) -> None:
 def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets() -> None:
     assert set(CALIBRATION_WORKFLOW_PHASES) == {
         "needs_cap",
-        "needs_drawing_border",
         "motion_calibration",
         "motion_validated",
         "pen_ready",
@@ -133,7 +135,7 @@ def test_workflow_harness_covers_observed_setup_navigation_states(tmp_path: Path
         )
         _assert_workflow_state(
             confirmed,
-            phase="needs_drawing_border",
+            phase="motion_calibration",
             activity="awaiting_field_registration_probe",
             health="nominal",
             action="run_field_registration_probe",
@@ -147,7 +149,7 @@ def test_workflow_harness_covers_observed_setup_navigation_states(tmp_path: Path
         _, awaiting_border = client.get("/calibration/workflow/status")
         _assert_workflow_state(
             awaiting_border,
-            phase="needs_drawing_border",
+            phase="motion_calibration",
             activity="registering_border",
             health="nominal",
             action="set_drawing_border",
@@ -257,7 +259,7 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
         assert status_code == 200
         assert confirmed["readiness"]["paper_registered"] is False
         assert confirmed["readiness"]["cap_localized"] is False
-        assert confirmed["workflow"]["phase"] == "needs_drawing_border"
+        assert confirmed["workflow"]["phase"] == "motion_calibration"
         assert confirmed["workflow"]["activity"] == "awaiting_field_registration_probe"
         assert confirmed["workflow"]["health"] == "nominal"
         assert confirmed["workflow"]["next_primary_action"]["id"] == "run_field_registration_probe"
@@ -267,7 +269,7 @@ def test_workflow_cap_confirmation_advances_before_field_registration(tmp_path: 
 
         status_code, status = client.get("/calibration/workflow/status")
         assert status_code == 200
-        assert status["workflow"]["phase"] == "needs_drawing_border"
+        assert status["workflow"]["phase"] == "motion_calibration"
         assert status["workflow"]["freshness"]["cap_confirmation_id"] == confirmed["workflow"]["freshness"]["cap_confirmation_id"]
 
         status_code, reset = client.post(

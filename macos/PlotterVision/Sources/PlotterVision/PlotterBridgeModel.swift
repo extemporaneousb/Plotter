@@ -1098,9 +1098,7 @@ final class PlotterBridgeModel: ObservableObject {
             )
             latestVisualReadiness = response.readiness
             calibrationWorkflow = response.workflow
-            adaptiveProbeStatus = response.workflow?.phase == "needs_drawing_border"
-                ? "PROBE READY"
-                : adaptiveProbeStatus
+            adaptiveProbeStatus = response.status == "ready" ? "PROBE READY" : adaptiveProbeStatus
             statusText = visualReadinessWorkflowStatusText(
                 status: response.status,
                 readiness: response.readiness,

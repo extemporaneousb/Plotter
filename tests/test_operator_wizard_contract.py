@@ -25,6 +25,9 @@ def _removed_workflow_contract_terms() -> tuple[str, ...]:
         "drawing" + "_border" + "_locked",
         "stale" + "_downstream",
         "run" + "_machine" + "_video" + "_probe",
+        "needs" + "_drawing" + "_border",
+        "validate" + "_cap" + "_target",
+        "Validate" + " Cap" + " Target",
         "AG" + "REE",
         "EST" + "IMATE",
     )
@@ -453,8 +456,10 @@ def test_wizard_drives_non_homed_visual_field_motion_setup() -> None:
     assert "operatorWorkflowStepTitle" not in wizard
     assert "operatorWorkflowActionLabel" not in wizard
     assert 'case "motion_validation":' not in wizard
-    assert 'case "validate_cap_target":' not in wizard
-    assert 'case "Validate Cap Target":' not in wizard
+    retired_validate_action = "validate" + "_cap" + "_target"
+    retired_validate_label = "Validate" + " Cap" + " Target"
+    assert f'case "{retired_validate_action}":' not in wizard
+    assert f'case "{retired_validate_label}":' not in wizard
     assert "BridgeCalibrationCapConfirmationRequest" in client
     assert 'post(path: "calibration/workflow/cap/confirm"' in client
     assert "confirmCalibrationCap(" in model

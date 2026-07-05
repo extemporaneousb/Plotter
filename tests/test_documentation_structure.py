@@ -52,6 +52,9 @@ def _removed_workflow_contract_terms() -> tuple[str, ...]:
         "drawing" + "_border" + "_locked",
         "stale" + "_downstream",
         "run" + "_machine" + "_video" + "_probe",
+        "needs" + "_drawing" + "_border",
+        "validate" + "_cap" + "_target",
+        "Validate" + " Cap" + " Target",
         "AG" + "REE",
         "EST" + "IMATE",
     )
