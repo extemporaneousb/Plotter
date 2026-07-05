@@ -74,17 +74,7 @@ def test_shape_plan_omits_pen_commands_when_missing_in_dry_run() -> None:
 
 def test_bridge_dry_run_returns_completed_plan(tmp_path: Path) -> None:
     config_path = _write_machine_config(tmp_path)
-    bridge = PlotterBridge(
-        BridgeRuntimeConfig(
-            dry_run=True,
-            mock=True,
-            config_path=config_path,
-            event_log_path=tmp_path / "events.jsonl",
-            transcript_dir=tmp_path / "transcripts",
-            workspace_x_max=533.4,
-            workspace_y_max=215.9,
-        )
-    )
+    bridge = _bridge(tmp_path=tmp_path, config_path=config_path)
 
     response = bridge.draw_shape(ShapeExecutionRequest(request_id="cmd-dry"))
 
@@ -208,20 +198,7 @@ def test_bridge_mock_live_run_writes_transcript(tmp_path: Path) -> None:
     machine = _machine_with_pen()
     machine.axis_model_trusted = True
     machine.save_json(config_path)
-    bridge = PlotterBridge(
-        BridgeRuntimeConfig(
-            dry_run=False,
-            mock=True,
-            arm_motion=True,
-            arm_pen=True,
-            arm_homing=True,
-            config_path=config_path,
-            event_log_path=tmp_path / "events.jsonl",
-            transcript_dir=tmp_path / "transcripts",
-            workspace_x_max=533.4,
-            workspace_y_max=215.9,
-        )
-    )
+    bridge = _live_bridge(tmp_path=tmp_path, config_path=config_path)
 
     response = bridge.draw_shape(ShapeExecutionRequest(request_id="cmd-live"))
 
