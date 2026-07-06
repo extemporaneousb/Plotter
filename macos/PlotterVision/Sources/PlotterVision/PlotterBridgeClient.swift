@@ -714,8 +714,6 @@ struct MachineStatusResponse: Decodable {
     let armHoming: Bool
     let armUnlock: Bool
     let state: String
-    let homingTrusted: Bool
-    let axisModelTrusted: Bool
     let mposMm: [Double]?
     let wposMm: [Double]?
     let pins: String

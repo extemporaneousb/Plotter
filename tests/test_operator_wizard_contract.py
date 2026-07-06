@@ -573,6 +573,13 @@ def test_old_binding_runner_is_not_active_setup() -> None:
     client = _read(SWIFT_DIR / "PlotterBridgeClient.swift")
     model = _read(SWIFT_DIR / "PlotterBridgeModel.swift")
 
+    assert "machineHomingTrusted" not in model
+    assert "machineAxisModelTrusted" not in model
+    assert "canRunAbsoluteDrawing" not in model
+    assert "canRunAbsoluteDrawing" not in content
+    assert "future_drawing_preflight" not in model
+    assert "axisModelTrusted" not in client
+    assert "homingTrusted" not in client
     assert not (SWIFT_DIR / "VisualBindingMarkRunner.swift").exists()
     assert "await bridge.refreshVisualBindingStatus()" not in content
     assert "visual_binding_status_refreshed" in model

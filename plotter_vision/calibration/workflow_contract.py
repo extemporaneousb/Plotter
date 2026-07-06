@@ -30,7 +30,6 @@ CalibrationWorkflowActivity = Literal[
     "fitting_model",
     "validating_model",
     "awaiting_model_promotion",
-    "awaiting_drawing_authority",
     "running_machine_action",
 ]
 CalibrationWorkflowHealth = Literal["nominal", "stale", "blocked", "stale_and_blocked"]
@@ -62,7 +61,6 @@ CALIBRATION_WORKFLOW_ACTIVITIES: tuple[CalibrationWorkflowActivity, ...] = (
     "fitting_model",
     "validating_model",
     "awaiting_model_promotion",
-    "awaiting_drawing_authority",
     "running_machine_action",
 )
 CALIBRATION_WORKFLOW_HEALTH_VALUES: tuple[CalibrationWorkflowHealth, ...] = (
@@ -148,7 +146,7 @@ CALIBRATION_WORKFLOW_TRANSITIONS: tuple[CalibrationWorkflowTransition, ...] = (
     CalibrationWorkflowTransition(
         "drawing_validated",
         "ready_to_draw",
-        "promote_current_model + drawing_authority",
+        "promote_current_model",
         "idle",
     ),
 )
@@ -166,7 +164,6 @@ def calibration_workflow_mermaid() -> str:
             "    state \"health overlay: nominal | stale | blocked | stale_and_blocked\" as workflow_health",
             "    motion_calibration --> workflow_health: stale evidence",
             "    drawing_training --> workflow_health: blocked recovery",
-            "    drawing_validated --> workflow_health: drawing authority missing",
             "```",
         ]
     )

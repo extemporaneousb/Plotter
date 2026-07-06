@@ -76,7 +76,7 @@ def test_capability_preview_projects_overlay_and_records_expected_geometry(tmp_p
     assert len(binding.binding.expected_simulated_geometry) >= len(response.preview_overlay.primitives)
 
 
-def test_capability_run_requires_axis_model_or_validated_binding(tmp_path: Path) -> None:
+def test_capability_run_reports_backend_visual_setup_execution_blocker(tmp_path: Path) -> None:
     bridge = _bridge(tmp_path=tmp_path, config_path=_write_machine_config(tmp_path), dry_run=False)
 
     response = bridge.run_capability_test(
@@ -85,7 +85,9 @@ def test_capability_run_requires_axis_model_or_validated_binding(tmp_path: Path)
 
     assert response.status == "failed"
     assert response.error is not None
-    assert "future ink binding" in response.error
+    assert "current Drawing Border and cap-motion evidence" in response.error
+    assert "axis_model_trusted" not in response.error
+    assert "future ink binding" not in response.error
     assert response.controller_transcript is None
 
 

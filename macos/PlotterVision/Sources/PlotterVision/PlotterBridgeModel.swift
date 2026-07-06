@@ -30,8 +30,6 @@ final class PlotterBridgeModel: ObservableObject {
     @Published var machineWPos = "W --"
     @Published var machineFeedSpindle = "FS --"
     @Published var machineStatus = "Machine not sampled"
-    @Published var machineHomingTrusted = false
-    @Published var machineAxisModelTrusted = false
     @Published var previewStatus = "SIM --"
     @Published var imagePreviewStatus = "IMG --"
     @Published var imagePreviewDetail = "VISUAL ONLY"
@@ -483,22 +481,10 @@ final class PlotterBridgeModel: ObservableObject {
         paperRegistrationSnapshot != nil || paperTransformStatus.contains("LOCK")
     }
 
-    var hasDrawingAuthority: Bool {
-        isDryRun || machineAxisModelTrusted || visualBindingValid
-    }
-
-    var drawingAuthorityDetail: String {
-        if isDryRun { return "dry-run bridge" }
-        if machineAxisModelTrusted { return "axis model trusted" }
-        if visualBindingValid { return "future ink binding validated" }
-        return "future drawing authority required"
-    }
-
-    var canRunAbsoluteDrawing: Bool {
+    var canRequestDrawingCommand: Bool {
         isOnline
             && !hasBridgeContractMismatch
             && hasPaperLock
-            && hasDrawingAuthority
             && !isCalibrating
             && !isRunning
             && !isMachineBusy
@@ -610,10 +596,9 @@ final class PlotterBridgeModel: ObservableObject {
         if hasLifecycleBuildMismatch { return "App/bridge build mismatch" }
         if isDryRun { return "Bridge-run dry-run only" }
         if !hasPaperLock { return "Visual field missing" }
-        if !hasDrawingAuthority { return drawingAuthorityDetail }
         if isMachineAlarm { return "Machine alarm" }
         if isMachineBusy || isRunning { return "Machine busy" }
-        return "Bridge-run drawing armed"
+        return "Bridge-run drawing requestable"
     }
 
     var drawVerifyStatusLine: String {
@@ -690,7 +675,7 @@ final class PlotterBridgeModel: ObservableObject {
             "motion_mode": motionModeLabel,
             "arm": armStatusLabel,
             "motion_gate": motionGateMessage,
-            "future_drawing_preflight": drawPreflightMessage
+            "drawing_preflight": drawPreflightMessage
         ]
     }
 
@@ -732,9 +717,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "status": machineStatus,
                 "busy": isMachineBusy || isRunning,
                 "alarm": isMachineAlarm,
-                "active_action": activeAction,
-                "homing_trusted": machineHomingTrusted,
-                "axis_model_trusted": machineAxisModelTrusted
+                "active_action": activeAction
             ],
             "paper": [
                 "status": paperTransformStatus,
@@ -785,11 +768,11 @@ final class PlotterBridgeModel: ObservableObject {
                 "motion_gate": motionGateMessage,
                 "manual_motion_gate": manualMotionGateMessage,
                 "manual_jog_workspace_override": manualJogWorkspaceOverride,
-                "future_drawing_preflight": drawPreflightMessage,
+                "drawing_preflight": drawPreflightMessage,
                 "can_connect_hardware": canConnectHardware,
                 "can_arm_hardware": canArmHardware,
                 "can_disarm_hardware": canDisarmHardware,
-                "can_run_absolute_drawing": canRunAbsoluteDrawing,
+                "can_request_drawing_command": canRequestDrawingCommand,
                 "can_run_visual_relative_motion": canRunLiveRelativeMotionCommand
             ]
         ]
@@ -893,8 +876,6 @@ final class PlotterBridgeModel: ObservableObject {
             machineWPos,
             isMachineBusy ? "busy" : "idle",
             isMachineAlarm ? "alarm" : "ok",
-            machineHomingTrusted ? "home_trusted" : "home_untrusted",
-            machineAxisModelTrusted ? "axis_trusted" : "axis_untrusted",
             activeAction
         ].joined(separator: "|")
         guard summary != lastDiagnosticsMachineSummary else { return }
@@ -908,9 +889,7 @@ final class PlotterBridgeModel: ObservableObject {
                 "wpos": machineWPos,
                 "busy": isMachineBusy,
                 "alarm": isMachineAlarm,
-                "active_action": activeAction,
-                "homing_trusted": machineHomingTrusted,
-                "axis_model_trusted": machineAxisModelTrusted
+                "active_action": activeAction
             ],
             snapshot: true
         )
@@ -1014,8 +993,6 @@ final class PlotterBridgeModel: ObservableObject {
             statusText = "Bridge offline"
             paperTransformStatus = "FIELD --"
             paperRegistrationSnapshot = nil
-            machineHomingTrusted = false
-            machineAxisModelTrusted = false
             bridgeController = "offline"
             armMotion = false
             armPen = false
@@ -1175,8 +1152,6 @@ final class PlotterBridgeModel: ObservableObject {
             machineWPosMm = []
             machineFeedSpindle = "FS --"
             machineStatus = error.localizedDescription
-            machineHomingTrusted = false
-            machineAxisModelTrusted = false
             paperRegistrationSnapshot = nil
             isMachineBusy = false
             isMachineAlarm = true
@@ -1236,8 +1211,6 @@ final class PlotterBridgeModel: ObservableObject {
             machineWPosMm = []
             machineFeedSpindle = "FS --"
             machineStatus = error.localizedDescription
-            machineHomingTrusted = false
-            machineAxisModelTrusted = false
             paperRegistrationSnapshot = nil
             statusText = "Reconnect failed"
             isMachineBusy = false
@@ -1329,7 +1302,7 @@ final class PlotterBridgeModel: ObservableObject {
     }
 
     func drawVisualBindingBoundsFrame(points: [BindingMarkPreviewPoint]) async -> Bool {
-        guard canRunAbsoluteDrawing else {
+        guard canRequestDrawingCommand else {
             drawVerifyStatus = "DRAW BLOCK"
             drawVerifyDetail = drawPreflightMessage
             statusText = drawPreflightMessage
@@ -1411,7 +1384,7 @@ final class PlotterBridgeModel: ObservableObject {
                         flipY: false
                     ),
                     includeHoming: false,
-                    visualPositionTrusted: visualBindingValid,
+                    visualPositionTrusted: false,
                     drawFeedMmMin: min(machineMaxFeedMmMin, max(240.0, shapeDrawFeedMmMin)),
                     travelFeedMmMin: fastTravelFeedMmMin,
                     maxSegmentMm: 50.0,
@@ -3934,8 +3907,6 @@ final class PlotterBridgeModel: ObservableObject {
         machineMPos = "M \(formatPosition(response.mposMm))"
         machineWPos = "W \(formatPosition(response.wposMm))"
         machineFeedSpindle = "FS \(formatTuple(response.feedSpindle))"
-        machineHomingTrusted = response.homingTrusted
-        machineAxisModelTrusted = response.axisModelTrusted
         isMachineBusy = response.isBusy
         isMachineAlarm = response.isAlarm || response.status == "failed"
         activeAction = response.activeAction ?? activeAction

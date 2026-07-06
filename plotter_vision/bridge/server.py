@@ -1639,7 +1639,7 @@ class PlotterBridge:
 
         try:
             machine = self._load_machine_config()
-            self._require_axis_model_trusted(machine)
+            self._require_absolute_drawing_executor_ready(machine)
             safety = SafetyState(
                 dry_run=self.config.dry_run,
                 armed_motion=self.config.arm_motion,
@@ -2007,7 +2007,7 @@ class PlotterBridge:
         transcript_path = self.config.transcript_dir / f"{command_id}.jsonl"
         try:
             machine = self._load_machine_config()
-            self._require_axis_model_trusted(machine)
+            self._require_absolute_drawing_executor_ready(machine)
             registration = self._load_latest_paper_registration()
             drawing_model = (
                 self._drawing_calibration_for_planning()
@@ -2093,7 +2093,7 @@ class PlotterBridge:
 
         try:
             machine = self._load_machine_config()
-            self._require_axis_model_trusted(machine)
+            self._require_absolute_drawing_executor_ready(machine)
             draw_request = request
             if self._visual_ready_to_plot():
                 draw_request = request.model_copy(update={"visual_position_trusted": True})
@@ -2437,7 +2437,7 @@ class PlotterBridge:
         try:
             definition = build_capability_test_definition(request.kind)
             machine = self._load_machine_config()
-            self._require_axis_model_trusted(machine)
+            self._require_absolute_drawing_executor_ready(machine)
             plan = build_polygon_draw_plan(
                 request=PolygonDrawRequest(
                     program=definition.program,
@@ -5465,20 +5465,25 @@ class PlotterBridge:
             if sample.observed_distance_mm < 8.0:
                 raise MotionSafetyError("Axis model trust sample observed displacement is too small.")
 
-    def _require_axis_model_trusted(self, machine: MachineConfig) -> None:
-        if self._has_drawing_execution_authority(machine):
+    def _require_absolute_drawing_executor_ready(self, machine: MachineConfig) -> None:
+        if self._has_absolute_drawing_executor_ready(machine):
             return
-        raise MotionSafetyError(self._drawing_execution_blocker())
+        raise MotionSafetyError(self._absolute_drawing_executor_blocker())
 
-    def _has_drawing_execution_authority(self, machine: MachineConfig | None = None) -> bool:
+    def _has_absolute_drawing_executor_ready(self, machine: MachineConfig | None = None) -> bool:
         machine = machine or self._load_machine_config()
         return bool(self.config.dry_run or machine.axis_model_trusted or self._visual_ready_to_plot())
 
-    def _drawing_execution_blocker(self) -> str:
+    def _absolute_drawing_executor_blocker(self) -> str:
         return (
-            "Real drawing requires axis_model_trusted=true or a validated future ink "
-            "binding. Cap-only visual readiness is relative evidence and "
-            "cannot unlock absolute drawing."
+            "Live drawing is unavailable from Visual Field Setup until the backend can "
+            "run drawing from current Drawing Border and cap-motion evidence."
+        )
+
+    def _live_setup_drawing_blocker(self) -> str:
+        return (
+            "Visual Field Setup is complete through pen readiness; live drawing training "
+            "is held until the backend can run drawing from current visual setup evidence."
         )
 
     def _latest_machine_model_path(self) -> Path:
@@ -5721,7 +5726,7 @@ class PlotterBridge:
         transcript_path: Path,
     ) -> DrawingCalibrationProgramResponse:
         machine = self._load_machine_config()
-        self._require_axis_model_trusted(machine)
+        self._require_absolute_drawing_executor_ready(machine)
         drawing_model = self._drawing_model_for_batch(batch_plan.batch)
         plan = build_polygon_draw_plan(
             request=PolygonDrawRequest(
@@ -6149,12 +6154,10 @@ class PlotterBridge:
             and session.latest_model_id == model.model_id
             and model.ready
         )
-        drawing_execution_authority = self._has_drawing_execution_authority()
         ready_to_draw = bool(
             state.visual_ready_to_plot
             and pen_ready
             and model_promoted
-            and drawing_execution_authority
         )
 
         phase: CalibrationWorkflowPhase = "needs_cap"
@@ -6167,13 +6170,6 @@ class PlotterBridge:
         if ready_to_draw:
             phase = "ready_to_draw"
             next_action = self._workflow_action("ready_to_draw", "Ready to Draw", enabled=False)
-        elif state.visual_ready_to_plot and pen_ready and model_promoted:
-            phase = "drawing_validated"
-            next_action = self._workflow_action(
-                "ready_to_draw",
-                "Ready to Draw",
-                requires_drawing=True,
-            )
         elif session_current and session is not None and session.status == "blocked":
             phase = "drawing_training"
             hard_blocked = True
@@ -6219,11 +6215,15 @@ class PlotterBridge:
         ):
             phase = "drawing_retry"
             blocker = (current_batch.blockers or ["Weak/no ink observation; redraw the same batch."])[0]
-            next_action = self._workflow_action(
-                "redraw_same_batch",
-                "Redraw Same Batch",
-                requires_drawing=True,
-            )
+            if self.config.dry_run:
+                next_action = self._workflow_action("redraw_same_batch", "Redraw Same Batch")
+            else:
+                blocker = self._live_setup_drawing_blocker()
+                next_action = self._workflow_action(
+                    "setup_complete",
+                    "Setup Complete",
+                    enabled=False,
+                )
         elif current_batch.status == "blocked":
             phase = "drawing_training"
             hard_blocked = True
@@ -6231,11 +6231,15 @@ class PlotterBridge:
             next_action = self._workflow_action("recovery_action", "Recovery Action", enabled=False)
         elif current_batch.status == "planned":
             phase = "drawing_training"
-            next_action = self._workflow_action(
-                "run_batch",
-                "Run Batch",
-                requires_drawing=True,
-            )
+            if self.config.dry_run:
+                next_action = self._workflow_action("run_batch", "Run Batch")
+            else:
+                blocker = self._live_setup_drawing_blocker()
+                next_action = self._workflow_action(
+                    "setup_complete",
+                    "Setup Complete",
+                    enabled=False,
+                )
         elif current_batch.status == "awaiting_observation":
             phase = "drawing_training"
             next_action = self._workflow_action("observe_ink", "Observe Ink")
@@ -6248,10 +6252,6 @@ class PlotterBridge:
 
         if downstream_stale and blocker is None:
             blocker = "Current Drawing Border invalidated downstream evidence; refresh calibration for this border."
-        if next_action.get("requires_drawing") and not drawing_execution_authority:
-            hard_blocked = True
-            blocker = self._drawing_execution_blocker()
-            next_action = {**next_action, "enabled": False}
         activity = self._workflow_activity(
             phase=phase,
             next_action=next_action,
@@ -6359,8 +6359,6 @@ class PlotterBridge:
             return "fitting_model"
         if session is not None and session.status == "validating":
             return "validating_model"
-        if action_id == "ready_to_draw" and next_action.get("requires_drawing"):
-            return "awaiting_drawing_authority"
         if action_id == "preview_batch":
             return "awaiting_drawing_preview"
         if action_id in {"run_batch", "redraw_same_batch"}:
@@ -6481,11 +6479,29 @@ class PlotterBridge:
                     if current_batch is not None and current_batch.status == "blocked"
                     else (
                         "active"
-                        if current_batch is not None and current_batch.status in {"planned", "running", "retry"}
+                        if (
+                            self.config.dry_run
+                            and current_batch is not None
+                            and current_batch.status in {"planned", "running", "retry"}
+                        )
                         else "pending"
                     )
                 ),
-                current_batch.status if current_batch is not None else "Explicit drawing click required",
+                (
+                    "Dry-run batch ready"
+                    if self.config.dry_run
+                    and current_batch is not None
+                    and current_batch.status in {"planned", "retry"}
+                    else (
+                        self._live_setup_drawing_blocker()
+                        if current_batch is not None and current_batch.status in {"planned", "retry"}
+                        else (
+                            current_batch.status
+                            if current_batch is not None
+                            else "Explicit drawing click required"
+                        )
+                    )
+                ),
             ),
             self._workflow_step(
                 "observe_ink",
@@ -6593,7 +6609,7 @@ class PlotterBridge:
         model: DrawingCalibrationModel | None,
     ) -> list[str]:
         actions = ["refresh_status"]
-        if phase == "pen_ready":
+        if phase == "pen_ready" and self.config.dry_run:
             actions.append("preview_next_batch")
         if session is not None and session.accepted_observations and (model is None or not model.ready):
             actions.extend(["fit_accepted_observations", "validate_metrics"])

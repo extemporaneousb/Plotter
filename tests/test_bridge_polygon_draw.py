@@ -292,7 +292,9 @@ def test_bridge_mock_live_draw_program_writes_transcript(tmp_path: Path) -> None
     assert '"payload":"G53 G1 X-523.4 Y-195.9"' in text
 
 
-def test_bridge_mock_live_draw_program_requires_trusted_axis_model(tmp_path: Path) -> None:
+def test_bridge_mock_live_draw_program_reports_backend_visual_setup_execution_blocker(
+    tmp_path: Path,
+) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = PlotterBridge(
         BridgeRuntimeConfig(
@@ -313,7 +315,8 @@ def test_bridge_mock_live_draw_program_requires_trusted_axis_model(tmp_path: Pat
 
     assert response.status == "failed"
     assert response.error is not None
-    assert "axis_model_trusted=true" in response.error
+    assert "current Drawing Border and cap-motion evidence" in response.error
+    assert "axis_model_trusted" not in response.error
 
 
 def _line_request(*, request_id: str = "line", include_homing: bool = False) -> PolygonDrawRequest:

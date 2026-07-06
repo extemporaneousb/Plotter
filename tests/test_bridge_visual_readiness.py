@@ -89,7 +89,6 @@ def test_calibration_workflow_exposes_bounded_phase_activity_health_state_sets()
         "fitting_model",
         "validating_model",
         "awaiting_model_promotion",
-        "awaiting_drawing_authority",
         "running_machine_action",
     }
     assert set(CALIBRATION_WORKFLOW_HEALTH_VALUES) == {"nominal", "stale", "blocked", "stale_and_blocked"}
@@ -896,10 +895,13 @@ def test_motion_model_valid_does_not_unlock_real_drawing(tmp_path: Path) -> None
     assert status_code == 400
     assert drawing["status"] == "failed"
     assert drawing["controller_transcript"] is None
-    assert "absolute drawing" in drawing["error"]
+    assert "current Drawing Border and cap-motion evidence" in drawing["error"]
+    assert "axis_model_trusted" not in drawing["error"]
 
 
-def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_path: Path) -> None:
+def test_live_setup_holds_planned_batch_out_of_primary_action_until_visual_executor_exists(
+    tmp_path: Path,
+) -> None:
     config_path = _write_machine_config(tmp_path)
     bridge = _bridge(
         tmp_path=tmp_path,
@@ -935,14 +937,16 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         status_code, workflow = client.get("/calibration/workflow/status")
         assert status_code == 200
         action = workflow["workflow"]["next_primary_action"]
-        assert action["id"] == "run_batch"
+        assert action["id"] == "setup_complete"
         assert action["enabled"] is False
-        assert action["requires_drawing"] is True
+        assert action["requires_drawing"] is False
         assert workflow["workflow"]["phase"] == "drawing_training"
         assert workflow["workflow"]["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
-        assert workflow["workflow"]["health"] == "blocked"
-        assert workflow["workflow"]["activity"] == "awaiting_drawing_run"
-        assert "future ink binding" in workflow["workflow"]["current_blocker"]
+        assert workflow["workflow"]["health"] == "nominal"
+        assert workflow["workflow"]["activity"] == "idle"
+        assert "current visual setup evidence" in workflow["workflow"]["current_blocker"]
+        assert "axis_model_trusted" not in workflow["workflow"]["current_blocker"]
+        assert "future ink binding" not in workflow["workflow"]["current_blocker"]
         _assert_no_removed_workflow_terms(workflow["workflow"])
 
         status_code, run = client.post(
@@ -959,7 +963,9 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         assert run["status"] == "blocked"
         assert run["session"]["status"] == "blocked"
         assert run["batch"]["status"] == "blocked"
-        assert "future ink binding" in run["batch"]["blockers"][0]
+        assert "current Drawing Border and cap-motion evidence" in run["batch"]["blockers"][0]
+        assert "axis_model_trusted" not in run["batch"]["blockers"][0]
+        assert "future ink binding" not in run["batch"]["blockers"][0]
 
         status_code, blocked = client.get("/calibration/workflow/status")
         assert status_code == 200
@@ -967,7 +973,9 @@ def test_live_drawing_session_blocks_run_batch_without_drawing_authority(tmp_pat
         assert blocked["workflow"]["phase"] not in CALIBRATION_WORKFLOW_HEALTH_VALUES
         assert blocked["workflow"]["health"] == "blocked"
         assert blocked["workflow"]["next_primary_action"]["id"] == "recovery_action"
-        assert "future ink binding" in blocked["workflow"]["current_blocker"]
+        assert "current Drawing Border and cap-motion evidence" in blocked["workflow"]["current_blocker"]
+        assert "axis_model_trusted" not in blocked["workflow"]["current_blocker"]
+        assert "future ink binding" not in blocked["workflow"]["current_blocker"]
         _assert_no_removed_workflow_terms(blocked["workflow"])
 
 

@@ -126,11 +126,10 @@ stateDiagram-v2
     drawing_training --> drawing_retry: weak_or_missing_ink_evidence / activity=awaiting_drawing_run
     drawing_retry --> drawing_training: redraw_same_batch / activity=awaiting_drawing_observation
     drawing_training --> drawing_validated: model_gates_pass / activity=awaiting_model_promotion
-    drawing_validated --> ready_to_draw: promote_current_model + drawing_authority / activity=idle
+    drawing_validated --> ready_to_draw: promote_current_model / activity=idle
     state "health overlay: nominal | stale | blocked | stale_and_blocked" as workflow_health
     motion_calibration --> workflow_health: stale evidence
     drawing_training --> workflow_health: blocked recovery
-    drawing_validated --> workflow_health: drawing authority missing
 ```
 
 Allowed workflow phases:
@@ -165,7 +164,6 @@ awaiting_drawing_observation
 fitting_model
 validating_model
 awaiting_model_promotion
-awaiting_drawing_authority
 running_machine_action
 ```
 
