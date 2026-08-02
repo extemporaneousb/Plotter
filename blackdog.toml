@@ -4,11 +4,16 @@ profile_version = 1
 
 [paths]
 control_dir = "@git-common/blackdog"
-worktrees_dir = ".blackdog/worktrees"
+worktrees_dir = "../.worktrees"
 
 [taxonomy]
 validation_commands = ["make check"]
 doc_routing_defaults = ["AGENTS.md", "README.md", "docs/ARCHITECTURE.md", "docs/RUNBOOK.md", "docs/ROADMAP.md"]
+
+[landing]
+schema_version = 1
+automatic_stale_rebase = false
+validation_timeout_seconds = 900
 
 [[handlers]]
 id = "python"
