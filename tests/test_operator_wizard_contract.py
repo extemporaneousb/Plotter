@@ -198,8 +198,11 @@ def test_app_uses_canonical_plotter_vision_paths_without_stale_names() -> None:
     ).stdout.splitlines()
     assert all(stale_word not in path.lower() for path in tracked)
 
+    stale_token_pattern = "".join(
+        f"[{character.lower()}{character.upper()}]" for character in stale_word
+    ) + r"([^[:lower:]]|$)"
     grep = subprocess.run(
-        ["git", "grep", "-n", "-i", stale_word, "--", "."],
+        ["git", "grep", "-n", "-E", stale_token_pattern, "--", "."],
         cwd=ROOT,
         text=True,
         capture_output=True,

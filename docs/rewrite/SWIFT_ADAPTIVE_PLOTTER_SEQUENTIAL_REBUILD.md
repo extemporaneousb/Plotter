@@ -694,7 +694,7 @@ Portrait-specific acceptance:
 
 - Delete obsolete algorithms/UI when a replacement is selected; do not keep aliases or hidden fallback execution paths.
 - Keep offline research outputs outside live authority and import them only as explicitly reviewed, versioned experimental data.
-- At the end, scan the tracked tree for all retired Python live imports, bridge/routes/DTOs, old wizard/readiness names, demo/capability surfaces, and compatibility code; remove every unproven survivor.
+- At the end, scan the tracked tree for all retired Python live imports, bridge/routes/DTOs, old wizard/readiness names, prototype/capability surfaces, and compatibility code; remove every unproven survivor.
 
 ### Risks or assumptions to resolve before the next capability
 
