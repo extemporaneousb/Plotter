@@ -56,6 +56,13 @@ make debug-snapshot
   machine-specific settings.
 - [Roadmap](docs/ROADMAP.md): current package shape, staged status,
   architectural debt, and maintenance backlog.
+- [Swift Adaptive Plotter Rewrite Architecture](docs/rewrite/SWIFT_ADAPTIVE_PLOTTER_ARCHITECTURE.md):
+  evidence-backed assessment, researched alternatives, critique record, and the
+  recommended Swift-only adaptive drawing-control design. This is the target
+  architecture, not a description of the current product.
+- [Swift Adaptive Plotter Sequential Rebuild Plan](docs/rewrite/SWIFT_ADAPTIVE_PLOTTER_SEQUENTIAL_REBUILD.md):
+  self-contained ten-phase prompt for implementing and validating the target
+  architecture from the smallest ink-feedback vertical slice outward.
 - [Network Transport Decision](docs/decisions/0001-network-transport.md):
   decision record for keeping Wi-Fi/network transport out of scope until the
   actual protocol is verified.

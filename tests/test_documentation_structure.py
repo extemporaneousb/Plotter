@@ -14,6 +14,8 @@ EXPECTED_MARKDOWN_DOCS = {
     "docs/RUNBOOK.md",
     "docs/ROADMAP.md",
     "docs/decisions/0001-network-transport.md",
+    "docs/rewrite/SWIFT_ADAPTIVE_PLOTTER_ARCHITECTURE.md",
+    "docs/rewrite/SWIFT_ADAPTIVE_PLOTTER_SEQUENTIAL_REBUILD.md",
     "macos/PlotterVision/README.md",
 }
 
